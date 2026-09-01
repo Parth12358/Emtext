@@ -28,7 +28,7 @@ mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
 ## Setup
 
 ```bash
-cd emtext
+# from the project root (the directory that contains server/)
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -47,7 +47,7 @@ Start Ollama (if it isn't already running as a service):
 ollama serve
 ```
 
-Start the server from the `emtext/` directory:
+Start the server from the project root (the directory that contains `server/`):
 
 ```bash
 python -m server.main

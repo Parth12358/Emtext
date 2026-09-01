@@ -1,0 +1,32 @@
+# Tricky lines for eyeballing the interpreter. One utterance per line.
+# Mix of sarcasm, passive aggression, polite refusals, and plain literal
+# sentences — the literal ones are here on purpose to check the model isn't
+# over-reading tone into neutral speech.
+
+# --- sarcasm ---
+Oh great, another meeting that could have been an email.
+No, please, take your time. It's not like I have anywhere to be.
+Wow, you actually showed up on time today. Miracle.
+Sure, because that plan worked out so well last time.
+Nice job breaking the build again, really impressive stuff.
+
+# --- passive aggression ---
+Fine. Whatever you think is best.
+It's fine, I'll just do it myself like always.
+Must be nice to have time for lunch breaks.
+I already told you twice, but sure, I'll explain it again.
+Thanks for finally getting back to me.
+
+# --- polite refusals ---
+That sounds lovely, but I don't think I can make it.
+I appreciate the offer, I'll have to pass this time.
+Let me check my calendar and get back to you.
+I'd love to help, but my plate is really full right now.
+Maybe some other time — thanks for thinking of me though.
+
+# --- plain literal ---
+The meeting is at three in conference room B.
+Can you send me the report by end of day?
+I had a sandwich for lunch.
+The train was ten minutes late this morning.
+Thanks, that actually really helped me out.

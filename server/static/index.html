@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>emtext</title>
+<style>
+  /* Self-contained styling: no external fonts or CDNs, per the brief. */
+  :root {
+    --bg: #14161a;
+    --panel: #1d2027;
+    --edge: #2b2f38;
+    --text: #e7e9ee;
+    --muted: #9aa1ad;
+    /* Tone palette -- these colors *carry meaning*, so they stay consistent
+       between the dot, the border, and the read text for each tone. */
+    --positive: #4caf7d;
+    --negative: #e56a6a;
+    --neutral: #8b93a1;
+    --sarcastic: #b98be0;
+    --mixed: #e0b56a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  header {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--edge);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+  }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  button#toggle {
+    background: #3a7afe;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button#toggle.on { background: #e56a6a; }
+  button#toggle:disabled { opacity: .5; cursor: default; }
+
+  .status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--negative); }
+  .dot.connected { background: var(--positive); }
+
+  /* Live input level meter. */
+  .meter { width: 120px; height: 8px; background: var(--edge); border-radius: 4px; overflow: hidden; }
+  .meter > div { height: 100%; width: 0%; background: #3a7afe; transition: width .06s linear; }
+
+  .state-pill {
+    font-size: 12px; color: var(--muted);
+    border: 1px solid var(--edge); border-radius: 999px; padding: 3px 10px;
+  }
+
+  main { max-width: 820px; margin: 0 auto; padding: 22px; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 0; font-size: 14px; }
+
+  /* Feed entries. Newest is inserted at the top. */
+  .entry {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-left: 4px solid var(--neutral);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    animation: rise .18s ease-out;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(-4px);} to { opacity:1; transform:none;} }
+  .transcript { font-size: 16px; }
+  .read {
+    margin-top: 8px; font-size: 14px; display: flex; align-items: baseline; gap: 8px;
+  }
+  .read .tone-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; position: relative; top: 1px; }
+  .read .pending { color: var(--muted); font-style: italic; }
+
+  /* Tone modifiers applied to an entry once its read arrives. */
+  .t-positive  { border-left-color: var(--positive); }
+  .t-negative  { border-left-color: var(--negative); }
+  .t-neutral   { border-left-color: var(--neutral); }
+  .t-sarcastic { border-left-color: var(--sarcastic); }
+  .t-mixed     { border-left-color: var(--mixed); }
+  .t-positive  .read-text { color: var(--positive); }
+  .t-negative  .read-text { color: var(--negative); }
+  .t-neutral   .read-text { color: var(--text); }
+  .t-sarcastic .read-text { color: var(--sarcastic); }
+  .t-mixed     .read-text { color: var(--mixed); }
+  .t-positive  .tone-dot { background: var(--positive); }
+  .t-negative  .tone-dot { background: var(--negative); }
+  .t-neutral   .tone-dot { background: var(--neutral); }
+  .t-sarcastic .tone-dot { background: var(--sarcastic); }
+  .t-mixed     .tone-dot { background: var(--mixed); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>emtext</h1>
+    <div class="sub">live conversation interpreter</div>
+  </div>
+  <button id="toggle" disabled>Start</button>
+  <div class="status">
+    <span id="dot" class="dot"></span>
+    <span id="conn">connecting…</span>
+  </div>
+  <div class="meter"><div id="level"></div></div>
+  <span id="state" class="state-pill">idle</span>
+</header>
+
+<main>
+  <div id="feed"><div class="empty">Press Start and speak — transcripts and their emotional read will appear here.</div></div>
+</main>
+
+<script>
+"use strict";
+
+// ----- protocol / connection ------------------------------------------------
+// Auth token from ?token=... , defaulting to "dev" (the server accepts anything
+// when AUTH_TOKEN is unset, but we still must send a first TEXT frame).
+const TOKEN = new URLSearchParams(location.search).get("token") || "dev";
+const WS_URL = `ws://${location.host}/stream`;
+
+let ws = null;
+let capturing = false;      // is the mic actively streaming?
+let reconnectTimer = null;
+
+const el = (id) => document.getElementById(id);
+const feed = el("feed");
+const entries = new Map();  // utterance id -> DOM node, so a late "read" can find its transcript
+
+function setConn(connected, label) {
+  el("dot").classList.toggle("connected", connected);
+  el("conn").textContent = label;
+}
+function setState(text) { el("state").textContent = text; }
+
+function connect() {
+  clearTimeout(reconnectTimer);
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    ws.send(TOKEN);              // first frame MUST be the auth token (TEXT)
+    setConn(true, "connected");
+    el("toggle").disabled = false;
+  };
+  ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+  ws.onclose = () => {
+    setConn(false, "disconnected — retrying");
+    el("toggle").disabled = true;
+    // Auto-reconnect: the ESP32 will do the same, so the UX must survive drops.
+    reconnectTimer = setTimeout(connect, 1500);
+  };
+  ws.onerror = () => ws && ws.close();
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case "ready":
+      break;
+    case "status":
+      setState(msg.state);
+      break;
+    case "utterance":
+      addTranscript(msg.id, msg.transcript);
+      break;
+    case "read":
+      addRead(msg.id, msg.tone, msg.read);
+      setState("listening");
+      break;
+  }
+}
+
+// ----- feed rendering -------------------------------------------------------
+function addTranscript(id, transcript) {
+  const emptyState = feed.querySelector(".empty");
+  if (emptyState) emptyState.remove();
+
+  const node = document.createElement("div");
+  node.className = "entry t-neutral";
+  node.innerHTML = `
+    <div class="transcript"></div>
+    <div class="read"><span class="tone-dot"></span><span class="read-text pending">reading…</span></div>`;
+  node.querySelector(".transcript").textContent = transcript;
+  feed.prepend(node);          // newest-first
+  entries.set(id, node);
+}
+
+function addRead(id, tone, read) {
+  const node = entries.get(id);
+  if (!node) return;
+  node.className = `entry t-${tone}`;          // recolor by tone
+  const txt = node.querySelector(".read-text");
+  txt.classList.remove("pending");
+  txt.textContent = read;
+}
+
+// ----- audio capture: getUserMedia -> AudioWorklet -> 16k int16 -> ws -------
+let audioCtx = null;
+let mediaStream = null;
+let workletNode = null;
+
+// The worklet processor runs on the realtime audio thread. Its only job is to
+// forward each block of mono float32 samples to the main thread; we do the
+// resampling on the main thread where it's easier to reason about and where we
+// have the websocket. (Resampling in the worklet is possible but adds no value
+// here since blocks are tiny.)
+const WORKLET_SRC = `
+  class CaptureProcessor extends AudioWorkletProcessor {
+    process(inputs) {
+      const ch = inputs[0][0];
+      if (ch) {
+        // ch is reused by the engine each block, so copy before posting.
+        this.port.postMessage(ch.slice(0));
+      }
+      return true; // keep the processor alive
+    }
+  }
+  registerProcessor('capture', CaptureProcessor);
+`;
+
+// --- resampler state --------------------------------------------------------
+// The browser captures at the hardware rate (usually 48 kHz); the protocol
+// wants 16 kHz. We resample by linear interpolation, walking a fractional read
+// position through the samples at step = inputRate / 16000. `carry` holds the
+// tail samples that a fractional position still needs, and `readPos` holds the
+// sub-sample phase, so resampling stays seamless across worklet blocks (no
+// clicks at block boundaries).
+const TARGET_RATE = 16000;
+let inputRate = 48000;
+let carry = new Float32Array(0);
+let readPos = 0;
+
+function resampleAndSend(chunk) {
+  // Level meter: RMS of the raw block, mapped to a bar width.
+  let sum = 0;
+  for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
+  const rms = Math.sqrt(sum / chunk.length);
+  el("level").style.width = Math.min(100, rms * 350) + "%";
+
+  // Prepend leftover carry so interpolation can span the block boundary.
+  const buf = new Float32Array(carry.length + chunk.length);
+  buf.set(carry, 0);
+  buf.set(chunk, carry.length);
+
+  const step = inputRate / TARGET_RATE;
+  const out = [];
+  let pos = readPos;
+  // Need buf[i+1] for interpolation, so stop before the last sample.
+  while (Math.floor(pos) + 1 < buf.length) {
+    const i = Math.floor(pos);
+    const frac = pos - i;
+    let s = buf[i] * (1 - frac) + buf[i + 1] * frac;   // linear interpolation
+    if (s > 1) s = 1; else if (s < -1) s = -1;         // clamp before int16 cast
+    // Asymmetric scale: int16 range is [-32768, 32767].
+    out.push(s < 0 ? s * 32768 : s * 32767);
+    pos += step;
+  }
+
+  // Keep everything from the last consumed sample onward as the new carry, and
+  // remember the leftover fractional phase for the next block.
+  const consumed = Math.floor(pos);
+  carry = buf.slice(consumed);
+  readPos = pos - consumed;
+
+  if (out.length && ws && ws.readyState === WebSocket.OPEN) {
+    const pcm = new Int16Array(out.length);
+    for (let k = 0; k < out.length; k++) pcm[k] = out[k];
+    ws.send(pcm.buffer);   // BINARY frame: raw int16 LE, mono, 16 kHz
+  }
+}
+
+async function startCapture() {
+  // AudioContext (and getUserMedia) require a user gesture and a secure origin
+  // — localhost counts as secure, otherwise you need HTTPS.
+  audioCtx = new AudioContext();
+  inputRate = audioCtx.sampleRate;   // whatever the hardware actually gave us
+  carry = new Float32Array(0);
+  readPos = 0;
+
+  // Load the inline worklet via a Blob URL — keeps everything in one file with
+  // no separate .js to serve.
+  const blobUrl = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "text/javascript" }));
+  await audioCtx.audioWorklet.addModule(blobUrl);
+  URL.revokeObjectURL(blobUrl);
+
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  workletNode = new AudioWorkletNode(audioCtx, "capture");
+  workletNode.port.onmessage = (e) => { if (capturing) resampleAndSend(e.data); };
+
+  source.connect(workletNode);
+  // The node must be pulled by the graph for process() to fire. It emits no
+  // output, so connecting to destination adds silence (no echo/feedback).
+  workletNode.connect(audioCtx.destination);
+}
+
+async function stopCapture() {
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+  if (audioCtx) { await audioCtx.close(); audioCtx = null; }
+  el("level").style.width = "0%";
+}
+
+// ----- start/stop button ----------------------------------------------------
+el("toggle").addEventListener("click", async () => {
+  const btn = el("toggle");
+  if (!capturing) {
+    try {
+      await startCapture();
+      capturing = true;
+      btn.textContent = "Stop";
+      btn.classList.add("on");
+      setState("listening");
+    } catch (err) {
+      setState("mic error: " + err.message);
+    }
+  } else {
+    capturing = false;
+    await stopCapture();
+    btn.textContent = "Start";
+    btn.classList.remove("on");
+    setState("idle");
+  }
+});
+
+connect();
+</script>
+</body>
+</html>

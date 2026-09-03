@@ -36,6 +36,21 @@ same wire protocol**.
   `--list` to see stages and their prerequisites). Each stage writes a per-item
   CSV under `eval/results/`. Stages stream progress on purpose -- a full run is
   ~1-2h and silence looks like a hang.
+- `python -m eval.pipeline_eval` is the only eval that runs the WHOLE workflow
+  (Segmenter -> whisper + SER -> Interpreter) over RAVDESS, across a 2 SER x 3 LLM
+  matrix. ASR+SER are cached per SER backend and replayed across LLMs -- do not
+  "fix" that into per-cell recomputation; it is 3x cheaper AND makes the LLM
+  comparison exact. Ctrl+C = clean stop, and stop IS pause (resume is keyed on
+  `(ser_backend, llm_model, file)`); `eval/results/PAUSE` pauses without exiting.
+  **It always evicts the LLM from VRAM on exit** -- `interpreter.py` sends
+  `keep_alive: -1`, so without that a run leaves 8-9GB pinned forever and
+  model-swapping can silently offload layers to CPU, which reads as "slow model".
+- RAVDESS is much quieter than a live mic: at the default `SPEECH_RMS=500` the VAD
+  drops ~57% of clips, and they are the QUIET emotions (sad/fearful/neutral) --
+  exactly what this app exists to interpret. The eval falls back to the raw clip
+  and flags `vad_dropped=1` so nothing is lost. Run `--vad-check` before any long
+  run. Do NOT loudness-normalise to work around it: loudness is an emotional cue
+  and flattening it corrupts the SER measurement.
 - `python -m eval.ser_eval` scores SER against RAVDESS in `data/ravdess/`
   (gitignored, 1440 clips). It is the ONLY test using real emotional audio --
   everything else uses flat SAPI speech, which cannot measure SER accuracy.

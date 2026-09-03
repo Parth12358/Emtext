@@ -381,6 +381,7 @@ python -m eval.run_all             # the full run (slow: ~1-2 hours)
 
 | stage | question it answers | CSV |
 |---|---|---|
+| `pipeline` | Does the **whole workflow** work end to end? | `eval/results/pipeline.csv` |
 | `ser` | Is the voice signal actually *right*? | `eval/results/ser.csv` |
 | `asr` | Which `WHISPER_MODEL`? | `eval/results/asr.csv` |
 | `model` | Which Ollama model reads tone best? | `eval/results/model.csv` |
@@ -391,6 +392,56 @@ Every stage streams progress as it goes — the SER stage prints a line per clip
 with a running ETA — because the full run takes long enough that a silent
 terminal is indistinguishable from a hang. Pass `--quiet` to any stage for
 periodic progress instead of per-item lines.
+
+### Full pipeline: audio in, read out
+
+Every other stage tests one component alone. `pipeline` runs the real workflow —
+`Segmenter` → Whisper + SER (concurrent) → `Interpreter` — over RAVDESS, so it
+measures whether the stages **compose**: whether a mis-heard word ruins the read,
+whether SER's valence actually reaches the LLM's judgement, whether the VAD copes
+with real speech.
+
+```bash
+python -m eval.pipeline_eval                       # the full 2x3 matrix
+python -m eval.pipeline_eval --vad-check           # pre-flight, ~10s
+python -m eval.pipeline_eval --cells 1 --limit 28  # sanity pass, ~1 min
+python -m eval.pipeline_eval --evict-only          # free the GPU now
+```
+
+No env vars required — the Windows HF-symlink workaround is applied internally,
+and `SPEECH_RMS` is a `--speech-rms` flag, since PowerShell can't do `VAR=x cmd`.
+Every progress line names the cell that produced it:
+
+```
+[1/6 e2v-base+qwen3:8b] [  6/280] 03-01-04-01-01-02-09  ser:sad ->sad y  wer 50.0%
+                                  llm:neutral (exp negative)n  cpu 0.32s llm 0.55s  acc 50% eta 12.4m VAD-DROP
+```
+
+It sweeps 2 SER backends × 3 LLMs, **smallest models first** so useful results
+land in minutes. ASR+SER are computed once per SER backend and replayed against
+all three LLMs — 3× less CPU work, and more correct, since every LLM then sees
+byte-identical inputs.
+
+**Concurrency.** Within a clip the LLM needs SER's output, so they can't overlap.
+The overlap is *across* clips: a subprocess does Whisper+SER for clip N+1 while
+the parent awaits the GPU on clip N, with a bounded queue providing backpressure.
+
+**Pause and stop.** `Ctrl+C` finishes the current clip, flushes, evicts the model
+from VRAM and exits; re-running the same command resumes, because rows are keyed
+on `(ser_backend, llm_model, file)`. **Stop is pause.** For a pause without
+exiting, `touch eval/results/PAUSE` — it frees the GPU and waits; delete the file
+to continue.
+
+**VRAM hygiene.** `interpreter.py` pins models with `keep_alive: -1`, so a naive
+run leaves 8–9 GB occupied forever and model-swapping can silently push layers to
+CPU (which reads as "this model is slow"). The runner evicts explicitly between
+cells, asserts the incoming model is fully in VRAM, and frees the GPU on every
+exit path. A `SIGKILL` is the exception — nothing can run on it, so use
+`--evict-only` afterwards.
+
+**Monitoring a long run:** a per-clip line with running accuracy and ETA, plus
+`eval/results/pipeline_status.json` (atomically rewritten every clip) for a
+watcher to poll.
 
 ### SER accuracy on real emotional speech
 
@@ -534,6 +585,9 @@ server/
   interpreter.py  Ollama wrapper + rolling conversation context
   static/index.html   browser test client (no build step)
 eval/run_all.py         run every stage, one CSV each
+eval/pipeline_eval.py   full workflow over RAVDESS (the matrix runner)
+eval/pipeline_child.py    its CPU half: Segmenter -> whisper + SER
+eval/pipeline_wire.py     the same, over the real websocket (spot check)
 eval/ser_eval.py        SER accuracy vs RAVDESS (real emotional speech)
 eval/asr_eval.py        whisper model A/B: WER + CPU cost on known text
 eval/model_eval.py      A/B interpreter LLMs on the labeled tone cases

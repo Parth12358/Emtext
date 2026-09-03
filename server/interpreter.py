@@ -144,6 +144,54 @@ RESPONSE_SCHEMA = {
 }
 
 
+def _ollama_stats(body: dict | None) -> dict:
+    """Pull Ollama's own timing/token counters out of a /api/generate response.
+
+    Ollama reports exactly how many tokens it prefilled and generated and how
+    long each phase took. Those are the honest numbers for "how fast is this
+    model" -- wall clock also contains our own HTTP and JSON overhead -- so the
+    evals want them, and re-deriving them from wall time would be a guess.
+
+    Returned as extra keys on interpret()'s dict rather than a separate return
+    value: `main.py` reads only "tone" and "read", so additional keys are
+    invisible to production and nothing downstream has to change. Every field is
+    None when the call failed, so a caller can always index them.
+
+    Durations are nanoseconds on the wire; converted to ms here because nobody
+    reasons in nanoseconds.
+    """
+    if not body:
+        return {
+            "prompt_eval_count": None, "eval_count": None,
+            "prompt_eval_ms": None, "eval_ms": None,
+            "load_ms": None, "total_ms": None, "decode_tps": None,
+        }
+
+    def ms(key: str) -> float | None:
+        value = body.get(key)
+        return round(value / 1e6, 1) if isinstance(value, (int, float)) else None
+
+    eval_count = body.get("eval_count")
+    eval_ns = body.get("eval_duration")
+    # Guard the division: a cached or degenerate response can report 0 here.
+    decode_tps = (
+        round(eval_count / (eval_ns / 1e9), 1)
+        if isinstance(eval_count, (int, float)) and eval_count
+        and isinstance(eval_ns, (int, float)) and eval_ns
+        else None
+    )
+
+    return {
+        "prompt_eval_count": body.get("prompt_eval_count"),
+        "eval_count": eval_count,
+        "prompt_eval_ms": ms("prompt_eval_duration"),
+        "eval_ms": ms("eval_duration"),
+        "load_ms": ms("load_duration"),
+        "total_ms": ms("total_duration"),
+        "decode_tps": decode_tps,
+    }
+
+
 class Interpreter:
     """Stateful per-conversation interpreter holding the rolling context.
 
@@ -226,8 +274,9 @@ class Interpreter:
                 tone = "neutral"
             if not read:
                 read = "(no read)"
-            return {"tone": tone, "read": read}
+            return {"tone": tone, "read": read, **_ollama_stats(body)}
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):
             # Unreachable Ollama, non-2xx, or malformed/garbage JSON all land
             # here. Degrade gracefully rather than dropping the utterance.
-            return {"tone": "neutral", "read": "(interpreter offline)"}
+            return {"tone": "neutral", "read": "(interpreter offline)",
+                    **_ollama_stats(None)}

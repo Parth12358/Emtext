@@ -13,9 +13,11 @@ indistinguishable from a hang.
 
 Stages, and the question each answers:
 
+  pipeline Does the WHOLE workflow work? Runs Segmenter -> Whisper + SER ->
+           Interpreter over RAVDESS across a model matrix. The only stage that
+           tests whether the pieces compose rather than each one alone.
   ser      Is the voice signal actually *right*? Scores SER backends against
-           RAVDESS (real acted emotional speech, real labels). The only stage
-           that uses genuinely emotional audio.
+           RAVDESS (real acted emotional speech, real labels).
   asr      Which Whisper model should WHISPER_MODEL be? WER and CPU cost on
            known-text utterances.
   model    Which Ollama model should read the tone? Scores LLMs on the labeled
@@ -41,6 +43,12 @@ CSV_DIR = ROOT / "eval" / "results"
 
 # (name, module, full args, quick args, needs)
 STAGES = [
+    (
+        "pipeline", "eval.pipeline_eval",
+        ["--limit", "280", "--quiet"],
+        ["--cells", "1", "--limit", "28", "--quiet"],
+        "RAVDESS in data/ravdess + Ollama with the models pulled",
+    ),
     (
         "ser", "eval.ser_eval",
         ["--limit", "0", "--quiet", "--csv", str(CSV_DIR / "ser.csv")],

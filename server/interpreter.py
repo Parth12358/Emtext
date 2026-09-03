@@ -106,16 +106,26 @@ def _describe_voice(voice: dict | None) -> str | None:
         else:
             parts.append(str(emotion))
 
-    # Gloss thresholds are deliberately coarse. SER dimensions are not precise
-    # enough to justify fine-grained wording, and a middling value genuinely
-    # means "unremarkable" rather than anything the listener should act on.
-    for name, low, mid, high in (
-        ("valence", "negative", "neutral", "positive"),
-        ("arousal", "calm", "moderate", "elevated"),
+    # Gloss thresholds come from config, NOT hardcoded, because they are a
+    # property of the BACKEND rather than of the concept.
+    #
+    # This was a real bug, not a hypothetical. MERaLiON's valence spans 0.12-0.41
+    # across all 1440 RAVDESS clips (mean 0.254, pleasant-vs-unpleasant
+    # separation +0.085). Against the old fixed 0.4/0.6 thresholds, not one clip
+    # in 1440 ever reached "positive" -- so every single utterance, happy ones
+    # included, was described to the model as "valence 0.2x (negative)". The
+    # model was not ignoring the voice; we were lying to it. Measure a backend
+    # with `python -m eval.ser_eval --profile-valence` and set the thresholds to
+    # match its actual range before trusting it.
+    for name, low, mid, high, lo_t, hi_t in (
+        ("valence", "negative", "neutral", "positive",
+         config.VALENCE_LOW, config.VALENCE_HIGH),
+        ("arousal", "calm", "moderate", "elevated",
+         config.AROUSAL_LOW, config.AROUSAL_HIGH),
     ):
         value = voice.get(name)
         if isinstance(value, (int, float)):
-            gloss = low if value < 0.4 else (high if value > 0.6 else mid)
+            gloss = low if value < lo_t else (high if value > hi_t else mid)
             parts.append(f"{name} {value:.2f} ({gloss})")
 
     return ", ".join(parts) if parts else None

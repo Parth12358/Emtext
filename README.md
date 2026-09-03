@@ -16,7 +16,7 @@ same wire protocol.
 mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
                                                         ├─ segmenter  (VAD)
                                                         ├─ transcriber (faster-whisper, CPU) ─┐
-                                                        ├─ ser         (MERaLiON, CPU) ───────┤ (concurrent)
+                                                        ├─ ser         (emotion2vec, CPU) ────┤ (concurrent)
                                                         └─ interpreter (Ollama LLM, GPU) ◄────┘
 ```
 
@@ -33,12 +33,14 @@ What the interpreter actually keys on is the **mismatch** between the two:
 | negative | sounds positive | teasing, joking, banter |
 | agree | agree | take it literally |
 
-Measured on the same audio (positive words delivered flat and quiet), the line
-*"I am thrilled for you"* reads as:
+Measured on 280 RAVDESS clips where the spoken words are deliberately neutral, so
+every bit of signal is in the delivery: `qwen3:14b` reaches 81% tone accuracy and
+48% voice sensitivity — the gap between how often it calls a happy voice positive
+versus an angry one. A model ignoring the voice field scores ~0 there.
 
-- without SER — `positive`: "They genuinely seem happy about your success."
-- with SER (valence 0.45) — `mixed`: "They likely mean well, but seem a bit
-  distant or unenthusiastic."
+Note the default backend (emotion2vec) is **categorical only** — it returns an
+emotion label with a confidence, and no valence/arousal numbers. See
+[Choosing a SER model](#choosing-a-ser-model).
 
 **SER labels are hints, not truth.** The model is guessing from acoustics and it
 is noisy — short utterances, unfamiliar accents and cheap microphones all
@@ -74,7 +76,7 @@ pip install -r requirements.txt
 Then pull the interpreter model (the default; override with `OLLAMA_MODEL`):
 
 ```
-ollama pull gemma3:12b
+ollama pull qwen3:14b
 ```
 
 The first run also downloads the models, which are cached after that:
@@ -82,10 +84,10 @@ The first run also downloads the models, which are cached after that:
 | model | size | notes |
 |-------|------|-------|
 | Whisper `base` (faster-whisper) | ~150 MB | transcription, CPU |
-| `MERaLiON/MERaLiON-SER-v1` | **~2.9 GB** | speech emotion, CPU |
+| `emotion2vec/emotion2vec_plus_base` | ~900 MB | speech emotion, CPU |
 
-That 2.9 GB download happens the first time the server starts. To skip it
-entirely, start with `SER_ENABLED=0` (see [Speech emotion
+That download happens the first time the server starts. To skip it entirely,
+start with `SER_ENABLED=0` (see [Speech emotion
 recognition](#speech-emotion-recognition)) — the app runs exactly as it did
 before SER existed, just without the voice line.
 
@@ -98,10 +100,11 @@ shell; without it some downloads fail outright with
 $env:HF_HUB_DISABLE_SYMLINKS = "1"
 ```
 
-Note the pinned `transformers<5` in `requirements.txt`: MERaLiON ships custom
-model code that builds layers with `torch.logspace(...).item()` at construction
-time, and transformers 5 builds models on the meta device where that raises. On
-transformers 5 the SER model cannot load at all.
+Note the pinned `transformers<5` in `requirements.txt`. It only matters for the
+optional MERaLiON backend, which ships custom model code that builds layers with
+`torch.logspace(...).item()` at construction time; transformers 5 builds models
+on the meta device, where that raises. The default emotion2vec backend is
+unaffected.
 
 ## Run
 
@@ -236,7 +239,7 @@ transcript. It runs on CPU, like Whisper — the GPU stays reserved for the LLM.
 | Env var              | Default | What it does |
 |----------------------|---------|--------------|
 | `SER_ENABLED`        | `true`  | Set to `0` to turn SER off: skips the 2.9 GB download and ~2 GB of RAM, drops the `voice` field, and removes the added latency below. |
-| `SER_MODEL`          | `MERaLiON/MERaLiON-SER-v1` | Model id — see the table below. |
+| `SER_MODEL`          | `emotion2vec/emotion2vec_plus_base` | Model id — see the table below. |
 | `SER_BACKEND`        | `auto`  | `auto` infers from the model name; force with `meralion` or `emotion2vec`. |
 | `SER_DEVICE`         | `cpu`   | Leave it — the Arc B580 is for Ollama. |
 | `SER_MIN_CONFIDENCE` | `0.4`   | Below this the interpreter is told the voice signal is weak and to trust the words instead. |
@@ -249,9 +252,21 @@ change and nothing else in the codebase notices:
 
 | `SER_MODEL` | size | classes | valence/arousal | needs |
 |---|---|---|---|---|
-| `MERaLiON/MERaLiON-SER-v1` *(default)* | ~2.9 GB | 7 | **yes** | `transformers<5` |
+| `emotion2vec/emotion2vec_plus_base` *(default)* | ~900 MB | 9 → 7 | no | `funasr` |
 | `emotion2vec/emotion2vec_plus_large` | ~1.2 GB | 9 → 7 | no | `funasr` |
-| `emotion2vec/emotion2vec_plus_base` | ~900 MB | 9 → 7 | no | `funasr` |
+| `MERaLiON/MERaLiON-SER-v1` | ~2.9 GB | 7 | yes | `transformers<5` |
+
+**Measured over all 1440 RAVDESS clips, emotion2vec beats MERaLiON on both axes:**
+86% accuracy vs 61.3% macro recall, at ~0.17 s vs 2.72 s per utterance. MERaLiON's
+cost is also *flat* — it pads every clip to 30 s, so a 1 s utterance costs the same
+2.7 s as a 14 s one, which put SER below real time and made sustained speech build
+a backlog.
+
+MERaLiON is the only backend with a dimensional head, but its valence measured a
+**+0.085** pleasant/unpleasant separation on this data — too compressed to be
+useful, and against the default gloss thresholds every clip in 1440 was described
+to the LLM as "negative". If you enable it, run `--profile-valence` first and set
+`VALENCE_LOW`/`VALENCE_HIGH` to match.
 
 The emotion2vec models are far lighter, but they are **categorical only** — no
 dimensional head, so `valence` and `arousal` come back `null`. That is not a
@@ -276,7 +291,7 @@ dependency conflict — the server logs a warning and runs with SER disabled. It
 never crashes over it. Check which mode you're in at startup:
 
 ```
-INFO:     __main__: speech emotion recognition enabled (MERaLiON/MERaLiON-SER-v1)
+INFO:     __main__: speech emotion recognition enabled (emotion2vec/emotion2vec_plus_base)
 ```
 
 ### Latency, measured
@@ -294,9 +309,9 @@ Measured on a 12-core CPU + Arc B580, `WHISPER_MODEL=base`, `gemma3:12b`:
 | stage | model | device | per utterance |
 |-------|-------|--------|---------------|
 | transcription | Whisper `base` (faster-whisper, int8) | CPU | ~0.28 s |
-| speech emotion | `MERaLiON/MERaLiON-SER-v1` | CPU | ~3.3 s |
+| speech emotion | `emotion2vec/emotion2vec_plus_base` | CPU | ~0.12 s |
 | whisper + SER, gathered | | CPU | ~2.6 s (vs ~3.7 s sequentially) |
-| interpretation | `gemma3:12b` (Ollama) | GPU | ~1.1 s |
+| interpretation | `qwen3:14b` (Ollama) | GPU | ~0.89 s |
 
 **SER, not Whisper, decides how soon a read appears.** Transcription and SER are
 deliberately gathered onto the executor rather than sequenced, so an utterance
@@ -326,23 +341,25 @@ python -m eval.latency --skip-wire         # no server needed
 
 | configuration | stop -> read |
 |---|---|
-| SER on, `gemma3:12b` | **4.63 s** |
-| SER on, `qwen3:14b` | ~4.1 s |
-| SER on, `qwen3:8b` | ~3.7 s |
-| **SER off**, `gemma3:12b` | **1.82 s** |
+| **current defaults** (emotion2vec + qwen3:14b) | **1.94 s** |
+| old defaults (MERaLiON + gemma3:12b) | 4.63 s |
+| SER off entirely | 1.82 s |
+
+Switching the SER backend took 2.7 s out of the budget. SER is now 0.12 s against
+Whisper's 0.24 s, so **SER is no longer the bottleneck** — the LLM is, at 0.89 s.
 
 Budget for the default configuration:
 
 | | |
 |---|---|
 | VAD end-of-speech wait (`END_SILENCE_MS`) | 0.65 s — pure waiting, a tuning choice |
-| Whisper + SER, gathered | 2.54 s (vs 3.56 s sequential) |
-| LLM interpret | 1.41 s |
-| **total** | **4.63 s** |
+| Whisper + SER, gathered | 0.30 s |
+| LLM interpret | 0.89 s |
+| **total** | **1.94 s** |
 
-SER is ~2.8 s of that, and turning it off is the single biggest lever —
-`SER_ENABLED=0` takes the loop to 1.82 s. Swapping the LLM moves ~0.6 s at most,
-because the LLM is the *small* half of the budget once SER is in.
+The audio stages are now cheap enough that the two remaining levers are the LLM
+(0.89 s) and `END_SILENCE_MS` (0.65 s of pure waiting). `SER_ENABLED=0` saves only
+0.06 s now — it is no longer worth turning off.
 
 Note `latency.py` trims trailing silence from its test clips before sending. It
 has to: SAPI writes seconds of silence into every file, which lets the server's
@@ -573,15 +590,26 @@ Two findings from building this suite are baked back into the code:
   sarcasm. Spelling out the reverse took `gemma3:12b` and `qwen3:8b` from 2/4 to
   4/4 on the voice pairs (+6 and +7 points overall).
 
+## Known limitations
+
+See [TODO.md](TODO.md) for open issues with the evidence behind them. The one
+worth knowing before you rely on this:
+
+- **The VAD cannot hear quiet speech.** `SPEECH_RMS` is an absolute threshold, so
+  subdued delivery is never segmented and the app emits nothing for it — on
+  RAVDESS that dropped 5 of 10 sample clips, and they were the *sad* and *neutral*
+  ones. That's backwards for a tool meant to make masked emotion legible.
+
 ## Layout
 
 ```
+TODO.md           open issues, with the measurements behind them
 server/
   main.py         FastAPI app + websocket route (wiring only)
   config.py       all tunables, env-overridable
   segmenter.py    pure VAD state machine: bytes in -> utterances out
   transcriber.py  faster-whisper wrapper (CPU)
-  ser.py          speech emotion recognition: MERaLiON wrapper (CPU)
+  ser.py          speech emotion recognition: emotion2vec / MERaLiON (CPU)
   interpreter.py  Ollama wrapper + rolling conversation context
   static/index.html   browser test client (no build step)
 eval/run_all.py         run every stage, one CSV each

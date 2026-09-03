@@ -1,0 +1,33 @@
+model,utterance,reference,hypothesis,errors,ref_words,wer_pct,elapsed_s,duration_s
+tiny,line00,The train leaves at four fifteen from platform two,The train leaves at 415 from platform 2.,3,9,33.3,0.119,3.52
+tiny,line01,Oh great another meeting that could have been an email,A great another meeting that could have been an email.,1,10,10.0,0.122,3.29
+tiny,line02,I would love to but I have a lot on my plate right now,"I would love to, but I have a lot on my plate right now.",0,14,0.0,0.119,3.45
+tiny,line03,Thanks so much for your help today it made a real difference,Thanks so much for your help today. It made a real difference.,0,12,0.0,0.121,3.85
+tiny,line04,We tried that approach last quarter and it did not work,We tried that approach last quarter and it did not work.,0,11,0.0,0.117,3.81
+tiny,line05,Can you send me the file when you get a chance,Can you send me the file when you get a chance?,0,11,0.0,0.115,3.25
+tiny,line06,Fine whatever you think is best,Find whatever you think is best.,1,6,16.7,0.115,2.71
+tiny,line07,This is the best news I have had all week,This is the best news I have had all week.,0,10,0.0,0.118,3.04
+base,line00,The train leaves at four fifteen from platform two,The train leaves at 415 from Platform 2.,3,9,33.3,0.25,3.52
+base,line01,Oh great another meeting that could have been an email,A great another meeting that could have been an email.,1,10,10.0,0.295,3.29
+base,line02,I would love to but I have a lot on my plate right now,I would love to but I have a lot on my plate right now.,0,14,0.0,0.306,3.45
+base,line03,Thanks so much for your help today it made a real difference,Thanks so much for your help today it made a real difference.,0,12,0.0,0.298,3.85
+base,line04,We tried that approach last quarter and it did not work,We tried that approach last quarter and it did not work.,0,11,0.0,0.294,3.81
+base,line05,Can you send me the file when you get a chance,Can you send me the file when you get a chance?,0,11,0.0,0.306,3.25
+base,line06,Fine whatever you think is best,Find whatever you think is best.,1,6,16.7,0.281,2.71
+base,line07,This is the best news I have had all week,This is the best news I have had all week.,0,10,0.0,0.297,3.04
+small,line00,The train leaves at four fifteen from platform two,The train leaves at 4.15 from platform 2.,3,9,33.3,0.934,3.52
+small,line01,Oh great another meeting that could have been an email,Oh great another meeting that could have been an email.,0,10,0.0,0.939,3.29
+small,line02,I would love to but I have a lot on my plate right now,I would love to but I have a lot on my plate right now.,0,14,0.0,0.954,3.45
+small,line03,Thanks so much for your help today it made a real difference,Thanks so much for your help today it made a real difference.,0,12,0.0,0.95,3.85
+small,line04,We tried that approach last quarter and it did not work,We tried that approach last quarter and it did not work.,0,11,0.0,0.945,3.81
+small,line05,Can you send me the file when you get a chance,Can you send me the file when you get a chance?,0,11,0.0,0.934,3.25
+small,line06,Fine whatever you think is best,Find whatever you think is best.,1,6,16.7,0.886,2.71
+small,line07,This is the best news I have had all week,This is the best news I have had all week.,0,10,0.0,0.913,3.04
+distil-small.en,line00,The train leaves at four fifteen from platform two,The train leaves at 415 from platform 2,3,9,33.3,0.825,3.52
+distil-small.en,line01,Oh great another meeting that could have been an email,Oh great another meeting that could have been an email.,0,10,0.0,0.844,3.29
+distil-small.en,line02,I would love to but I have a lot on my plate right now,I would love to but I have a lot on my plate right now.,0,14,0.0,0.851,3.45
+distil-small.en,line03,Thanks so much for your help today it made a real difference,Thanks so much for your help today it made a real difference,0,12,0.0,0.824,3.85
+distil-small.en,line04,We tried that approach last quarter and it did not work,We tried that approach last quarter and it did not work.,0,11,0.0,0.835,3.81
+distil-small.en,line05,Can you send me the file when you get a chance,Can you send me the file when you get a chance?,0,11,0.0,0.821,3.25
+distil-small.en,line06,Fine whatever you think is best,Find whatever you think is best.,1,6,16.7,0.83,2.71
+distil-small.en,line07,This is the best news I have had all week,This is the best news I have had all week.,0,10,0.0,0.814,3.04

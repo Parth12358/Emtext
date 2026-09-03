@@ -70,7 +70,16 @@ WHISPER_LANGUAGE: str = _env_str("WHISPER_LANGUAGE", "en")
 
 # --- Interpreter (Ollama) ---------------------------------------------------
 OLLAMA_URL: str = _env_str("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "gemma3:12b")
+# qwen3:14b, chosen on the RAVDESS pipeline eval (280 clips per model), where the
+# spoken text is always neutral so every bit of signal is in the voice field:
+#   qwen3:14b   81% tone accuracy, 48% voice sensitivity, 0.89s
+#   gemma3:12b  43%, 6%, 1.13s   -- answers "neutral" 68% of the time
+#   qwen3:8b    33%, 19%, 0.55s  -- answers "neutral" 83% of the time
+# The two losers largely ignore the voice hint when it is a bare categorical label
+# (which is all emotion2vec supplies). Note gemma scores 93% on eval/tone_cases,
+# where the hint carries NUMERIC valence -- it uses valence well and discounts a
+# label. If a backend with usable valence lands, re-run the comparison.
+OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "qwen3:14b")
 CONTEXT_LINES: int = _env_int("CONTEXT_LINES", 12)  # rolling transcript window
 OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)
@@ -93,7 +102,20 @@ def _env_bool(name: str, default: bool) -> bool:
 # the first-run download); the pipeline then behaves exactly as it did before
 # SER existed.
 SER_ENABLED: bool = _env_bool("SER_ENABLED", True)
-SER_MODEL: str = _env_str("SER_MODEL", "MERaLiON/MERaLiON-SER-v1")
+# emotion2vec by default, measured against MERaLiON on all 1440 RAVDESS clips:
+#   accuracy  86%   vs 61.3% macro recall
+#   cost      ~0.17s vs 2.72s per utterance
+# It is both more accurate and ~16x cheaper here, and MERaLiON's cost is FLAT --
+# it pads every clip to 30s, so a 1s utterance costs the same 2.7s as a 14s one.
+# That put SER below real time (RTF 0.3x at 1s), meaning sustained speech built a
+# backlog. emotion2vec runs ~10x real time and removes that ceiling.
+#
+# The trade: emotion2vec is categorical only, so valence/arousal come back None
+# and the interpreter reasons from the emotion label alone. MERaLiON remains
+# fully supported -- set SER_MODEL=MERaLiON/MERaLiON-SER-v1 to switch back --
+# but its valence measured a +0.085 pleasant/unpleasant separation on this data,
+# which is too compressed to be useful anyway.
+SER_MODEL: str = _env_str("SER_MODEL", "emotion2vec/emotion2vec_plus_base")
 SER_DEVICE: str = _env_str("SER_DEVICE", "cpu")
 # Below this softmax probability the categorical label is close to a coin flip,
 # so the interpreter is told to treat the voice signal as weak rather than
@@ -112,3 +134,17 @@ SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
 #   meralion    -- MERaLiON-SER-v1: 0.8B, 7 emotions + valence/arousal/dominance
 #   emotion2vec -- emotion2vec_plus_*: ~90M/~300M, categorical only (no VAD dims)
 SER_BACKEND: str = _env_str("SER_BACKEND", "auto")
+
+# Gloss thresholds for the valence/arousal words in the interpreter prompt.
+# These are a property of the BACKEND, not of the concept: a model whose valence
+# only ever spans 0.12-0.41 (MERaLiON, measured over 1440 RAVDESS clips) will
+# never cross a fixed 0.6 "positive" line, so every utterance gets described as
+# negative and the mismatch rule silently dies. Profile a backend before trusting
+# it:  python -m eval.ser_eval --profile-valence
+# The 0.4/0.6 defaults suit a well-calibrated 0-1 head; narrow them for a
+# compressed one. Only used when the backend supplies dimensions at all --
+# emotion2vec returns None and these are never consulted.
+VALENCE_LOW: float = _env_float("VALENCE_LOW", 0.4)
+VALENCE_HIGH: float = _env_float("VALENCE_HIGH", 0.6)
+AROUSAL_LOW: float = _env_float("AROUSAL_LOW", 0.4)
+AROUSAL_HIGH: float = _env_float("AROUSAL_HIGH", 0.6)

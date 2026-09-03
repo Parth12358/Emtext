@@ -45,12 +45,16 @@ same wire protocol**.
   **It always evicts the LLM from VRAM on exit** -- `interpreter.py` sends
   `keep_alive: -1`, so without that a run leaves 8-9GB pinned forever and
   model-swapping can silently offload layers to CPU, which reads as "slow model".
+- **`TODO.md` holds open issues with the measurements behind them.** Read it before
+  touching the segmenter or the VAD knobs, and add to it rather than re-deriving.
 - RAVDESS is much quieter than a live mic: at the default `SPEECH_RMS=500` the VAD
-  drops ~57% of clips, and they are the QUIET emotions (sad/fearful/neutral) --
-  exactly what this app exists to interpret. The eval falls back to the raw clip
-  and flags `vad_dropped=1` so nothing is lost. Run `--vad-check` before any long
-  run. Do NOT loudness-normalise to work around it: loudness is an emotional cue
-  and flattening it corrupts the SER measurement.
+  drops ~50% of clips, and they are the QUIET emotions (sad/fearful/neutral) --
+  exactly what this app exists to interpret. Run `--vad-check` before any long run,
+  and pass `--speech-rms 150` (5/10 drops -> 1/10). The eval falls back to the raw
+  clip and flags `vad_dropped=1`, so SER and WER stay usable, but those rows carry
+  garbled transcripts -- filter them out of TONE accuracy. Do NOT loudness-normalise
+  to work around it: loudness is an emotional cue and flattening it corrupts SER.
+  Full write-up, including what was ruled out, is in `TODO.md`.
 - `python -m eval.ser_eval` scores SER against RAVDESS in `data/ravdess/`
   (gitignored, 1440 clips). It is the ONLY test using real emotional audio --
   everything else uses flat SAPI speech, which cannot measure SER accuracy.

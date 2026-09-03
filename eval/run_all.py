@@ -45,8 +45,11 @@ CSV_DIR = ROOT / "eval" / "results"
 STAGES = [
     (
         "pipeline", "eval.pipeline_eval",
-        ["--limit", "280", "--quiet"],
-        ["--cells", "1", "--limit", "28", "--quiet"],
+        # --speech-rms 150 is not optional here: at the shipped default of 500
+        # the VAD drops ~half of RAVDESS, and the half it drops is the quiet
+        # emotions. See TODO.md.
+        ["--limit", "280", "--quiet", "--speech-rms", "150"],
+        ["--cells", "1", "--limit", "28", "--quiet", "--speech-rms", "150"],
         "RAVDESS in data/ravdess + Ollama with the models pulled",
     ),
     (

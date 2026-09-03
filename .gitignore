@@ -5,5 +5,16 @@ experiments/*.wav
 experiments/prosody/
 experiments/asr/
 data/
-eval/results/
+# Eval results ARE tracked: they are the evidence behind the model choices in
+# server/config.py, and a diff on them shows exactly what a change did to
+# accuracy. ~700K of CSV, which is worth it. Only the regenerable and transient
+# bits are ignored:
+# ASR/SER compute cache, rebuilt on demand
+eval/results/_cache_*.jsonl
+# live progress, meaningless once a run ends
+eval/results/*_status.json
+eval/results/*_status.tmp
+# throwaway smoke-test output, mixed seeds
+eval/results/demo*
+# older ad-hoc outputs at eval/ root
 eval/*_results.csv

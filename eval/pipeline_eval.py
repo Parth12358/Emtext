@@ -245,13 +245,42 @@ def load_cache(slug: str) -> dict[str, dict]:
     return cache
 
 
+_status_failures = 0
+
+
 def write_status(**fields) -> None:
-    """Atomic status write, so a watcher never reads a half-written file."""
+    """Atomic status write. NEVER raises -- this is telemetry, not data.
+
+    A run died at clip 75 of 280 because os.replace hit
+    `PermissionError: [WinError 5]`: on Windows the rename fails if anything else
+    holds the destination open, and an editor, an antivirus scanner, the search
+    indexer or someone simply reading the file is enough. Losing a status update
+    costs nothing; losing forty minutes of eval costs a lot.
+
+    The write is still atomic (tmp + replace) so a watcher never sees a
+    half-written file, and brief retries absorb the usual sub-second locks.
+    """
+    global _status_failures
+
     fields["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     fields["pid"] = os.getpid()
     tmp = STATUS_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(fields, indent=2), encoding="utf-8")
-    os.replace(tmp, STATUS_PATH)
+
+    for attempt in range(3):
+        try:
+            tmp.write_text(json.dumps(fields, indent=2), encoding="utf-8")
+            os.replace(tmp, STATUS_PATH)
+            _status_failures = 0
+            return
+        except OSError:
+            if attempt < 2:
+                time.sleep(0.15)
+
+    # Exhausted retries. Say so once per streak so a permanently broken status
+    # path is still visible, without spamming a line per clip.
+    _status_failures += 1
+    if _status_failures == 1:
+        print(f"  (status file not writable, continuing: {STATUS_PATH})", flush=True)
 
 
 async def wait_if_paused(client: httpx.AsyncClient, model: str) -> None:
@@ -422,9 +451,19 @@ async def collect_and_interpret(client, ser_model, slug, llm_model, clips, cache
             pass
 
     def pump() -> None:
-        """Blocking reader thread -> async queue. Sentinel None on EOF."""
+        """Blocking reader thread -> async queue. Sentinel None on EOF.
+
+        Every cross-thread submit is guarded on `loop.is_closed()`. If the
+        consumer dies, asyncio.run() closes the loop underneath this thread and
+        both the submit and the sentinel in `finally` raise
+        "Event loop is closed" -- two tracebacks that bury the ACTUAL failure
+        exactly when you need to read it. Bailing out quietly instead leaves the
+        real exception as the only thing on screen.
+        """
         try:
             for line in proc.stdout:
+                if loop.is_closed():
+                    return
                 line = line.strip()
                 if not line.startswith("{"):
                     continue
@@ -436,10 +475,17 @@ async def collect_and_interpret(client, ser_model, slug, llm_model, clips, cache
                     # .result() applies backpressure to this thread, which in
                     # turn backs up the child. Finite timeout so a dead consumer
                     # fails loudly instead of hanging the run forever.
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put(obj), loop).result(timeout=1800)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(obj), loop).result(timeout=1800)
+                    except RuntimeError:
+                        return  # loop closed mid-submit; consumer is gone
         finally:
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+            if not loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                except RuntimeError:
+                    pass
 
     threading.Thread(target=feed, daemon=True).start()
     threading.Thread(target=pump, daemon=True).start()
@@ -512,26 +558,35 @@ async def _interpret_and_write(client, Interpreter, llm_model, cached, meta_by_n
     fh.flush()
     done.add((backend, llm_model, name))
 
-    counters["done"] += 1
-    counters["elapsed"] = time.perf_counter() - counters["t0"]
-    if row["tone_correct"] != "":
-        counters["tone_n"] += 1
-        counters["tone_ok"] += int(row["tone_correct"])
-    acc = 100 * counters["tone_ok"] / counters["tone_n"] if counters["tone_n"] else 0
-    remaining = total - counters["done"]
-    eta = (counters["elapsed"] / counters["done"]) * remaining if counters["done"] else 0
+    # --- everything past this point is bookkeeping, not data -----------------
+    # The row is written and flushed above, so it is safe on disk. Progress
+    # counters, the console line and the status file are all observability, and
+    # a failure in any of them must not abort a run that is minutes or hours in.
+    # A telemetry write is exactly what killed a run at clip 75 of 280.
+    try:
+        counters["done"] += 1
+        counters["elapsed"] = time.perf_counter() - counters["t0"]
+        if row["tone_correct"] != "":
+            counters["tone_n"] += 1
+            counters["tone_ok"] += int(row["tone_correct"])
+        acc = 100 * counters["tone_ok"] / counters["tone_n"] if counters["tone_n"] else 0
+        remaining = total - counters["done"]
+        eta = (counters["elapsed"] / counters["done"]) * remaining if counters["done"] else 0
 
-    if not quiet:
-        log_row(counters["prefix"], counters["done"], total, row, acc, eta)
-    elif counters["done"] % 25 == 0:
-        print(f"{counters['prefix']}{counters['done']}/{total}  tone acc {acc:.0f}%  "
-              f"eta {eta / 60:.1f}m", flush=True)
+        if not quiet:
+            log_row(counters["prefix"], counters["done"], total, row, acc, eta)
+        elif counters["done"] % 25 == 0:
+            print(f"{counters['prefix']}{counters['done']}/{total}  tone acc {acc:.0f}%  "
+                  f"eta {eta / 60:.1f}m", flush=True)
 
-    write_status(phase=counters["phase"], cell_id=cell_id, llm_model=llm_model,
-                 ser_model=ser_model, done=counters["done"], total=total,
-                 tone_accuracy=round(acc, 1), eta_s=round(eta),
-                 elapsed_s=round(counters["elapsed"]), last_file=name,
-                 last_error=row["error"] or None)
+        write_status(phase=counters["phase"], cell_id=cell_id, llm_model=llm_model,
+                     ser_model=ser_model, done=counters["done"], total=total,
+                     tone_accuracy=round(acc, 1), eta_s=round(eta),
+                     elapsed_s=round(counters["elapsed"]), last_file=name,
+                     last_error=row["error"] or None)
+    except Exception as exc:  # noqa: BLE001 -- see comment above
+        print(f"  (progress bookkeeping failed, row still saved: "
+              f"{type(exc).__name__}: {exc})", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -754,7 +809,7 @@ def _install_signal_handler() -> None:
 
 
 async def run(args) -> None:
-    clips = load_clips(args.limit, args.seed, args.exclude_calm)
+    clips = load_clips(args.limit, args.seed, exclude_calm=not args.include_calm)
 
     if args.vad_check:
         vad_check(clips[: args.vad_check])
@@ -772,7 +827,7 @@ async def run(args) -> None:
     print("FULL PIPELINE EVAL over RAVDESS")
     print("=" * 92)
     print(f"  clips per cell : {len(clips)} (seed {args.seed}, "
-          f"calm {'excluded' if args.exclude_calm else 'folded into neutral'})")
+          f"calm {'folded into neutral' if args.include_calm else 'excluded'})")
     print(f"  cells          : {len(cells)}  (smallest models first)")
     for i, (sm, _slug, llm) in enumerate(cells, 1):
         print(f"      {i}. {sm.split('/')[-1]:<26} + {llm}")
@@ -826,6 +881,17 @@ async def run(args) -> None:
                         client, ser_model, slug, llm_model, clips, cache, done,
                         writer, fh, cell_id, args.quiet, counters)
                     collected[slug] = backend
+                    # collect() only sees clips the child had to COMPUTE, so on a
+                    # warm cache it interprets just those and silently leaves the
+                    # already-cached clips with no LLM row for this cell. Sweep
+                    # them up here. A no-op on a cold cache, and _interpret_and_write
+                    # skips anything already in `done`, so nothing is duplicated.
+                    if not _STOP:
+                        cache = load_cache(slug)
+                        counters["phase"] = "replay"
+                        await replay(client, ser_model, backend, llm_model,
+                                     clips, cache, done, writer, fh, cell_id,
+                                     args.quiet, counters)
                 else:
                     await replay(client, ser_model, collected[slug], llm_model,
                                  clips, cache, done, writer, fh, cell_id,
@@ -840,6 +906,10 @@ async def run(args) -> None:
 
 
 def main() -> None:
+    # Declared up front: Python requires `global` before the name is used
+    # anywhere in the function, and the --csv default reads CSV_PATH below.
+    global CSV_PATH, STATUS_PATH
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=280,
@@ -847,7 +917,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cells", type=int, default=0,
                     help="run only the first N cells (smallest models first)")
-    ap.add_argument("--exclude-calm", action="store_true")
+    ap.add_argument("--include-calm", action="store_true",
+                    help="fold RAVDESS 'calm' into neutral (default: excluded; "
+                         "see eval/ser_eval.py for why)")
     ap.add_argument("--quiet", action="store_true",
                     help="progress every 25 clips instead of a line per clip")
     ap.add_argument("--vad-check", type=int, nargs="?", const=10, default=0,
@@ -857,7 +929,17 @@ def main() -> None:
                          "RAVDESS is quieter than a live mic; try 150.")
     ap.add_argument("--evict-only", action="store_true",
                     help="unload everything Ollama is holding, then exit")
+    ap.add_argument("--csv", default=str(CSV_PATH), metavar="PATH",
+                    help="where rows go (default %(default)s). Point a demo or "
+                         "experiment at its own file so it neither appends to your "
+                         "real results nor inherits their resume state.")
     args = ap.parse_args()
+
+    # Rebind the output paths before anything reads them. Resume is driven by
+    # the CSV's contents, so a separate --csv is also a separate run history --
+    # which is exactly what you want for a throwaway demo.
+    CSV_PATH = Path(args.csv)
+    STATUS_PATH = CSV_PATH.with_name(CSV_PATH.stem + "_status.json")
 
     # Set here rather than asking the operator to export env vars: PowerShell
     # cannot do `VAR=x command`, so anything env-based turns one command into

@@ -24,10 +24,12 @@ Caveats worth holding on to
   - These are *acted* emotions, recorded in a studio by professional actors.
     They are cleaner and more exaggerated than a real conversation over a cheap
     microphone. Expect accuracy here to be an optimistic ceiling.
-  - RAVDESS has a "calm" class that our 7-label vocabulary does not. It folds
-    into `neutral` by default because that is the closest honest mapping, but it
-    is a judgement call and it costs some accuracy -- pass --exclude-calm to see
-    the numbers without it.
+  - RAVDESS has a "calm" class our 7-label vocabulary does not, and it is
+    EXCLUDED by default. Folding it into `neutral` looked like the honest
+    mapping but measured badly: models read calm as `sad` (MERaLiON: 163 of 192)
+    because both are low-arousal, which dragged the neutral class to 32% recall
+    and macro recall from 67.3% to 61.3%. That penalises a model for a class we
+    do not have. --include-calm restores the fold.
   - Accuracy is per-class recall averaged (macro), not raw hit rate. Raw hit rate
     flatters a model that just guesses the biggest class; here neutral+calm is
     twice the size of any other class once merged, so it would matter.
@@ -67,7 +69,7 @@ RAVDESS_DIR = ROOT / "data" / "ravdess"
 # statement 2, repetition 1, actor 12.
 RAVDESS_EMOTIONS = {
     "01": "neutral",
-    "02": "calm",       # no equivalent in our 7 labels -- see --exclude-calm
+    "02": "calm",       # no equivalent in our 7 labels -- excluded by default
     "03": "happy",
     "04": "sad",
     "05": "angry",
@@ -470,6 +472,70 @@ def summarise(result: dict) -> None:
             print("  weak regardless of how good the emotion labels look above.")
 
 
+def profile_valence(result: dict) -> None:
+    """Print a backend's real valence range and the gloss thresholds it needs.
+
+    `_describe_voice` in the interpreter turns these numbers into words
+    ("valence 0.21 (negative)") using thresholds from config, which assume a
+    calibrated 0-1 head. At least one real model does not have one: MERaLiON's
+    valence spans 0.12-0.41, so against the old fixed 0.4/0.6 every utterance in
+    1440 -- happy ones included -- was described to the LLM as "negative".
+
+    That is invisible in an accuracy score and fatal to the mismatch rule, so run
+    this before trusting a new backend. Suggested thresholds are the terciles of
+    the observed distribution: coarse, but they at least guarantee all three
+    glosses are reachable.
+    """
+    from server import config
+
+    rows = [r for r in result["rows"] if isinstance(r.get("valence"), (int, float))]
+    if not rows:
+        print(f"\n  {result['model']}: no dimensional head -- valence/arousal are")
+        print("  None, so the interpreter reasons from the emotion label alone.")
+        print("  Nothing to calibrate, but the mismatch rule loses its main axis.")
+        return
+
+    print("\n" + "=" * 78)
+    print(f"VALENCE PROFILE -- {result['model']}")
+    print("=" * 78)
+
+    values = sorted(r["valence"] for r in rows)
+    p33 = values[int(0.33 * (len(values) - 1))]
+    p67 = values[int(0.67 * (len(values) - 1))]
+
+    print(f"  observed range    : {values[0]:.3f} .. {values[-1]:.3f}  (n={len(values)})")
+    print(f"  mean              : {statistics.mean(values):.3f}")
+    print(f"  current thresholds: <{config.VALENCE_LOW} negative, "
+          f">{config.VALENCE_HIGH} positive")
+
+    below = sum(v < config.VALENCE_LOW for v in values)
+    above = sum(v > config.VALENCE_HIGH for v in values)
+    mid = len(values) - below - above
+    print(f"  glosses produced  : negative {100 * below / len(values):.0f}%, "
+          f"neutral {100 * mid / len(values):.0f}%, "
+          f"positive {100 * above / len(values):.0f}%")
+
+    pos = [r["valence"] for r in rows
+           if EXPECTED_VALENCE.get(r["true_emotion"]) == "high"]
+    neg = [r["valence"] for r in rows
+           if EXPECTED_VALENCE.get(r["true_emotion"]) == "low"]
+    gap = statistics.mean(pos) - statistics.mean(neg) if pos and neg else 0.0
+    print(f"  pleasant - unpleasant separation: {gap:+.3f}")
+
+    print()
+    if len(values) in (below, above, mid):
+        print("  BROKEN: every clip lands in ONE gloss band, so the prompt says the")
+        print("  same thing about every utterance and carries no information.")
+    elif gap < 0.05:
+        print("  WEAK: valence barely separates pleasant from unpleasant. Even with")
+        print("  good thresholds the mismatch rule has little to work with.")
+    else:
+        print("  Usable: spans the bands and separates pleasant from unpleasant.")
+
+    print("\n  suggested thresholds for this backend (terciles):")
+    print(f"    VALENCE_LOW={p33:.2f}  VALENCE_HIGH={p67:.2f}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -478,16 +544,28 @@ def main() -> None:
                     help="clips to score, balanced across emotions; 0 = all 1440")
     ap.add_argument("--seed", type=int, default=0, help="sampling seed")
     ap.add_argument("--csv", default="eval/ser_results.csv", help="CSV output path")
-    ap.add_argument("--exclude-calm", action="store_true",
-                    help="drop RAVDESS 'calm', which we fold into neutral")
+    # Excluded by DEFAULT. Measured on all 1440 clips: RAVDESS `calm` scores 11%
+    # recall because the model reads it as `sad` (163/192) -- defensible, since
+    # both are low-arousal and it has no calm class. True `neutral` scores 74%.
+    # Folding them together dragged the neutral class to 32% and macro recall
+    # from 67.3% to 61.3%, i.e. it penalised the model for a class our taxonomy
+    # does not have and manufactured a "neutral is broken" signal that was not
+    # real. --include-calm restores the old behaviour.
+    ap.add_argument("--include-calm", action="store_true",
+                    help="fold RAVDESS 'calm' into neutral (default: excluded, "
+                         "because no model has a calm class and it reads as sad)")
     ap.add_argument("--quiet", action="store_true",
                     help="progress every 25 clips instead of a line per clip")
+    ap.add_argument("--profile-valence", action="store_true",
+                    help="print the backend's real valence range and the gloss "
+                         "thresholds it needs -- run this before trusting a new "
+                         "backend's dimensional head")
     args = ap.parse_args()
 
     from server import config
 
     models = args.models or [config.SER_MODEL]
-    clips = load_clips(args.limit, args.seed, args.exclude_calm)
+    clips = load_clips(args.limit, args.seed, exclude_calm=not args.include_calm)
 
     dist = defaultdict(int)
     for _p, m in clips:
@@ -499,7 +577,7 @@ def main() -> None:
     print(f"  clips   : {len(clips)}"
           + (" (full set)" if args.limit <= 0 else f" of 1440, balanced, seed {args.seed}"))
     print(f"  classes : " + ", ".join(f"{k} {v}" for k, v in sorted(dist.items())))
-    print(f"  calm    : {'excluded' if args.exclude_calm else 'folded into neutral'}")
+    print(f"  calm    : {'folded into neutral' if args.include_calm else 'excluded (default)'}")
     print(f"  models  : {', '.join(models)}")
     print(f"  csv     : {args.csv}")
     print("\n  Both RAVDESS sentences are semantically neutral, so all the signal")
@@ -543,6 +621,10 @@ def main() -> None:
             raw = 100 * sum(r["correct"] for r in rows) / len(rows)
             lat = statistics.mean(r["latency_s"] for r in rows)
             print(f"  {result['model']:<40}{macro:>7.1f}%{raw:>7.1f}%{lat:>9.2f}s")
+
+    if args.profile_valence:
+        for result in results:
+            profile_valence(result)
 
     print(f"\nper-clip rows written to {csv_path}")
     print("Columns: " + ", ".join(COLUMNS))

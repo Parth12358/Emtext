@@ -8,6 +8,9 @@ is what keeps the conversation feeling live:
   - Transcription (Whisper) is a blocking CPU call. Running it inline would
     freeze the read loop and back up the audio buffer. Instead we push it to a
     thread executor via loop.run_in_executor.
+  - Speech emotion recognition (SER) is a second blocking CPU call over the same
+    audio, and is independent of transcription. So the two are gathered rather
+    than sequenced: one utterance costs about max(whisper, ser), not their sum.
   - Interpretation (the LLM) is slow too. We wrap the whole
     transcribe->interpret->send sequence in a fire-and-forget asyncio task, one
     per utterance. The read loop kicks it off and immediately goes back to
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import httpx
@@ -26,10 +30,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import config, ser
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(title="emtext")
 
@@ -43,6 +49,20 @@ _http: httpx.AsyncClient | None = None
 async def _startup() -> None:
     global _http
     _http = httpx.AsyncClient()
+
+    # ser.py loads at import, before uvicorn has configured logging, so restate
+    # the outcome here where it will actually be visible in the server log.
+    # Running without SER is a supported mode, not an error -- say which mode
+    # we are in so a missing "voice:" line is never a mystery.
+    if ser.available():
+        log.info("speech emotion recognition enabled (%s)", config.SER_MODEL)
+    elif config.SER_ENABLED:
+        log.warning(
+            "speech emotion recognition unavailable -- reads will have no voice "
+            "data (see the earlier SER warning for the cause)"
+        )
+    else:
+        log.info("speech emotion recognition disabled (SER_ENABLED=0)")
 
 
 @app.on_event("shutdown")
@@ -77,22 +97,43 @@ async def _process_utterance(
     """
     loop = asyncio.get_running_loop()
 
-    # Whisper is blocking CPU work -> run it in the default thread pool so this
-    # coroutine yields the event loop while it decodes.
-    transcript = await loop.run_in_executor(None, transcribe, audio)
+    # Whisper (what was said) and SER (how it sounded) are both blocking CPU
+    # work, and both read the same immutable audio buffer without touching each
+    # other's state. So we run them as two executor jobs and gather them: the
+    # voice analysis overlaps with transcription instead of following it, and
+    # the utterance costs about max(whisper, ser) rather than their sum.
+    #
+    # SER is the optional half. `ser.analyze` returns None when the model is
+    # disabled or failed to load, and its own errors are swallowed internally,
+    # so this gather cannot fail because of it.
+    transcript, voice = await asyncio.gather(
+        loop.run_in_executor(None, transcribe, audio),
+        loop.run_in_executor(None, ser.analyze, audio),
+    )
     if not transcript:
         return  # whisper heard nothing usable; stay quiet
 
     await _send(ws, {"type": "utterance", "id": uid, "transcript": transcript})
     await _send(ws, {"type": "status", "state": "thinking"})
 
-    result = await interpreter.interpret(transcript)
-    await _send(ws, {
+    result = await interpreter.interpret(transcript, voice)
+
+    message = {
         "type": "read",
         "id": uid,
         "tone": result["tone"],
         "read": result["read"],
-    })
+    }
+    if voice:
+        # Optional field, added only when we actually have data: clients that
+        # predate SER (and firmware that never implements it) just ignore an
+        # unknown key, so the wire protocol stays backward compatible.
+        message["voice"] = {
+            "emotion": voice.get("emotion"),
+            "valence": voice.get("valence"),
+            "arousal": voice.get("arousal"),
+        }
+    await _send(ws, message)
 
 
 @app.websocket("/stream")
@@ -170,6 +211,14 @@ app.mount("/", StaticFiles(directory=_STATIC_DIR), name="static")
 def main() -> None:
     """Entry point for `python -m server.main`."""
     import uvicorn
+
+    # uvicorn configures its own loggers but leaves the root logger at WARNING,
+    # which would hide our own INFO lines -- including the one saying whether
+    # SER actually loaded. Set it here so that startup state is visible.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:     %(name)s: %(message)s",
+    )
 
     uvicorn.run(app, host="0.0.0.0", port=config.PORT)
 

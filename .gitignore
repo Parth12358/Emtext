@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+experiments/*.wav
+experiments/prosody/
+experiments/asr/
+data/
+eval/results/
+eval/*_results.csv

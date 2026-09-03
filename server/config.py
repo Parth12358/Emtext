@@ -75,3 +75,40 @@ CONTEXT_LINES: int = _env_int("CONTEXT_LINES", 12)  # rolling transcript window
 OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)
 OLLAMA_TIMEOUT_S: float = _env_float("OLLAMA_TIMEOUT_S", 30.0)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean env var. Accepts 0/1, true/false, yes/no, on/off."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --- Speech emotion recognition (SER) ---------------------------------------
+# Reads *how* a line sounded, so the interpreter can compare voice against
+# words -- the mismatch between the two is what exposes sarcasm and masking.
+# Like Whisper, this is pinned to CPU so the Arc B580 stays free for the LLM.
+# Set SER_ENABLED=0 to skip loading the model entirely (saves ~2 GB of RAM and
+# the first-run download); the pipeline then behaves exactly as it did before
+# SER existed.
+SER_ENABLED: bool = _env_bool("SER_ENABLED", True)
+SER_MODEL: str = _env_str("SER_MODEL", "MERaLiON/MERaLiON-SER-v1")
+SER_DEVICE: str = _env_str("SER_DEVICE", "cpu")
+# Below this softmax probability the categorical label is close to a coin flip,
+# so the interpreter is told to treat the voice signal as weak rather than
+# letting it override a plain reading of the words.
+SER_MIN_CONFIDENCE: float = _env_float("SER_MIN_CONFIDENCE", 0.4)
+# Torch intra-op threads for SER. 0 = leave torch's own default (typically one
+# per physical core). Raising it to the logical core count measurably speeds up
+# a single SER pass, but SER and Whisper run concurrently and Whisper has its
+# own CPU threads, so oversubscribing can make the pair slower overall. Tune it
+# against your machine rather than assuming more is better.
+SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
+
+# Which SER implementation to use. "auto" picks from SER_MODEL: anything whose
+# name contains "emotion2vec" uses the FunASR backend, everything else uses the
+# transformers/MERaLiON one. Set explicitly to force a backend.
+#   meralion    -- MERaLiON-SER-v1: 0.8B, 7 emotions + valence/arousal/dominance
+#   emotion2vec -- emotion2vec_plus_*: ~90M/~300M, categorical only (no VAD dims)
+SER_BACKEND: str = _env_str("SER_BACKEND", "auto")

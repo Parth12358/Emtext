@@ -3,3 +3,22 @@ uvicorn[standard]
 faster-whisper
 numpy
 httpx
+
+# --- speech emotion recognition (server/ser.py) ---
+# CPU-only torch is enough and is what we want: the GPU stays reserved for the
+# LLM. On Linux/Windows install the smaller CPU wheel with
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch
+# Pinned below 5: MERaLiON-SER-v1 ships custom modelling code (trust_remote_code)
+# that builds layers from torch.logspace(...).item() in __init__. transformers 5
+# constructs models on the meta device, where .item() raises, so the model cannot
+# load at all on v5. Revisit when the model card supports transformers 5.
+transformers<5
+# Required by MERaLiON's remote modelling code, which imports both at load time.
+omegaconf
+peft
+
+# Optional: only needed for the lighter emotion2vec SER backend
+# (SER_MODEL=emotion2vec/emotion2vec_plus_base or _large). MERaLiON does not
+# need this, so skip it if you are staying on the default backend.
+funasr

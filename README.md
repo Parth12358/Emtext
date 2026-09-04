@@ -20,6 +20,62 @@ mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
                                                         └─ interpreter (Ollama LLM, GPU) ◄────┘
 ```
 
+## Where this is right now
+
+Working end to end, on a laptop and on a phone over the internet. Every number
+below is measured on this hardware (Ryzen 5 9600X, 6c/12t; Intel Arc B580, 12 GB
+VRAM), not estimated.
+
+**Stack as configured**
+
+| stage | model | device | cost per utterance |
+|---|---|---|---|
+| VAD | energy segmenter | — | negligible |
+| transcription | Whisper `base` (int8) | CPU | ~0.24 s |
+| speech emotion | `emotion2vec_plus_base` | CPU | ~0.12 s |
+| interpretation | `qwen3:14b` via Ollama | GPU | ~0.89 s |
+
+**Stop talking → read on screen: ~1.94 s**, of which 0.65 s is the VAD's
+end-of-speech wait (`END_SILENCE_MS`) and the rest is compute. It was 4.63 s
+before the SER swap.
+
+**What's built**
+
+- Live app at `/`, streaming mic → transcript → tone read, with the voice label.
+- **Remote access** over a Cloudflare quick tunnel — one command, no account, no
+  domain. Also the only way to test a microphone on a phone, since browsers
+  require HTTPS for `getUserMedia`.
+- **`/dashboard.html`** — live CPU/RAM/GPU, per-stage latency percentiles, tone
+  and voice-emotion distributions, recent utterances, and runtime switching of
+  the interpreter model.
+- **`/remote.html`** — connection diagnostics plus a live VAD strip showing which
+  audio frames cleared `SPEECH_RMS`, which is how segmentation gets tuned.
+- **An eval suite** (`python -m eval.run_all`) scoring SER, ASR, the interpreter
+  LLM, and the whole pipeline against RAVDESS. Results are committed under
+  `eval/results/`.
+
+**Why these models** — both defaults were chosen on measurements, not vibes:
+
+- `emotion2vec` over MERaLiON: **86% vs 61.3%** accuracy on 1440 RAVDESS clips,
+  at **0.17 s vs 2.72 s**. MERaLiON's cost is also *flat* (it pads every clip to
+  30 s), which put SER below real time and made sustained speech build a backlog.
+- `qwen3:14b` over `gemma3:12b`: **81% vs 43%** tone accuracy on 280 clips where
+  the words are deliberately neutral, so all signal is in the voice. gemma
+  answers `neutral` 68% of the time there — it largely ignores a bare emotion
+  label. (It scores 93% on `eval/tone_cases.jsonl`, where the hint carries
+  *numeric* valence. Different inputs, both results real.)
+
+**Known rough edges** — see [TODO.md](TODO.md) for the detail:
+
+- **Segmentation needs tuning for real rooms.** `SPEECH_RMS` is an absolute
+  threshold; quiet speech is dropped and sentences split at soft consonants. The
+  VAD strip in `/remote.html` is the tool for this.
+- **Whisper `base` could be better.** `distil-small.en` matches `small`'s accuracy
+  for less CPU, but that was measured on clean synthetic speech, so it needs a
+  real-microphone comparison first.
+- The current SER backend supplies **no valence/arousal**, only an emotion label,
+  which weakens the words-vs-voice mismatch rule the prompt is built around.
+
 ## Why the voice matters
 
 The transcript for a genuine "oh, wonderful" and a bitter one is identical, so
@@ -592,13 +648,23 @@ Two findings from building this suite are baked back into the code:
 
 ## Known limitations
 
-See [TODO.md](TODO.md) for open issues with the evidence behind them. The one
-worth knowing before you rely on this:
+See [TODO.md](TODO.md) for the full write-up of each, including what was tested
+and ruled out. In short:
 
 - **The VAD cannot hear quiet speech.** `SPEECH_RMS` is an absolute threshold, so
   subdued delivery is never segmented and the app emits nothing for it — on
   RAVDESS that dropped 5 of 10 sample clips, and they were the *sad* and *neutral*
-  ones. That's backwards for a tool meant to make masked emotion legible.
+  ones. Backwards for a tool meant to make masked emotion legible. The VAD strip
+  in `/remote.html` now diagnoses it; the fix (a noise-floor-relative threshold)
+  is not written.
+- **Whisper `base` is untested in a real room.** The ASR comparison used clean
+  synthetic speech, which cannot see noise robustness. Do not switch models on
+  that evidence alone.
+- **The default SER backend has no valence**, only an emotion label — which
+  weakens the words-vs-voice mismatch rule the whole prompt is built around.
+- **Acted-emotion caveat.** RAVDESS is studio recordings by professional actors,
+  so every accuracy figure here is an optimistic ceiling rather than what a cheap
+  microphone in a busy room will give you.
 
 ## Remote access
 
@@ -691,8 +757,12 @@ server/
   transcriber.py  faster-whisper wrapper (CPU)
   ser.py          speech emotion recognition: emotion2vec / MERaLiON (CPU)
   interpreter.py  Ollama wrapper + rolling conversation context
-  static/index.html   browser test client (no build step)
-  static/remote.html  tunnel diagnostics + mic test, for a phone
+  metrics.py      in-memory rolling metrics for the dashboard (no DB)
+  dashboard.py    token-gated /api/* : stats, model select, model evict
+  static/index.html      browser client, the app itself (no build step)
+  static/remote.html     tunnel diagnostics + VAD strip + mic test (phone)
+  static/dashboard.html  monitoring + live model control
+eval/results/           committed eval output (the evidence behind config)
 eval/run_all.py         run every stage, one CSV each
 eval/pipeline_eval.py   full workflow over RAVDESS (the matrix runner)
 eval/pipeline_child.py    its CPU half: Segmenter -> whisper + SER
@@ -708,3 +778,21 @@ data/ravdess/           RAVDESS dataset (gitignored, see below)
 experiments/      scratch space; headless test client + SAPI audio generators
 firmware/         (future) ESP32 client
 ```
+
+### Endpoints
+
+| path | what | auth |
+|---|---|---|
+| `/` | the app | token as `?token=` for the websocket |
+| `/remote.html` | connection + VAD diagnostics, mic test | token |
+| `/dashboard.html` | monitoring and model control | token |
+| `/health` | `{"status":"ok"}` | none, deliberately |
+| `/stream` | websocket: TEXT token, then binary PCM | first frame |
+| `/stream?vad=1` | as above, plus VAD telemetry frames | first frame |
+| `/api/stats` | everything the dashboard polls | token |
+| `/api/models` · `POST /api/model` · `POST /api/evict` | model control | token |
+
+Token auth follows one rule everywhere: **enforced when `AUTH_TOKEN` is set,
+open when it is not.** `/health` is the deliberate exception, so a tunnel can be
+checked without credentials — a 502 there means the tunnel is up but the server
+is not.

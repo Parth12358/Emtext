@@ -18,3 +18,20 @@ eval/results/*_status.tmp
 eval/results/demo*
 # older ad-hoc outputs at eval/ root
 eval/*_results.csv
+
+# --- secrets -----------------------------------------------------------------
+# These all currently live OUTSIDE the repo by design -- the AUTH_TOKEN in
+# ~/.emtext/ and the Cloudflare credentials in ~/.cloudflared/ -- specifically
+# so a stray `git add -A` cannot publish them. These patterns are belt and
+# braces for the day someone copies one in "just to test".
+.emtext/
+auth_token
+*.pem
+cert.pem
+.cloudflared/
+config.yml
+*-credentials.json
+# cloudflared writes tunnel creds as <uuid>.json
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*.json
+.env
+.env.*

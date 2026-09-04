@@ -17,10 +17,18 @@ static void onWake() {
   }
 }
 static void onMute()     { LOG_INFO("mute toggled (stub)"); }
-static void onPause()    { LOG_INFO("pause toggled (stub)"); }
+static void onPause() {
+  static bool p = false;
+  p = !p;
+  display::setPaused(p);
+  LOG_INFO("streaming %s", p ? "paused" : "resumed");
+}
 static void onStatus()   { display::setState(display::State::Status); }
 static void onPowerOff() { LOG_WARN("power off (stub)"); }
 static void onOrient(int rot) { display::setRotation(rot); }
+static void onLift() {
+  if (display::state() == display::State::Dark) display::setState(display::State::Glance);
+}
 
 void setup() {
   // put your setup code here, to run once:
@@ -57,6 +65,7 @@ void setup() {
   controls::onStatus(onStatus);
   controls::onPowerOff(onPowerOff);
   controls::onOrient(onOrient);
+  controls::onLift(onLift);
 
   // seed fake data so glance/history/status show something (real reads land in Stage 6)
   display::setGlance("hey, nice work", "positive", "hey nice work");

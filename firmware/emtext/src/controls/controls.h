@@ -9,4 +9,5 @@ namespace controls {
   void onStatus(void (*cb)());              // BtnB long   (status screen)
   void onPowerOff(void (*cb)());            // BtnPWR long  (power off)
   void onOrient(void (*cb)(int rotation));  // orientation changed (0..3)
+  void onLift(void (*cb)());                // lift-to-wake gesture
 }

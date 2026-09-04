@@ -205,5 +205,5 @@ void display::setPaused(bool on) {
   paused = on;
   LOG_INFO("paused -> %d", (int)on);
   if (on) draw();
-  else    setState(State::Dark);      // leaving pause returns to the calm default
+  else    setState(State::Glance);    // leaving pause returns to the read (auto-dims after 8s)
 }

@@ -148,3 +148,19 @@ VALENCE_LOW: float = _env_float("VALENCE_LOW", 0.4)
 VALENCE_HIGH: float = _env_float("VALENCE_HIGH", 0.6)
 AROUSAL_LOW: float = _env_float("AROUSAL_LOW", 0.4)
 AROUSAL_HIGH: float = _env_float("AROUSAL_HIGH", 0.6)
+
+# --- Websocket keepalive ----------------------------------------------------
+# Cloudflare closes a proxied websocket after ~100s with no traffic in either
+# direction (Free/Pro). uvicorn already sends protocol-level pings every 20s,
+# but that is a server setting; a different proxy, or the future ESP32 stack,
+# may not honour or emit them. So the app sends its own visible {"type":"ping"}
+# frame when no audio has arrived for a while -- which also gives a diagnostic
+# page something concrete to measure round-trip latency against.
+WS_IDLE_PING_S: float = _env_float("WS_IDLE_PING_S", 30.0)
+# How often the keepalive task wakes to check. Cheap; keep well under the idle
+# threshold so the ping actually lands near WS_IDLE_PING_S rather than late.
+WS_KEEPALIVE_CHECK_S: float = _env_float("WS_KEEPALIVE_CHECK_S", 5.0)
+
+# How often to emit VAD telemetry frames on a /stream?vad=1 connection. ~10/s is
+# enough to watch a level meter move without flooding the log in remote.html.
+VAD_TELEMETRY_INTERVAL_S: float = _env_float("VAD_TELEMETRY_INTERVAL_S", 0.1)

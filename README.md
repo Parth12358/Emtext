@@ -600,10 +600,53 @@ worth knowing before you rely on this:
   RAVDESS that dropped 5 of 10 sample clips, and they were the *sad* and *neutral*
   ones. That's backwards for a tool meant to make masked emotion legible.
 
+## Remote access
+
+The server can be reached from outside the LAN through a **Cloudflare quick
+tunnel** — one command, no account, no domain, no port forwarding, works behind
+NAT/CGNAT. Full instructions and troubleshooting are in
+**[tunnel/README.md](tunnel/README.md)**.
+
+```powershell
+$env:AUTH_TOKEN = (python -c "import secrets; print(secrets.token_urlsafe(32))")
+python -m server.main                              # terminal 1
+cloudflared tunnel --url http://localhost:8000     # terminal 2
+```
+
+cloudflared prints a random `https://<random>.trycloudflare.com` URL. **It
+changes every restart** — that is the trade for needing no account. `tunnel/start.sh`
+and `tunnel/start.bat` start both and print the URL prominently.
+
+This is also the only way to test the microphone on a phone: browsers require a
+**secure origin** for `getUserMedia`, and `localhost` is the only exception. The
+tunnel supplies the HTTPS.
+
+### Diagnostics
+
+`/remote.html` is a standalone page for verifying a tunnel from another device:
+
+```
+https://<random>.trycloudflare.com/remote.html?token=<AUTH_TOKEN>
+```
+
+It checks secure origin, `/health` with round-trip time, websocket scheme,
+connect, auth, keepalive latency and whether the `voice` field is arriving — then
+**Stream mic** runs the whole path (mic → tunnel → Whisper → Ollama → read) and
+reports end-to-end latency. Server URL and token are editable, since the tunnel
+hostname changes on every restart. Built for a phone: large touch targets,
+responsive, and a timestamped log of every frame.
+
+> **Set `AUTH_TOKEN` before starting a tunnel.** Unset, the server accepts *any*
+> client — there is no rate limit, connection cap or origin check. A quick-tunnel
+> hostname is random, but random is not secret: it passes through Cloudflare and
+> sits in your shell history, and anyone who obtains it gets unmetered use of
+> your CPU and GPU. The server logs a loud warning at startup when it is unset.
+
 ## Layout
 
 ```
 TODO.md           open issues, with the measurements behind them
+tunnel/           Cloudflare quick-tunnel docs + start scripts
 server/
   main.py         FastAPI app + websocket route (wiring only)
   config.py       all tunables, env-overridable
@@ -612,6 +655,7 @@ server/
   ser.py          speech emotion recognition: emotion2vec / MERaLiON (CPU)
   interpreter.py  Ollama wrapper + rolling conversation context
   static/index.html   browser test client (no build step)
+  static/remote.html  tunnel diagnostics + mic test, for a phone
 eval/run_all.py         run every stage, one CSV each
 eval/pipeline_eval.py   full workflow over RAVDESS (the matrix runner)
 eval/pipeline_child.py    its CPU half: Segmenter -> whisper + SER

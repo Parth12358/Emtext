@@ -185,7 +185,13 @@
 // Auth token from ?token=... , defaulting to "dev" (the server accepts anything
 // when AUTH_TOKEN is unset, but we still must send a first TEXT frame).
 const TOKEN = new URLSearchParams(location.search).get("token") || "dev";
-const WS_URL = `ws://${location.host}/stream`;
+// Derive the websocket scheme from the page, never hardcode it. A browser blocks
+// ws:// from an https:// page as mixed content, so a hardcoded ws:// works fine
+// on localhost and then fails silently and completely the moment the app is
+// served over TLS — which is every path to the outside world (Cloudflare Tunnel,
+// any reverse proxy). The ESP32 firmware needs the same wss:// treatment.
+const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
+const WS_URL = `${WS_SCHEME}//${location.host}/stream`;
 
 let ws = null;
 let capturing = false;      // is the mic actively streaming?

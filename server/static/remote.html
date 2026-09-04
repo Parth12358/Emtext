@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>emtext — remote diagnostics</title>
+<style>
+  /* Same palette and self-contained rules as index.html: no CDNs, no build. */
+  :root {
+    --bg: #14161a;
+    --panel: #1d2027;
+    --edge: #2b2f38;
+    --text: #e7e9ee;
+    --muted: #9aa1ad;
+    --positive: #4caf7d;
+    --negative: #e56a6a;
+    --neutral: #8b93a1;
+    --sarcastic: #b98be0;
+    --mixed: #e0b56a;
+    --accent: #3a7afe;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    padding: 16px;
+    /* Respect the iPhone notch/home indicator -- this page is meant to be used
+       on a phone, held in one hand, while walking around testing the mic. */
+    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+    font-size: 16px;   /* 16px minimum stops iOS zooming the page on input focus */
+  }
+  h1 { font-size: 19px; margin: 0 0 2px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input {
+    width: 100%; padding: 12px; font-size: 16px;
+    background: #16181d; color: var(--text);
+    border: 1px solid var(--edge); border-radius: 8px;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* Touch targets: 48px minimum, and buttons go full width on a phone. */
+  button {
+    width: 100%; min-height: 52px; margin-top: 12px;
+    font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 10px; cursor: pointer;
+  }
+  button.secondary { background: #2b2f38; color: var(--text); }
+  button.on { background: var(--negative); }
+  button:disabled { opacity: .45; cursor: default; }
+  @media (min-width: 560px) {
+    body { max-width: 720px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; }
+    .row button { flex: 1; }
+  }
+
+  /* Diagnostic rows: label left, result right, colour-coded. */
+  .check {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--edge);
+    font-size: 14px;
+  }
+  .check:last-child { border-bottom: none; }
+  .check .k { color: var(--muted); }
+  .check .v { font-family: ui-monospace, Consolas, monospace; text-align: right; }
+  .ok   { color: var(--positive); }
+  .bad  { color: var(--negative); }
+  .warn { color: var(--mixed); }
+  .pend { color: var(--muted); }
+
+  .meter { height: 8px; background: var(--edge); border-radius: 4px; overflow: hidden; margin-top: 12px; }
+  .meter > div { height: 100%; width: 0%; background: var(--accent); transition: width .06s linear; }
+
+  /* Log: monospace, newest last, scrolls independently so the controls above
+     stay reachable without scrolling the whole page on a small screen. */
+  #log {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 11.5px; line-height: 1.5;
+    max-height: 40vh; overflow-y: auto;
+    background: #101216; border: 1px solid var(--edge); border-radius: 8px;
+    padding: 10px; white-space: pre-wrap; word-break: break-word;
+  }
+  #log .t { color: #5c6470; }
+  #log .rx { color: var(--positive); }
+  #log .tx { color: var(--accent); }
+  #log .er { color: var(--negative); }
+  #log .in { color: var(--muted); }
+
+  .entry { border-left: 3px solid var(--neutral); padding: 8px 0 8px 10px; margin-bottom: 10px; }
+  .entry .transcript { font-size: 15px; }
+  .entry .read { font-size: 13.5px; margin-top: 3px; }
+  .entry .meta { font-size: 11px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .t-positive  { border-left-color: var(--positive); }  .t-positive  .read { color: var(--positive); }
+  .t-negative  { border-left-color: var(--negative); }  .t-negative  .read { color: var(--negative); }
+  .t-neutral   { border-left-color: var(--neutral); }
+  .t-sarcastic { border-left-color: var(--sarcastic); } .t-sarcastic .read { color: var(--sarcastic); }
+  .t-mixed     { border-left-color: var(--mixed); }     .t-mixed     .read { color: var(--mixed); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+  /* VAD panel. The level bar carries a threshold marker because the single
+     question when tuning is "does my voice actually clear SPEECH_RMS", and a
+     bar without the line on it cannot answer that. */
+  .vadbar {
+    position: relative; height: 26px; background: #101216;
+    border: 1px solid var(--edge); border-radius: 6px; overflow: hidden;
+    margin-top: 6px;
+  }
+  .vadbar .fill { height: 100%; width: 0%; background: var(--neutral); transition: width .05s linear; }
+  .vadbar .fill.speech { background: var(--positive); }
+  .vadbar .thresh {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: var(--mixed);
+  }
+  .vadbar .num {
+    position: absolute; top: 0; right: 6px; line-height: 26px; font-size: 11px;
+    font-family: ui-monospace, Consolas, monospace; color: var(--text);
+  }
+  /* Rolling speech/silence strip: one column per telemetry sample, newest at
+     the right. Shows the SHAPE of a sentence -- where the gaps fell and how
+     long they were -- which is what tells a split from a clip. */
+  .strip {
+    display: flex; align-items: flex-end; gap: 1px; height: 34px; margin-top: 8px;
+    background: #101216; border: 1px solid var(--edge); border-radius: 6px;
+    padding: 3px; overflow: hidden;
+  }
+  .strip i { flex: 0 0 3px; background: var(--edge); border-radius: 1px; min-height: 2px; }
+  .strip i.sp { background: var(--positive); }
+  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+  .legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>emtext remote diagnostics</h1>
+<div class="sub">Verify a tunnel end to end from a phone or another network.</div>
+
+<div class="card">
+  <h2>Connection</h2>
+  <label for="url">Server URL — paste the trycloudflare.com address</label>
+  <input id="url" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+         spellcheck="false" placeholder="https://random-words.trycloudflare.com" />
+  <label for="token">AUTH_TOKEN</label>
+  <input id="token" type="text" autocapitalize="off" autocorrect="off"
+         spellcheck="false" placeholder="the value of AUTH_TOKEN on the server" />
+  <div class="row">
+    <button id="connect">Run diagnostics</button>
+    <button id="disconnect" class="secondary" disabled>Disconnect</button>
+  </div>
+  <div class="hint">
+    Prefill these with <code>?url=…&amp;token=…</code>. The quick-tunnel hostname
+    changes on every restart, so the fields stay editable.
+  </div>
+</div>
+
+<div class="card">
+  <h2>Checks</h2>
+  <div class="check"><span class="k">Origin secure (mic allowed)</span><span class="v pend" id="c-secure">—</span></div>
+  <div class="check"><span class="k">/health</span><span class="v pend" id="c-health">—</span></div>
+  <div class="check"><span class="k">WebSocket scheme</span><span class="v pend" id="c-scheme">—</span></div>
+  <div class="check"><span class="k">WebSocket connect</span><span class="v pend" id="c-ws">—</span></div>
+  <div class="check"><span class="k">Auth</span><span class="v pend" id="c-auth">—</span></div>
+  <div class="check"><span class="k">Keepalive round-trip</span><span class="v pend" id="c-ping">—</span></div>
+  <div class="check"><span class="k">Speech emotion (voice field)</span><span class="v pend" id="c-voice">—</span></div>
+</div>
+
+<div class="card">
+  <h2>Microphone → tunnel → read</h2>
+  <button id="mic" disabled>Stream mic</button>
+  <div class="meter"><div id="level"></div></div>
+  <div class="check" style="margin-top:10px">
+    <span class="k">Last utterance → read</span><span class="v pend" id="c-latency">—</span>
+  </div>
+  <div id="feed"></div>
+  <div class="hint">
+    Speak a sentence, then pause for about a second — the pause is how the server
+    knows the sentence ended. Latency is measured from that pause, not from when
+    you started speaking.
+  </div>
+</div>
+
+<div class="card">
+  <h2>Voice activity detection</h2>
+  <div class="vadbar">
+    <div class="fill" id="v-fill"></div>
+    <div class="thresh" id="v-thresh"></div>
+    <div class="num" id="v-num">—</div>
+  </div>
+  <div class="legend">
+    <span>threshold <b id="v-threshold">—</b></span>
+    <span>peak <b id="v-peak">—</b></span>
+    <span>voiced <b id="v-voiced">—</b></span>
+    <span>discarded <b id="v-discarded">0</b></span>
+  </div>
+  <div class="strip" id="v-strip"></div>
+  <div class="check" style="margin-top:10px">
+    <span class="k">Last utterance closed because</span><span class="v pend" id="v-reason">—</span>
+  </div>
+  <div class="hint" id="v-advice">
+    Green = the frame cleared <code>SPEECH_RMS</code>; grey = counted as silence.
+    A sentence that splits will show a grey gap in the middle of your speech.
+  </div>
+  <button id="v-toggle" class="secondary">Enable VAD telemetry (reconnects)</button>
+</div>
+
+<div class="card">
+  <h2>Message log</h2>
+  <div id="log"></div>
+  <button id="clear" class="secondary">Clear log</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Diagnostics for reaching this server through a Cloudflare quick tunnel.
+// Standalone on purpose: index.html assumes it is served BY the server it talks
+// to, but this page must be able to point at an arbitrary host, because the
+// quick-tunnel hostname is random and changes on every restart.
+// ---------------------------------------------------------------------------
+
+const el = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+
+// Prefill from ?url=/?token=, else from whatever origin served this page, so
+// opening /remote.html on the tunnel itself needs no typing at all.
+el("url").value = params.get("url") || location.origin;
+el("token").value = params.get("token") || "";
+
+let ws = null;
+let capturing = false;
+let pingTimer = null;
+let pendingPing = null;      // {t, sentAt} of the ping we are waiting on
+let lastUtteranceEnd = null; // set when audio stops flowing, for latency
+const entries = new Map();
+
+// VAD telemetry is on by default here -- diagnosing segmentation is the main
+// reason to open this page at all.
+let vadEnabled = true;
+const STRIP_MAX = 110;   // ~11s of history at 10 samples/sec
+
+// ----- logging --------------------------------------------------------------
+function log(kind, text) {
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8) + "." +
+             String(now.getMilliseconds()).padStart(3, "0");
+  const line = document.createElement("div");
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = ts + "  ";
+  const b = document.createElement("span");
+  b.className = kind;
+  b.textContent = text;
+  line.append(t, b);
+  const box = el("log");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.appendChild(line);
+  // Only autoscroll if already at the bottom, so reading history isn't yanked.
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function check(id, cls, text) {
+  const node = el(id);
+  node.className = "v " + cls;
+  node.textContent = text;
+}
+
+// ----- URL handling ---------------------------------------------------------
+// Derive the websocket scheme from the page URL rather than hardcoding it: a
+// browser blocks ws:// from an https:// page as mixed content, and everything
+// through a tunnel is https. Getting this wrong fails silently and completely.
+function wsUrlFrom(httpUrl) {
+  const u = new URL(httpUrl);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  u.pathname = "/stream";
+  // ?vad=1 asks the server for VAD telemetry. Opt-in per connection, so the
+  // normal client and the ESP32 never carry the extra frames.
+  u.search = vadEnabled ? "?vad=1" : "";
+  return u.toString();
+}
+
+function baseUrl() {
+  let v = el("url").value.trim().replace(/\/+$/, "");
+  // Tolerate a pasted bare hostname -- easy to do on a phone.
+  if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
+  return v;
+}
+
+// ----- checks ---------------------------------------------------------------
+// getUserMedia only works on a secure origin. localhost counts; a plain-http
+// tunnel hostname does not, and the mic button would fail with a confusing
+// permissions error rather than an obvious one.
+function checkSecure() {
+  if (window.isSecureContext) {
+    check("c-secure", "ok", "yes (" + location.protocol + ")");
+    return true;
+  }
+  check("c-secure", "bad", "NO — " + location.protocol + " blocks the mic");
+  log("er", "This page is not a secure context, so the microphone cannot be used. " +
+            "Open it over https.");
+  return false;
+}
+
+async function checkHealth() {
+  const url = baseUrl() + "/health";
+  check("c-health", "pend", "checking…");
+
+  // /health is a plain fetch, so it obeys the same-origin policy and the server
+  // deliberately sends no CORS headers. Pointing this page at a DIFFERENT origin
+  // therefore fails here even when the tunnel is perfectly healthy -- while the
+  // websocket below still succeeds, because websockets are not subject to CORS.
+  // Say so plainly rather than reporting a scary "unreachable" for what is
+  // really just a browser rule.
+  const crossOrigin = (() => {
+    try { return new URL(baseUrl()).origin !== location.origin; }
+    catch { return false; }
+  })();
+
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    const ms = Math.round(performance.now() - t0);
+    if (!res.ok) {
+      // 502 is the signature of "tunnel up, server down" -- by far the most
+      // common failure, and worth naming explicitly rather than showing a code.
+      check("c-health", "bad", res.status + (res.status === 502 ? " — server down?" : ""));
+      log("er", `GET /health -> ${res.status}. ` + (res.status === 502
+          ? "Cloudflare reached the tunnel but not the server: is python -m server.main running?"
+          : ""));
+      return false;
+    }
+    const body = await res.json();
+    check("c-health", "ok", `${body.status} · ${ms} ms`);
+    log("rx", `GET /health -> ${JSON.stringify(body)} (${ms} ms)`);
+    return true;
+  } catch (err) {
+    if (crossOrigin) {
+      check("c-health", "warn", "blocked (cross-origin)");
+      log("in", `GET /health blocked by the browser: this page is on ${location.origin} ` +
+                `but the target is a different origin, and /health sends no CORS headers. ` +
+                `This is expected and not a tunnel fault -- the websocket check below is ` +
+                `authoritative, since websockets are not subject to CORS. To check /health ` +
+                `directly, open this page from the tunnel itself.`);
+    } else {
+      check("c-health", "bad", "unreachable");
+      log("er", `GET /health failed: ${err.message}. Check the URL is right and the tunnel is up.`);
+    }
+    return false;
+  }
+}
+
+// ----- websocket ------------------------------------------------------------
+function connect() {
+  const wsUrl = wsUrlFrom(baseUrl());
+  const secure = wsUrl.startsWith("wss:");
+  check("c-scheme", secure ? "ok" : "warn", secure ? "wss (encrypted)" : "ws (plaintext)");
+  check("c-ws", "pend", "connecting…");
+  check("c-auth", "pend", "—");
+  log("in", "connecting to " + wsUrl);
+
+  const t0 = performance.now();
+  ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    check("c-ws", "ok", `open · ${Math.round(performance.now() - t0)} ms`);
+    log("tx", "sending auth token (first TEXT frame)");
+    ws.send(el("token").value);
+    el("disconnect").disabled = false;
+    el("connect").disabled = true;
+    startPinging();
+  };
+
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { log("er", "non-JSON frame"); return; }
+    handle(msg);
+  };
+
+  ws.onerror = () => log("er", "websocket error");
+
+  ws.onclose = (e) => {
+    stopPinging();
+    el("disconnect").disabled = true;
+    el("connect").disabled = false;
+    el("mic").disabled = true;
+    if (capturing) { capturing = false; stopCapture(); el("mic").textContent = "Stream mic"; el("mic").classList.remove("on"); }
+    // 1008 is what server/main.py sends for a rejected token -- the single most
+    // useful close code to surface plainly instead of as a number.
+    if (e.code === 1008) {
+      check("c-auth", "bad", "REJECTED (1008)");
+      check("c-ws", "bad", "closed");
+      log("er", "Auth rejected. The token does not match AUTH_TOKEN on the server.");
+    } else {
+      check("c-ws", e.wasClean ? "pend" : "bad", `closed (${e.code})`);
+      log(e.wasClean ? "in" : "er", `websocket closed, code ${e.code}` +
+          (e.reason ? " — " + e.reason : ""));
+    }
+  };
+}
+
+function handle(msg) {
+  log("rx", JSON.stringify(msg));
+  switch (msg.type) {
+    case "ready":
+      // Reaching "ready" IS the proof that auth passed: the server closes with
+      // 1008 before sending anything when the token is wrong.
+      check("c-auth", "ok", "accepted");
+      el("mic").disabled = false;
+      break;
+    case "pong": {
+      if (pendingPing && msg.t === pendingPing.t) {
+        const ms = Math.round(performance.now() - pendingPing.sentAt);
+        check("c-ping", ms < 400 ? "ok" : "warn", ms + " ms");
+        pendingPing = null;
+      }
+      break;
+    }
+    case "ping":
+      // Server-initiated keepalive. Its arrival is itself the evidence that
+      // idle connections are being held open rather than culled.
+      check("c-ping", "ok", "server ping received");
+      break;
+    case "vad":
+      renderVad(msg);
+      return;              // too frequent to log; the strip IS the record
+    case "vad_close":
+      renderVadClose(msg);
+      break;
+    case "utterance":
+      addEntry(msg.id, msg.transcript);
+      break;
+    case "read":
+      addRead(msg);
+      break;
+  }
+}
+
+// ----- VAD panel ------------------------------------------------------------
+// Log scale: RMS spans roughly 50..15000 across quiet and loud speech, so a
+// linear bar would leave every normal voice squashed against the left edge and
+// make the threshold impossible to judge by eye.
+function rmsToPct(rms) {
+  const lo = Math.log10(20), hi = Math.log10(20000);
+  const v = Math.log10(Math.max(20, rms));
+  return Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+}
+
+function renderVad(m) {
+  const pct = rmsToPct(m.rms);
+  const fill = el("v-fill");
+  fill.style.width = pct + "%";
+  fill.classList.toggle("speech", m.rms >= m.threshold);
+  el("v-num").textContent = Math.round(m.rms);
+  el("v-thresh").style.left = rmsToPct(m.threshold) + "%";
+  el("v-threshold").textContent = m.threshold;
+  el("v-threshold").dataset.endSilence = m.end_silence_ms;
+  el("v-peak").textContent = Math.round(m.peak_rms);
+  el("v-voiced").textContent = m.frames
+    ? Math.round((m.voiced_frames / m.frames) * 100) + "%" : "—";
+  el("v-discarded").textContent = m.discarded;
+
+  // The silent failure: audio is arriving but nothing ever clears the
+  // threshold, so no utterance opens, no vad_close fires, and the page would
+  // otherwise show nothing at all while the user wonders why they get no
+  // transcript. This is the most common real-world symptom (a phone mic is far
+  // quieter than SPEECH_RMS=500 assumes), so name it explicitly.
+  if (m.frames > 60 && m.voiced_frames === 0 && m.peak_rms > 5) {
+    const suggested = Math.max(60, Math.round(m.peak_rms * 0.35));
+    check("v-reason", "bad", "nothing reaching threshold");
+    el("v-advice").textContent =
+      `No audio has cleared SPEECH_RMS=${m.threshold} in ${m.frames} frames — ` +
+      `peak was only ${Math.round(m.peak_rms)}. Nothing will ever be transcribed ` +
+      `at this setting. Restart the server with SPEECH_RMS≈${suggested}.`;
+  }
+
+  // One column per sample, newest on the right.
+  const strip = el("v-strip");
+  const bar = document.createElement("i");
+  bar.style.height = Math.max(2, pct * 0.28) + "px";
+  if (m.rms >= m.threshold) bar.classList.add("sp");
+  strip.appendChild(bar);
+  while (strip.children.length > STRIP_MAX) strip.removeChild(strip.firstChild);
+}
+
+function renderVadClose(m) {
+  // The diagnosis lives here. "end_silence" with a short voiced_ms means the
+  // VAD decided you stopped talking in the middle of a sentence -- a split.
+  // "too_short" means it threw the audio away entirely and you got nothing.
+  const reasons = {
+    end_silence: "silence reached END_SILENCE_MS",
+    max_length: "hit MAX_UTTERANCE_MS (run-on)",
+    too_short: "DISCARDED — under MIN_UTTERANCE_MS of voiced audio",
+  };
+  const cls = m.reason === "too_short" ? "bad"
+            : (m.voiced_ms && m.voiced_ms < 900 ? "warn" : "ok");
+  check("v-reason", cls, `${reasons[m.reason] || m.reason} · ${m.voiced_ms}ms voiced`);
+  log("in", `vad_close id=${m.id} reason=${m.reason} voiced=${m.voiced_ms}ms ` +
+            `utterance=${m.utterance_ms}ms peak_rms=${m.peak_rms}`);
+
+  // Turn the numbers into the actual next action, since that is the whole
+  // point of looking at them.
+  let advice;
+  if (m.reason === "too_short") {
+    advice = `Discarded: only ${m.voiced_ms}ms cleared the threshold. Peak was ` +
+             `${m.peak_rms}. Lower SPEECH_RMS (try ~${Math.max(60, Math.round(m.peak_rms * 0.25))}) ` +
+             `or lower MIN_UTTERANCE_MS.`;
+  } else if (m.reason === "end_silence" && m.voiced_ms < 900) {
+    advice = `Only ${m.voiced_ms}ms voiced before it closed — that looks like a ` +
+             `sentence being cut at a soft consonant. Raise END_SILENCE_MS ` +
+             `(currently ${el("v-threshold").dataset.endSilence || "650"}ms) or ` +
+             `lower SPEECH_RMS (peak was ${m.peak_rms}).`;
+  } else {
+    advice = `Looks healthy: ${m.voiced_ms}ms voiced in a ${m.utterance_ms}ms ` +
+             `utterance, peak ${m.peak_rms}.`;
+  }
+  el("v-advice").textContent = advice;
+}
+
+// ----- keepalive ------------------------------------------------------------
+// Cloudflare drops a proxied websocket after ~100s idle. The server sends its
+// own ping, but this page pings too so the round-trip can be measured, which is
+// the number that tells you whether the tunnel is adding latency.
+function startPinging() {
+  stopPinging();
+  const send = () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const t = Date.now();
+    pendingPing = { t, sentAt: performance.now() };
+    ws.send(JSON.stringify({ type: "ping", t }));
+    log("tx", `{"type":"ping"}`);
+  };
+  send();
+  pingTimer = setInterval(send, 20000);
+}
+function stopPinging() {
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = null;
+  pendingPing = null;
+}
+
+// ----- feed -----------------------------------------------------------------
+function addEntry(id, transcript) {
+  const node = document.createElement("div");
+  node.className = "entry t-neutral";
+  const t = document.createElement("div");
+  t.className = "transcript";
+  t.textContent = transcript;
+  const r = document.createElement("div");
+  r.className = "read";
+  r.textContent = "reading…";
+  const m = document.createElement("div");
+  m.className = "meta";
+  node.append(t, r, m);
+  el("feed").prepend(node);
+  entries.set(id, node);
+}
+
+function addRead(msg) {
+  const node = entries.get(msg.id);
+  if (!node) return;
+  node.className = "entry t-" + msg.tone;
+  node.querySelector(".read").textContent = msg.read;
+
+  const bits = [];
+  // Latency from when the mic stopped picking up speech to the read landing --
+  // the number a user actually feels. Approximate: it is measured client-side
+  // from the last non-silent block, so it includes the VAD's end-of-speech wait.
+  if (lastUtteranceEnd) {
+    const ms = Math.round(performance.now() - lastUtteranceEnd);
+    bits.push(`${(ms / 1000).toFixed(1)}s end→read`);
+    check("c-latency", ms < 4000 ? "ok" : "warn", (ms / 1000).toFixed(1) + " s");
+    lastUtteranceEnd = null;
+  }
+  if (msg.voice) {
+    const v = [msg.voice.emotion];
+    for (const k of ["valence", "arousal"]) {
+      if (typeof msg.voice[k] === "number") v.push(`${k} ${msg.voice[k].toFixed(2)}`);
+    }
+    bits.push("voice: " + v.filter(Boolean).join(", "));
+    check("c-voice", "ok", msg.voice.emotion || "present");
+  } else {
+    check("c-voice", "warn", "absent (SER off?)");
+  }
+  node.querySelector(".meta").textContent = bits.join("  ·  ");
+}
+
+// ----- audio capture --------------------------------------------------------
+// Same AudioWorklet + linear-interpolation resampler as index.html: the browser
+// captures at the hardware rate (usually 48 kHz) and the wire protocol wants
+// 16 kHz mono int16 LE. Kept byte-identical in behaviour so this page tests the
+// real capture path rather than a simplified stand-in.
+let audioCtx = null, mediaStream = null, workletNode = null;
+
+const WORKLET_SRC = `
+  class CaptureProcessor extends AudioWorkletProcessor {
+    process(inputs) {
+      const ch = inputs[0][0];
+      if (ch) this.port.postMessage(ch.slice(0));
+      return true;
+    }
+  }
+  registerProcessor('capture', CaptureProcessor);
+`;
+
+const TARGET_RATE = 16000;
+let inputRate = 48000;
+let carry = new Float32Array(0);
+let readPos = 0;
+
+function resampleAndSend(chunk) {
+  let sum = 0;
+  for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
+  const rms = Math.sqrt(sum / chunk.length);
+  el("level").style.width = Math.min(100, rms * 350) + "%";
+  // Track when speech stops so end→read latency can be measured. The threshold
+  // is deliberately loose; it only needs to distinguish talking from silence.
+  if (rms > 0.02) lastUtteranceEnd = performance.now();
+
+  const buf = new Float32Array(carry.length + chunk.length);
+  buf.set(carry, 0);
+  buf.set(chunk, carry.length);
+
+  const step = inputRate / TARGET_RATE;
+  const out = [];
+  let pos = readPos;
+  while (Math.floor(pos) + 1 < buf.length) {
+    const i = Math.floor(pos);
+    const frac = pos - i;
+    let s = buf[i] * (1 - frac) + buf[i + 1] * frac;
+    if (s > 1) s = 1; else if (s < -1) s = -1;
+    out.push(s < 0 ? s * 32768 : s * 32767);
+    pos += step;
+  }
+  const consumed = Math.floor(pos);
+  carry = buf.slice(consumed);
+  readPos = pos - consumed;
+
+  if (out.length && ws && ws.readyState === WebSocket.OPEN) {
+    const pcm = new Int16Array(out.length);
+    for (let k = 0; k < out.length; k++) pcm[k] = out[k];
+    ws.send(pcm.buffer);
+  }
+}
+
+async function startCapture() {
+  audioCtx = new AudioContext();
+  inputRate = audioCtx.sampleRate;
+  log("in", `mic: hardware rate ${inputRate} Hz -> resampling to ${TARGET_RATE} Hz`);
+  const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+  await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+  const src = audioCtx.createMediaStreamSource(mediaStream);
+  workletNode = new AudioWorkletNode(audioCtx, "capture");
+  workletNode.port.onmessage = (e) => resampleAndSend(e.data);
+  src.connect(workletNode);
+  // Not connected to destination: we do not want to hear ourselves.
+  carry = new Float32Array(0);
+  readPos = 0;
+}
+
+async function stopCapture() {
+  if (workletNode) { workletNode.port.onmessage = null; workletNode.disconnect(); workletNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+  if (audioCtx) { await audioCtx.close(); audioCtx = null; }
+  el("level").style.width = "0%";
+}
+
+// ----- wiring ---------------------------------------------------------------
+el("connect").addEventListener("click", async () => {
+  el("log").innerHTML = "";
+  checkSecure();
+  const healthy = await checkHealth();
+  // Connect regardless: a failed /health with a working websocket is itself
+  // diagnostic (it would mean routing works but the HTTP route does not).
+  if (!healthy) log("in", "continuing to the websocket anyway — the result is still informative");
+  connect();
+});
+
+el("v-toggle").addEventListener("click", () => {
+  vadEnabled = !vadEnabled;
+  el("v-toggle").textContent = vadEnabled
+    ? "Disable VAD telemetry (reconnects)" : "Enable VAD telemetry (reconnects)";
+  log("in", `VAD telemetry ${vadEnabled ? "on" : "off"} — reconnect to apply`);
+  if (ws && ws.readyState === WebSocket.OPEN) { ws.close(1000, "toggling vad"); setTimeout(connect, 300); }
+});
+el("v-toggle").textContent = "Disable VAD telemetry (reconnects)";
+
+el("disconnect").addEventListener("click", () => { if (ws) ws.close(1000, "user"); });
+el("clear").addEventListener("click", () => { el("log").innerHTML = ""; });
+
+el("mic").addEventListener("click", async () => {
+  const btn = el("mic");
+  if (!capturing) {
+    try {
+      await startCapture();
+      capturing = true;
+      btn.textContent = "Stop streaming";
+      btn.classList.add("on");
+      log("in", "streaming microphone");
+    } catch (err) {
+      log("er", "mic error: " + err.message +
+                (window.isSecureContext ? "" : " (page is not a secure context)"));
+    }
+  } else {
+    capturing = false;
+    await stopCapture();
+    btn.textContent = "Stream mic";
+    btn.classList.remove("on");
+    log("in", "stopped streaming");
+  }
+});
+
+checkSecure();
+check("c-scheme", "pend", wsUrlFrom(baseUrl() || location.origin).startsWith("wss:") ? "wss (on connect)" : "ws (on connect)");
+log("in", "ready — check the URL and token, then press Run diagnostics");
+</script>
+</body>
+</html>

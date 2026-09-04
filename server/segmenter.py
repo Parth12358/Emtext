@@ -79,6 +79,19 @@ class Segmenter:
         # Ring buffer of recent frames while IDLE (int16 arrays), for pre-roll.
         self._pre_roll: deque[np.ndarray] = deque(maxlen=self.pre_roll_frames)
 
+        # --- observable state (read by main.py for VAD telemetry) -----------
+        # Public and plainly named: these are diagnostics, not internals. They
+        # are written but never read by the state machine, so they cannot change
+        # segmentation behaviour.
+        self.last_rms: float = 0.0
+        self.peak_rms: float = 0.0
+        self.frames_seen: int = 0
+        self.voiced_frames_seen: int = 0
+        self.discarded: int = 0
+        self.last_close_reason: str | None = None
+        self.last_voiced_ms: int = 0
+        self.last_utterance_ms: int = 0
+
         self._in_speech = False
         self._utterance_frames: list[np.ndarray] = []  # int16 frames of current utterance
         self._voiced_ms = 0            # how much of the utterance was above threshold
@@ -133,7 +146,23 @@ class Segmenter:
     def _process_frame(self, frame: np.ndarray) -> np.ndarray | None:
         """Advance the state machine by one frame; return an utterance if one
         just finished, otherwise None."""
-        is_speech = self._rms(frame) >= self.speech_rms
+        rms = self._rms(frame)
+        is_speech = rms >= self.speech_rms
+
+        # --- observability -------------------------------------------------
+        # Recorded, never acted on: the state machine below is unchanged. This
+        # exists because the VAD is the one stage you cannot debug by looking at
+        # its output -- a split sentence and a clipped word look identical in the
+        # transcript, but have opposite fixes. main.py reads these to build the
+        # `vad` telemetry frame; nothing here does I/O, so the module stays pure
+        # and the __main__ self-test is unaffected.
+        self.last_rms = float(rms)
+        self.frames_seen += 1
+        if is_speech:
+            self.voiced_frames_seen += 1
+        # Peak since the last utterance closed: the single most useful number
+        # for deciding whether SPEECH_RMS is set sanely for a given microphone.
+        self.peak_rms = max(self.peak_rms, float(rms))
 
         if not self._in_speech:
             # IDLE: remember this frame for pre-roll, and watch for onset.
@@ -161,11 +190,13 @@ class Segmenter:
 
         # End condition 1: enough trailing silence -> the talker stopped.
         if self._trailing_silence_ms >= self.end_silence_ms:
+            self.last_close_reason = "end_silence"
             return self._finalize()
 
         # End condition 2: hard length cap -> force-cut a run-on utterance so we
         # never buffer without bound. The next frame simply starts fresh in IDLE.
         if len(self._utterance_frames) * self.frame_ms >= self.max_utterance_ms:
+            self.last_close_reason = "max_length"
             return self._finalize()
 
         return None
@@ -186,7 +217,14 @@ class Segmenter:
         self._trailing_silence_ms = 0
         self._pre_roll.clear()
 
+        self.last_voiced_ms = voiced_ms
+        self.last_utterance_ms = len(frames) * self.frame_ms
         if voiced_ms < self.min_utterance_ms or not frames:
+            # Discarded as a blip. This is the failure mode that leaves NO trace
+            # anywhere else -- the user spoke and simply got nothing back -- so
+            # it is worth counting explicitly.
+            self.discarded += 1
+            self.last_close_reason = "too_short"
             return None
 
         # Concatenate int16 frames and scale to float32 in [-1, 1]. Dividing by

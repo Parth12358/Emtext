@@ -114,6 +114,30 @@ same wire protocol**.
   agreement = literal), keep downweighting readings below `SER_MIN_CONFIDENCE`,
   and keep working with the slot absent — SER is optional and often off.
 
+## Exposure / deployment
+
+- The client derives the websocket scheme from `location.protocol`
+  (`server/static/index.html`). **Never hardcode `ws://`** -- browsers block it as
+  mixed content from an HTTPS page, so it works on localhost and then fails
+  silently and totally behind any TLS terminator. The ESP32 needs `wss://` too.
+- `AUTH_TOKEN` unset means **any first frame is accepted**. That is fine for
+  localhost and unacceptable the moment the server is reachable from outside;
+  there is no rate limiting, origin check or connection cap behind it.
+- Cloudflare **quick tunnel** is the documented path out (`tunnel/README.md`):
+  `cloudflared tunnel --url http://localhost:8000`, random hostname, changes every
+  restart. The server stays unaware of it -- no tunnel code, no config.
+- Keepalives: uvicorn pings every 20s, AND `stream()` sends `{"type":"ping"}` after
+  `WS_IDLE_PING_S` (30s) with no audio, AND clients may send `{"type":"ping"}` to
+  get a `{"type":"pong"}` with their timestamp echoed. Cloudflare culls proxied
+  websockets after ~100s idle, so this is belt-and-braces on purpose.
+- `/health` returns `{"status":"ok"}`, unauthenticated on purpose -- it is the
+  first thing to check through a tunnel (502 = tunnel up, server down). It is a
+  same-origin fetch, so `remote.html` cannot check it cross-origin; that is
+  expected, and websockets are unaffected since they bypass CORS.
+- `server/static/remote.html` is the phone-side diagnostic page. Keep it
+  standalone: it must point at an arbitrary host, because the quick-tunnel
+  hostname changes constantly.
+
 ## Scope limits (from the brief — don't add unprompted)
 
 No auth beyond the token, no database, no Docker, no `tests/` folder.

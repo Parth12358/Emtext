@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 
 import httpx
@@ -63,6 +64,21 @@ async def _startup() -> None:
         )
     else:
         log.info("speech emotion recognition disabled (SER_ENABLED=0)")
+
+    # Auth is off by default, which is correct for localhost and dangerous the
+    # moment the server is reachable from anywhere else. A quick-tunnel hostname
+    # is random, but random is not secret: it travels through Cloudflare, sits in
+    # your shell history, and anyone who obtains it gets unmetered use of this
+    # machine's CPU and GPU. There is no rate limit or connection cap behind it.
+    if config.AUTH_TOKEN is None:
+        log.warning("=" * 72)
+        log.warning("AUTH_TOKEN is NOT set -- this server accepts ANY client.")
+        log.warning("Fine on localhost. Do NOT expose it through a tunnel.")
+        log.warning("Set one first, e.g.:")
+        log.warning("  python -c \"import secrets;print(secrets.token_urlsafe(32))\"")
+        log.warning("=" * 72)
+    else:
+        log.info("auth enabled (AUTH_TOKEN set, %d chars)", len(config.AUTH_TOKEN))
 
 
 @app.on_event("shutdown")
@@ -163,6 +179,31 @@ async def stream(ws: WebSocket) -> None:
     # references, so without this a task could be garbage-collected mid-flight.
     pending: set[asyncio.Task] = set()
 
+    # Idle keepalive. Cloudflare closes a proxied websocket after ~100s with no
+    # traffic in either direction, and a user who opens the page but does not
+    # press Start sends nothing at all. uvicorn's own protocol pings (every 20s)
+    # normally cover this, but they are a server setting a proxy or a future
+    # ESP32 stack may not honour -- so send an application-level frame too,
+    # which is visible to the client and to any diagnostic page.
+    #
+    # This lives in its own task rather than as a timeout on ws.receive(): the
+    # receive loop is the audio hot path and must not be restructured around
+    # something that only matters when nothing is happening.
+    last_audio = time.monotonic()
+
+    # Opt-in per connection: /stream?vad=1. Diagnostics are for the diagnostic
+    # page, not for every client and certainly not for the ESP32.
+    vad_telemetry = ws.query_params.get("vad") in ("1", "true", "yes")
+    last_vad_sent = 0.0
+
+    async def keepalive() -> None:
+        while True:
+            await asyncio.sleep(config.WS_KEEPALIVE_CHECK_S)
+            if time.monotonic() - last_audio >= config.WS_IDLE_PING_S:
+                await _send(ws, {"type": "ping", "t": time.time()})
+
+    keepalive_task = asyncio.create_task(keepalive())
+
     try:
         while True:
             message = await ws.receive()
@@ -172,15 +213,68 @@ async def stream(ws: WebSocket) -> None:
 
             data = message.get("bytes")
             if data is None:
-                # A stray TEXT frame after the handshake -- ignore it. The
-                # protocol only expects binary PCM from here on.
+                # TEXT frame after the handshake. The protocol expects binary
+                # PCM from here on, with one exception: a client may send
+                # {"type":"ping"} to measure round-trip latency and to hold an
+                # idle connection open. Anything else is ignored, as before.
+                text = message.get("text")
+                if text:
+                    try:
+                        msg = json.loads(text)
+                    except ValueError:
+                        continue
+                    if isinstance(msg, dict) and msg.get("type") == "ping":
+                        # Echo the client's timestamp back untouched so it can
+                        # compute round-trip time without a synchronised clock.
+                        await _send(ws, {"type": "pong", "t": msg.get("t")})
                 continue
+
+            last_audio = time.monotonic()
+
+            # --- VAD telemetry -------------------------------------------
+            # Throttled to ~10/s: enough to watch a level meter move, cheap
+            # enough to ignore. Opt-in via ?vad=1 so the normal client and the
+            # ESP32 never pay for it. Purely additive -- a client that does not
+            # ask never sees these frames, and one that does not understand
+            # them ignores an unknown `type`, per the protocol rule.
+            if vad_telemetry:
+                now = time.monotonic()
+                if now - last_vad_sent >= config.VAD_TELEMETRY_INTERVAL_S:
+                    last_vad_sent = now
+                    await _send(ws, {
+                        "type": "vad",
+                        "rms": round(segmenter.last_rms, 1),
+                        "peak_rms": round(segmenter.peak_rms, 1),
+                        "threshold": segmenter.speech_rms,
+                        "in_speech": segmenter._in_speech,
+                        "trailing_silence_ms": segmenter._trailing_silence_ms,
+                        "voiced_ms": segmenter._voiced_ms,
+                        "frames": segmenter.frames_seen,
+                        "voiced_frames": segmenter.voiced_frames_seen,
+                        "discarded": segmenter.discarded,
+                        "last_close_reason": segmenter.last_close_reason,
+                        "end_silence_ms": segmenter.end_silence_ms,
+                        "min_utterance_ms": segmenter.min_utterance_ms,
+                    })
 
             # Hot path: just segment. This returns instantly for the common
             # case (mid-utterance) and occasionally hands back finished audio.
             for audio in segmenter.feed(data):
                 uid += 1
                 await _send(ws, {"type": "status", "state": "heard"})
+                if vad_telemetry:
+                    # Why this utterance closed, and how much of it was actually
+                    # voiced. "end_silence" on a short voiced_ms is the signature
+                    # of a sentence being split at a soft consonant.
+                    await _send(ws, {
+                        "type": "vad_close",
+                        "id": uid,
+                        "reason": segmenter.last_close_reason,
+                        "voiced_ms": segmenter.last_voiced_ms,
+                        "utterance_ms": segmenter.last_utterance_ms,
+                        "peak_rms": round(segmenter.peak_rms, 1),
+                    })
+                segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
                     _process_utterance(ws, interpreter, uid, audio)
                 )
@@ -194,8 +288,21 @@ async def stream(ws: WebSocket) -> None:
         if tail is not None:
             uid += 1
             await _process_utterance(ws, interpreter, uid, tail)
+        keepalive_task.cancel()
         for task in pending:
             task.cancel()
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Liveness probe, and the first thing to check through a tunnel.
+
+    Deliberately trivial and unauthenticated: it answers "is the local server up
+    and is the tunnel routing to it" without revealing anything. A 502 from
+    Cloudflare means the tunnel is up but this is not; a JSON body means the
+    whole path works and any further problem is in the websocket layer.
+    """
+    return {"status": "ok"}
 
 
 # Serve the browser test client at "/". Mounting static last means the API

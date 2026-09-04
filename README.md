@@ -9,8 +9,8 @@ A browser page streams your microphone to a local server over a websocket. The
 server slices the audio into utterances and then, for each one, works out both
 *what* was said (Whisper, on CPU) and *how it sounded* (a speech emotion model,
 also on CPU) before asking a local LLM (via Ollama, on the GPU) what the line
-really means. Later, an ESP32 device will replace the browser using the exact
-same wire protocol.
+really means. An ESP32 pendant is now being built to replace the browser over the
+exact same wire protocol — see **[firmware/README.md](firmware/README.md)**.
 
 ```
 mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
@@ -19,6 +19,28 @@ mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
                                                         ├─ ser         (emotion2vec, CPU) ────┤ (concurrent)
                                                         └─ interpreter (Ollama LLM, GPU) ◄────┘
 ```
+
+## Two halves: server + pendant
+
+emtext is two codebases in one repo, joined only by the websocket **wire protocol**:
+
+- **The server** — everything documented in *this* README: the browser test client, the
+  segmenter → Whisper + SER → Ollama pipeline, the dashboard, the eval suite, and the
+  Cloudflare tunnel. Runs on a workstation with a GPU.
+- **The pendant firmware** — `firmware/`, documented in **[firmware/README.md](firmware/README.md)**.
+  An ESP32-S3 (M5StickS3) worn as a pendant that replaces the browser: a mic + a small
+  display that streams 16 kHz PCM over the same `wss://…/stream` contract and renders the
+  server's `read` frames. All transcription/interpretation stays on the server — the device
+  is just ears and a screen.
+
+The wire protocol is the contract between them (raw PCM 16 kHz mono int16 in;
+`ready`/`status`/`utterance`/`read` JSON out), so the two are developed independently.
+**Firmware progress:** board bring-up, config/NVS + serial console, the display + controls
+UX, and mic capture with an energy gate are done (Stages 0–3 of 9); connectivity
+(WiFi/TLS/WebSocket) and a phone-based Wi-Fi provisioning portal are next. Full module
+architecture and the staged plan live in [firmware/README.md](firmware/README.md).
+
+Everything below documents the **server half**.
 
 ## Where this is right now
 

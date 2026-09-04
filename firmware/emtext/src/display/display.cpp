@@ -18,6 +18,7 @@ namespace {
   bool   connReady = false;
   bool   processing = false;
   bool   paused = false;
+  bool   muted = false;
 
   // Desaturated palette (color565). Saturated TFT_* reads as an alarm; muted
   // tones read as observation, per the UX notes.
@@ -128,6 +129,11 @@ namespace {
     if (st == display::State::Dark) { d.setBrightness(0); return; }
     d.setBrightness(BRIGHT_GLANCE);
     drawConnDot();
+    if (muted) {                      // muted: mute glyph, bottom-left
+      int cx = 12, cy = d.height() - 10, r = 5;
+      d.drawCircle(cx, cy, r, cMis());
+      d.drawLine(cx - 4, cy + 4, cx + 4, cy - 4, cMis());
+    }
 
     switch (st) {
       case display::State::Glance:
@@ -199,6 +205,11 @@ void display::setConnection(const String& label) {
 void display::setProcessing(bool on) {
   processing = on;
   if (!paused && st == State::Glance) draw();
+}
+
+void display::setMuted(bool on) {
+  muted = on;
+  if (!paused && st != State::Dark) draw();
 }
 
 void display::setPaused(bool on) {

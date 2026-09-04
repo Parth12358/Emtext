@@ -20,4 +20,5 @@ namespace display {
   void  setConnection(const String& label);   // "ready" -> green dot, else amber
   void  setProcessing(bool on);                // heard, still thinking
   void  setPaused(bool on);                    // privacy switch: mic not listening
+  void  setMuted(bool on);                     // muted indicator (mic + cues off)
 }

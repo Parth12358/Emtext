@@ -6,6 +6,7 @@
 #include "src/config/config.h"
 #include "src/display/display.h"
 #include "src/controls/controls.h"
+#include "src/audio/audio.h"
 
 // ---- semantic button callbacks (wiring only) ----
 static void onWake() {
@@ -16,12 +17,23 @@ static void onWake() {
     default:        display::setState(S::Glance);  break;
   }
 }
-static void onMute()     { LOG_INFO("mute toggled (stub)"); }
+// Mic runs only when neither paused (privacy) nor muted -- so un-muting never
+// silently re-opens the mic while paused.
+static bool g_paused = false;
+static bool g_muted  = false;
+static void applyMic() { audio::setPaused(g_paused || g_muted); }
+
+static void onMute() {
+  g_muted = !g_muted;
+  display::setMuted(g_muted);
+  applyMic();
+  LOG_INFO("muted %s (mic %s)", g_muted ? "on" : "off", (g_paused || g_muted) ? "off" : "on");
+}
 static void onPause() {
-  static bool p = false;
-  p = !p;
-  display::setPaused(p);
-  LOG_INFO("streaming %s", p ? "paused" : "resumed");
+  g_paused = !g_paused;
+  display::setPaused(g_paused);
+  applyMic();
+  LOG_INFO("streaming %s", g_paused ? "paused" : "resumed");
 }
 static void onStatus()   { display::setState(display::State::Status); }
 static void onPowerOff() { LOG_WARN("power off (stub)"); }
@@ -67,6 +79,9 @@ void setup() {
   controls::onOrient(onOrient);
   controls::onLift(onLift);
 
+  // Stage 3: bring up the mic + energy gate.
+  audio::begin();
+
   // seed fake data so glance/history/status show something (real reads land in Stage 6)
   display::setGlance("hey, nice work", "positive", "hey nice work");
   display::setConnection("searching");
@@ -78,6 +93,7 @@ void loop() {
   config::handleSerial();
   controls::loop();
   display::loop();
+  audio::loop();
 
   static uint32_t last = 0;
   uint32_t now = millis();

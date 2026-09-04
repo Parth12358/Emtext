@@ -621,7 +621,44 @@ This is also the only way to test the microphone on a phone: browsers require a
 **secure origin** for `getUserMedia`, and `localhost` is the only exception. The
 tunnel supplies the HTTPS.
 
-### Diagnostics
+### Dashboard
+
+`/dashboard.html` is the monitoring and control panel:
+
+```
+https://<random>.trycloudflare.com/dashboard.html?token=<AUTH_TOKEN>
+```
+
+| panel | what it shows |
+|---|---|
+| Right now | utterances, live clients, median total/LLM latency, VAD discards, LLM-offline count |
+| Machine | CPU (per physical/logical cores), RAM, this process's RSS and threads, 60s sparkline |
+| GPU | per-engine utilisation and GPU memory in use, 60s sparkline |
+| Pipeline latency | whisper / ser / cpu-stage / llm / total — last, mean, median, p95, n |
+| Interpreter model | every pulled model, which is selected, which is resident and whether it is **fully on GPU** — with **Use** and **Evict** buttons |
+| Configuration | active models, `SPEECH_RMS`, `END_SILENCE_MS`, auth state, Ollama reachability |
+| Tone / voice emotion | distribution across the session |
+| Recent utterances | last 40, with per-stage timings and the voice label |
+
+**Switching models is live** — it takes effect on the next utterance with no
+restart and without disturbing connected clients, because `Interpreter` reads
+`OLLAMA_MODEL` at call time. It evicts the previous model first, since two
+8–9&nbsp;GB models do not fit in 12&nbsp;GB and a partly-resident model runs
+partly on CPU (which reads as "this model is slow"). The change is **not
+persisted**; a restart returns to the configured default.
+
+All `/api/*` routes are token-gated on the same rule as `/stream`: enforced when
+`AUTH_TOKEN` is set, open when it is not. That matters more here than for the
+websocket — `/stream` only lets a stranger burn CPU, while `POST /api/model`
+lets them change which model the server runs.
+
+GPU figures come from Windows per-engine performance counters, which work for
+any vendor (there is no `nvidia-smi` equivalent for an Arc). A query costs ~2.6s,
+so it is sampled on a background thread and served from cache; a dashboard poll
+never waits on it. On non-Windows the panel degrades to "unavailable" and
+Ollama's own VRAM figures carry the GPU story instead.
+
+### Tunnel diagnostics
 
 `/remote.html` is a standalone page for verifying a tunnel from another device:
 

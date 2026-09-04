@@ -138,6 +138,23 @@ same wire protocol**.
   standalone: it must point at an arbitrary host, because the quick-tunnel
   hostname changes constantly.
 
+## Dashboard / metrics
+
+- `server/metrics.py` is memory-only and bounded (rolling deques). No database,
+  per the brief. Nothing in it raises -- telemetry must never take the server down.
+- `server/dashboard.py` holds the `/api/*` routes so `main.py` stays websocket
+  wiring. All routes are token-gated on the SAME rule as `/stream` (enforced only
+  when `AUTH_TOKEN` is set), so there is one auth rule in the project, not two.
+- GPU stats come from Windows per-engine perf counters (vendor-neutral; there is
+  no `nvidia-smi` for an Arc). A query costs ~2.6s, so it is polled on a daemon
+  thread and served from cache -- never query it in a request handler.
+- `POST /api/model` switches the interpreter live and deliberately does NOT
+  persist. It works because `Interpreter` reads `config.OLLAMA_MODEL` at call
+  time; keep that property.
+- Utterance tasks are fire-and-forget, so `_log_task_error` is attached as a done
+  callback. Without it a raising task is completely silent and presents as "no
+  transcript ever appears" -- keep it.
+
 ## Scope limits (from the brief — don't add unprompted)
 
 No auth beyond the token, no database, no Docker, no `tests/` folder.

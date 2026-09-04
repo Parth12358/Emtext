@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>emtext — dashboard</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2027; --edge: #2b2f38;
+    --text: #e7e9ee; --muted: #9aa1ad;
+    --positive: #4caf7d; --negative: #e56a6a; --neutral: #8b93a1;
+    --sarcastic: #b98be0; --mixed: #e0b56a; --accent: #3a7afe;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.45; font-size: 15px;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); display: inline-block; }
+  .dot.live { background: var(--positive); }
+
+  .grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
+  @media (min-width: 720px) {
+    body { max-width: 1180px; margin: 0 auto; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .grid .wide { grid-column: 1 / -1; }
+  }
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 14px; }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  }
+
+  /* Big numbers: the things worth seeing from across the room. */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
+  .tile { background: #16181d; border: 1px solid var(--edge); border-radius: 9px; padding: 10px; }
+  .tile .n { font-size: 21px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+  .tile .s { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .bar { height: 7px; background: var(--edge); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); transition: width .3s ease; }
+  .bar > div.hot { background: var(--mixed); }
+  .bar > div.crit { background: var(--negative); }
+
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0;
+         border-bottom: 1px solid var(--edge); font-size: 13.5px; }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: var(--muted); }
+  .row .v { font-family: ui-monospace, Consolas, monospace; text-align: right; }
+  .ok { color: var(--positive); } .bad { color: var(--negative); }
+  .warn { color: var(--mixed); } .pend { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: right; font-weight: 600; color: var(--muted); font-size: 11px;
+       text-transform: uppercase; letter-spacing: .05em; padding: 0 0 6px; }
+  th:first-child { text-align: left; }
+  td { padding: 5px 0; border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums;
+       text-align: right; font-family: ui-monospace, Consolas, monospace; }
+  td:first-child { text-align: left; font-family: inherit; color: var(--muted); }
+
+  /* Sparklines: plain SVG, no chart library (no CDNs allowed, and a line of
+     polyline points is less code than any dependency would be). */
+  svg.spark { width: 100%; height: 40px; display: block; margin-top: 8px; }
+
+  button {
+    min-height: 40px; padding: 0 14px; font-size: 13.5px; font-weight: 600;
+    background: #2b2f38; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 8px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .model {
+    display: flex; align-items: center; gap: 10px; padding: 9px 0;
+    border-bottom: 1px solid var(--edge); flex-wrap: wrap;
+  }
+  .model:last-child { border-bottom: none; }
+  .model .name { flex: 1 1 150px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .model .meta { color: var(--muted); font-size: 11.5px; }
+  .badge { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--edge); color: var(--muted); }
+  .badge.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .badge.gpu { background: #1d3a2a; border-color: #2f6647; color: var(--positive); }
+  .badge.cpu { background: #3a2a1d; border-color: #66492f; color: var(--mixed); }
+
+  .utt { padding: 9px 0; border-bottom: 1px solid var(--edge); border-left: 3px solid var(--neutral); padding-left: 10px; }
+  .utt:last-child { border-bottom: none; }
+  .utt .txt { font-size: 14px; }
+  .utt .rd { font-size: 12.5px; margin-top: 2px; }
+  .utt .mt { font-size: 10.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .t-positive { border-left-color: var(--positive); } .t-positive .rd { color: var(--positive); }
+  .t-negative { border-left-color: var(--negative); } .t-negative .rd { color: var(--negative); }
+  .t-neutral  { border-left-color: var(--neutral); }
+  .t-sarcastic{ border-left-color: var(--sarcastic); } .t-sarcastic .rd { color: var(--sarcastic); }
+  .t-mixed    { border-left-color: var(--mixed); }    .t-mixed .rd { color: var(--mixed); }
+  .empty { color: var(--muted); font-size: 13px; padding: 14px 0; text-align: center; }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>emtext dashboard</h1>
+  <span class="sub"><span class="dot" id="live"></span> <span id="status">connecting…</span></span>
+  <span class="sub" id="uptime"></span>
+</header>
+
+<div class="grid">
+
+  <div class="card wide">
+    <h2>Right now</h2>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <div class="card">
+    <h2>Machine</h2>
+    <div id="sys"></div>
+    <svg class="spark" id="spark-cpu" viewBox="0 0 300 40" preserveAspectRatio="none"></svg>
+    <div class="note" id="sys-note"></div>
+  </div>
+
+  <div class="card">
+    <h2>GPU</h2>
+    <div id="gpu"></div>
+    <svg class="spark" id="spark-gpu" viewBox="0 0 300 40" preserveAspectRatio="none"></svg>
+    <div class="note" id="gpu-note"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Pipeline latency (rolling)</h2>
+    <table id="lat"><thead><tr>
+      <th>stage</th><th>last</th><th>mean</th><th>median</th><th>p95</th><th>n</th>
+    </tr></thead><tbody></tbody></table>
+    <div class="note">
+      whisper and ser run concurrently, so <b>cpu stage</b> is roughly the larger
+      of the two, not their sum. <b>total</b> is cpu stage + llm — it excludes the
+      VAD's end-of-speech wait, which is what you also feel.
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Interpreter model</h2>
+    <div id="models"><div class="empty">loading…</div></div>
+    <div class="note">
+      Switching takes effect on the next utterance — no restart, live connections
+      undisturbed. It is <b>not persisted</b>: a restart returns to
+      <code>OLLAMA_MODEL</code>. Loading evicts the previous model first, because
+      two 8–9&nbsp;GB models do not fit in 12&nbsp;GB and a partly-resident model
+      runs partly on CPU.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Configuration</h2>
+    <div id="cfg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Tone distribution</h2>
+    <div id="tones"><div class="empty">no utterances yet</div></div>
+    <h2 style="margin-top:16px">Voice emotion</h2>
+    <div id="emotions"><div class="empty">no utterances yet</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Recent utterances</h2>
+    <div id="recent"><div class="empty">nothing yet — talk to the app and it appears here</div></div>
+  </div>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Polls /api/stats and renders. Read-mostly: the only writes are selecting and
+// evicting a model, both of which go through token-gated endpoints.
+// ---------------------------------------------------------------------------
+const el = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const TOKEN = params.get("token") || "";
+const q = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+let failures = 0;
+
+const fmtS = (v) => v == null ? "—" : (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
+const pct = (v) => v == null ? "—" : `${v.toFixed(0)}%`;
+
+function dur(s) {
+  if (s == null) return "—";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${Math.floor(s % 60)}s`;
+  return `${Math.floor(s)}s`;
+}
+
+function rows(target, pairs) {
+  target.innerHTML = "";
+  for (const [k, v, cls] of pairs) {
+    const r = document.createElement("div"); r.className = "row";
+    const a = document.createElement("span"); a.className = "k"; a.textContent = k;
+    const b = document.createElement("span"); b.className = "v " + (cls || ""); b.textContent = v;
+    r.append(a, b); target.appendChild(r);
+  }
+}
+
+function bar(v) {
+  const cls = v > 90 ? "crit" : v > 70 ? "hot" : "";
+  return `<div class="bar"><div class="${cls}" style="width:${Math.min(100, v || 0)}%"></div></div>`;
+}
+
+// Sparkline from a series of 0..100 values. Plain SVG polyline -- a chart
+// library would be a CDN dependency, which this project deliberately avoids.
+function spark(svg, values, colour) {
+  const pts = values.filter((v) => v != null);
+  if (pts.length < 2) { svg.innerHTML = ""; return; }
+  const step = 300 / (pts.length - 1);
+  const d = pts.map((v, i) => `${(i * step).toFixed(1)},${(40 - (Math.min(100, v) / 100) * 38).toFixed(1)}`).join(" ");
+  svg.innerHTML =
+    `<polyline points="${d}" fill="none" stroke="${colour}" stroke-width="1.6" ` +
+    `stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<polyline points="0,40 ${d} 300,40" fill="${colour}" opacity="0.12" stroke="none"/>`;
+}
+
+function tile(n, label, sub) {
+  return `<div class="tile"><div class="n">${n}</div><div class="l">${label}</div>` +
+         (sub ? `<div class="s">${sub}</div>` : "") + `</div>`;
+}
+
+async function api(path, opts) {
+  const res = await fetch(path + q, opts);
+  if (res.status === 401) throw new Error("unauthorised — add ?token=… to this page's URL");
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+// ----- render ---------------------------------------------------------------
+function render(d) {
+  const p = d.pipeline, c = d.config, sys = d.system, gpu = d.gpu;
+  el("uptime").textContent = `up ${dur(p.uptime_s)}`;
+
+  const cnt = p.counters || {};
+  el("tiles").innerHTML =
+    tile(cnt.utterances || 0, "utterances", `${cnt.empty_transcript || 0} empty`) +
+    tile(p.connections_active, "live clients", `${cnt.connections_total || 0} total`) +
+    tile(fmtS(p.latency.total.median), "median total", `p95 ${fmtS(p.latency.total.p95)}`) +
+    tile(fmtS(p.latency.llm.median), "median llm", c.llm_model) +
+    tile(cnt.vad_discarded || 0, "vad discards", "too short") +
+    tile(cnt.llm_offline || 0, "llm offline",
+         (cnt.llm_offline ? "ollama unreachable" : "healthy"));
+
+  // --- machine ---
+  if (sys.available) {
+    rows(el("sys"), [
+      ["CPU", `${pct(sys.cpu_percent)} of ${sys.cores_physical}c/${sys.cores_logical}t`,
+        sys.cpu_percent > 85 ? "warn" : ""],
+      ["RAM", `${sys.ram_used_gb} / ${sys.ram_total_gb} GB (${pct(sys.ram_percent)})`,
+        sys.ram_percent > 90 ? "warn" : ""],
+      ["this process", `${sys.proc_rss_gb} GB · ${sys.threads} threads`],
+    ]);
+    el("sys").insertAdjacentHTML("beforeend", bar(sys.cpu_percent) + bar(sys.ram_percent));
+    el("sys-note").textContent =
+      `Whisper and SER run on CPU by design — the GPU is reserved for the LLM.`;
+  } else {
+    el("sys").innerHTML = `<div class="empty">unavailable: ${sys.reason || "?"}</div>`;
+  }
+  spark(el("spark-cpu"), (d.history || []).map((h) => h.cpu), "#3a7afe");
+
+  // --- gpu ---
+  if (gpu.available) {
+    const engines = Object.entries(gpu.engines || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([k, v]) => [`engine: ${k}`, `${v.toFixed(0)}%`]);
+    rows(el("gpu"), [
+      ["busiest engine", `${(gpu.busiest || 0).toFixed(0)}%`],
+      ["GPU memory in use", `${gpu.mem_used_gb} GB`],
+      ...engines,
+    ]);
+    el("gpu").insertAdjacentHTML("beforeend", bar(gpu.busiest));
+    el("gpu-note").textContent =
+      "Windows per-engine counters, sampled every 5s on a background thread " +
+      "(a query costs ~2.6s, too slow to do per request). Values are summed " +
+      "across processes, so a type can exceed 100%.";
+  } else {
+    el("gpu").innerHTML = `<div class="empty">unavailable — ${gpu.reason || "?"}</div>`;
+    el("gpu-note").textContent =
+      "Ollama's own VRAM figures below are the more useful GPU number anyway.";
+  }
+  spark(el("spark-gpu"), (d.history || []).map((h) => h.gpu), "#4caf7d");
+
+  // --- latency table ---
+  const tb = el("lat").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const [key, label] of [["whisper", "whisper"], ["ser", "ser"],
+                              ["cpu_stage", "cpu stage (gathered)"],
+                              ["llm", "llm"], ["total", "total"]]) {
+    const s = p.latency[key] || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${label}</td><td>${fmtS(s.last)}</td><td>${fmtS(s.mean)}</td>` +
+                   `<td>${fmtS(s.median)}</td><td>${fmtS(s.p95)}</td><td>${s.n || 0}</td>`;
+    tb.appendChild(tr);
+  }
+
+  // --- config ---
+  rows(el("cfg"), [
+    ["interpreter", c.llm_model],
+    ["whisper", `${c.whisper_model} (${c.whisper_device}/${c.whisper_compute})`],
+    ["ser", c.ser_available ? `${(c.ser_model || "").split("/").pop()} (${c.ser_backend})` : "disabled",
+      c.ser_available ? "" : "warn"],
+    ["SPEECH_RMS", String(c.speech_rms)],
+    ["END_SILENCE_MS", String(c.end_silence_ms)],
+    ["auth", c.auth_enabled ? "enabled" : "OPEN — do not tunnel",
+      c.auth_enabled ? "ok" : "bad"],
+    ["ollama", d.ollama.reachable ? "reachable" : (d.ollama.error || "unreachable"),
+      d.ollama.reachable ? "ok" : "bad"],
+  ]);
+
+  // --- distributions ---
+  dist(el("tones"), p.tones, {positive: "--positive", negative: "--negative",
+    neutral: "--neutral", sarcastic: "--sarcastic", mixed: "--mixed"});
+  dist(el("emotions"), p.emotions, {});
+
+  // --- recent ---
+  const r = el("recent");
+  if (!p.recent || !p.recent.length) {
+    r.innerHTML = `<div class="empty">nothing yet — talk to the app and it appears here</div>`;
+  } else {
+    r.innerHTML = "";
+    for (const u of p.recent) {
+      const d2 = document.createElement("div");
+      d2.className = "utt t-" + (u.tone || "neutral");
+      const bits = [`${u.total_s}s total`, `w ${u.whisper_s}s`, `s ${u.ser_s}s`, `llm ${u.llm_s}s`];
+      if (u.voice && u.voice.emotion) bits.push(`voice ${u.voice.emotion}`);
+      if (u.offline) bits.push("LLM OFFLINE");
+      d2.innerHTML =
+        `<div class="txt"></div><div class="rd"></div><div class="mt">${bits.join("  ·  ")}</div>`;
+      d2.querySelector(".txt").textContent = u.transcript;
+      d2.querySelector(".rd").textContent = u.read || "";
+      r.appendChild(d2);
+    }
+  }
+}
+
+function dist(target, obj, colours) {
+  const items = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+  if (!items.length) { target.innerHTML = `<div class="empty">none yet</div>`; return; }
+  const total = items.reduce((a, [, n]) => a + n, 0);
+  target.innerHTML = items.map(([k, n]) => {
+    const w = (n / total) * 100;
+    const col = colours[k] ? `var(${colours[k]})` : "var(--accent)";
+    return `<div class="row"><span class="k">${k}</span>` +
+           `<span class="v">${n} · ${w.toFixed(0)}%</span></div>` +
+           `<div class="bar"><div style="width:${w}%;background:${col}"></div></div>`;
+  }).join("");
+}
+
+// ----- model controls -------------------------------------------------------
+async function loadModels() {
+  const box = el("models");
+  try {
+    const d = await api("/api/models");
+    if (!d.reachable) {
+      box.innerHTML = `<div class="empty">Ollama unreachable — ${d.error || ""}</div>`;
+      return;
+    }
+    const stats = await api("/api/stats");
+    const loaded = new Map((stats.ollama.loaded || []).map((m) => [m.name, m]));
+    box.innerHTML = "";
+    for (const m of d.models) {
+      const res = loaded.get(m.name);
+      const div = document.createElement("div");
+      div.className = "model";
+      const sel = m.name === d.selected;
+      div.innerHTML =
+        `<span class="name">${m.name}</span>` +
+        `<span class="meta">${m.size_gb} GB${m.parameter_size ? " · " + m.parameter_size : ""}` +
+        `${m.quantization ? " · " + m.quantization : ""}</span>` +
+        (sel ? `<span class="badge sel">in use</span>` : "") +
+        (res ? `<span class="badge ${res.fully_on_gpu ? "gpu" : "cpu"}">` +
+               `${res.vram_gb} GB ${res.fully_on_gpu ? "on GPU" : "PARTLY CPU"}</span>` : "");
+      if (!sel) {
+        const b = document.createElement("button");
+        b.className = "primary"; b.textContent = "Use";
+        b.onclick = async () => {
+          b.disabled = true; b.textContent = "loading…";
+          try {
+            const out = await api("/api/model", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({model: m.name, warm: true}),
+            });
+            b.textContent = out.warmed_s ? `warmed ${out.warmed_s}s` : "done";
+          } catch (e) { b.textContent = "failed"; alert(e.message); }
+          await loadModels(); await tick();
+        };
+        div.appendChild(b);
+      }
+      if (res) {
+        const e = document.createElement("button");
+        e.textContent = "Evict";
+        e.onclick = async () => {
+          e.disabled = true; e.textContent = "evicting…";
+          try { await api("/api/evict", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({model: m.name}),
+          }); } catch (err) { alert(err.message); }
+          await loadModels(); await tick();
+        };
+        div.appendChild(e);
+      }
+      box.appendChild(div);
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ----- poll -----------------------------------------------------------------
+async function tick() {
+  try {
+    render(await api("/api/stats"));
+    failures = 0;
+    el("live").classList.add("live");
+    el("status").textContent = "live";
+  } catch (e) {
+    failures++;
+    el("live").classList.remove("live");
+    el("status").textContent = e.message;
+  }
+}
+
+tick();
+loadModels();
+// 2s is responsive without hammering: /api/stats reads cached GPU data and
+// psutil counters, so it is cheap, but there is no reason to poll faster than
+// a human can read.
+setInterval(tick, 2000);
+setInterval(loadModels, 15000);
+</script>
+</body>
+</html>

@@ -31,7 +31,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, ser
+from . import config, dashboard, metrics, ser
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -39,6 +39,7 @@ from .transcriber import transcribe
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="emtext")
+app.include_router(dashboard.router)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -50,6 +51,13 @@ _http: httpx.AsyncClient | None = None
 async def _startup() -> None:
     global _http
     _http = httpx.AsyncClient()
+    # The dashboard reuses this pooled client rather than opening its own.
+    app.state.http = _http
+
+    # GPU counters cost ~2.6s to query on Windows, so they are sampled on a
+    # background thread and served from cache -- a dashboard poll never waits.
+    metrics.start_gpu_poller()
+    asyncio.create_task(_sample_system_loop())
 
     # ser.py loads at import, before uvicorn has configured logging, so restate
     # the outcome here where it will actually be visible in the server log.
@@ -81,6 +89,16 @@ async def _startup() -> None:
         log.info("auth enabled (AUTH_TOKEN set, %d chars)", len(config.AUTH_TOKEN))
 
 
+async def _sample_system_loop() -> None:
+    """One CPU/RAM/GPU sample a second, for the dashboard sparklines."""
+    while True:
+        try:
+            metrics.sample_system()
+        except Exception:  # noqa: BLE001 -- telemetry must never kill the server
+            pass
+        await asyncio.sleep(1.0)
+
+
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     if _http is not None:
@@ -97,6 +115,23 @@ async def _send(ws: WebSocket, message: dict) -> None:
         await ws.send_text(json.dumps(message))
     except (WebSocketDisconnect, RuntimeError):
         pass
+
+
+def _log_task_error(task: asyncio.Task) -> None:
+    """Surface anything a fire-and-forget utterance task raised.
+
+    asyncio only reports a task's exception when its result is retrieved, and
+    nothing was retrieving it. So a bug in the utterance path presented as "no
+    transcript ever appears" with a completely silent log -- which is exactly
+    how a control-flow mistake here went unnoticed once. Log it loudly and count
+    it, so the dashboard shows it too.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("utterance processing failed", exc_info=exc)
+        metrics.record_event("utterance_errors")
 
 
 async def _process_utterance(
@@ -122,17 +157,44 @@ async def _process_utterance(
     # SER is the optional half. `ser.analyze` returns None when the model is
     # disabled or failed to load, and its own errors are swallowed internally,
     # so this gather cannot fail because of it.
-    transcript, voice = await asyncio.gather(
-        loop.run_in_executor(None, transcribe, audio),
-        loop.run_in_executor(None, ser.analyze, audio),
+    # Each stage times ITSELF rather than being timed around .result(): timing
+    # the gather would fold queue wait into whichever finished second, and make
+    # SER look free simply because Whisper was awaited first.
+    def _timed(fn, arg):
+        start = time.perf_counter()
+        return fn(arg), time.perf_counter() - start
+
+    cpu_t0 = time.perf_counter()
+    (transcript, whisper_s), (voice, ser_s) = await asyncio.gather(
+        loop.run_in_executor(None, _timed, transcribe, audio),
+        loop.run_in_executor(None, _timed, ser.analyze, audio),
     )
+    cpu_stage_s = time.perf_counter() - cpu_t0
+
     if not transcript:
-        return  # whisper heard nothing usable; stay quiet
+        # Whisper heard nothing usable. Invisible everywhere else, and a useful
+        # number: a rising count means the VAD is passing through non-speech.
+        metrics.record_event("empty_transcript")
+        return
 
     await _send(ws, {"type": "utterance", "id": uid, "transcript": transcript})
     await _send(ws, {"type": "status", "state": "thinking"})
 
+    llm_t0 = time.perf_counter()
     result = await interpreter.interpret(transcript, voice)
+    llm_s = time.perf_counter() - llm_t0
+
+    metrics.record_utterance(
+        transcript=transcript,
+        tone=result.get("tone"),
+        read=result.get("read"),
+        whisper_s=whisper_s,
+        ser_s=ser_s,
+        cpu_stage_s=cpu_stage_s,
+        llm_s=llm_s,
+        voice=voice,
+        offline=result.get("read") == "(interpreter offline)",
+    )
 
     message = {
         "type": "read",
@@ -165,6 +227,8 @@ async def stream(ws: WebSocket) -> None:
         await ws.close(code=1008)  # policy violation
         return
 
+    metrics.connection_opened()
+
     await _send(ws, {"type": "ready"})
     await _send(ws, {"type": "status", "state": "listening"})
 
@@ -194,6 +258,7 @@ async def stream(ws: WebSocket) -> None:
     # Opt-in per connection: /stream?vad=1. Diagnostics are for the diagnostic
     # page, not for every client and certainly not for the ESP32.
     vad_telemetry = ws.query_params.get("vad") in ("1", "true", "yes")
+    discarded_seen = 0
     last_vad_sent = 0.0
 
     async def keepalive() -> None:
@@ -280,6 +345,14 @@ async def stream(ws: WebSocket) -> None:
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
+                task.add_done_callback(_log_task_error)
+
+            # After the loop, not inside it: a discard produces no utterance, so
+            # it is counted here where it cannot be confused with one.
+            if segmenter.discarded != discarded_seen:
+                metrics.record_event("vad_discarded",
+                                     segmenter.discarded - discarded_seen)
+                discarded_seen = segmenter.discarded
     except WebSocketDisconnect:
         pass
     finally:
@@ -288,6 +361,7 @@ async def stream(ws: WebSocket) -> None:
         if tail is not None:
             uid += 1
             await _process_utterance(ws, interpreter, uid, tail)
+        metrics.connection_closed()
         keepalive_task.cancel()
         for task in pending:
             task.cancel()

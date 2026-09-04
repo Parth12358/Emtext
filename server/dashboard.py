@@ -9,16 +9,19 @@ set it must be supplied, and when it is unset everything is open. That is the
 same contract the websocket already has, so there is one rule to remember rather
 than two. It matters more here than there, though -- `/stream` only lets a
 stranger burn CPU, while `POST /api/model` lets them change which model the
-server runs. The server logs a loud warning at startup when the token is unset,
-and `tunnel/README.md` refuses to open a tunnel without one.
+server runs. The server warns loudly at startup when the token is unset, and
+`main.py` now refuses to start that way on a non-loopback bind.
 
-The token may arrive as `?token=` (so the dashboard page can pass it straight
-through from its own URL) or as an `X-Auth-Token` header.
+The token may arrive as an `X-Auth-Token` header (what the dashboard sends, so
+the credential stays out of URLs, access logs and browser history) or as
+`?token=`, which remains supported for pasting a link by hand.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import secrets
 import time
 
 import httpx
@@ -32,11 +35,66 @@ router = APIRouter(prefix="/api", tags=["diagnostics"])
 
 
 def _require_token(token: str | None, header_token: str | None) -> None:
-    """Match /stream's rule exactly: enforced only when AUTH_TOKEN is set."""
+    """Match /stream's rule exactly: enforced only when AUTH_TOKEN is set.
+
+    Either credential is sufficient -- the header is preferred (the dashboard
+    sends it that way so the token stays out of URLs, access logs and history),
+    and `?token=` remains for pasting a link by hand.
+    """
     if config.AUTH_TOKEN is None:
         return
-    if token != config.AUTH_TOKEN and header_token != config.AUTH_TOKEN:
+    if not (_matches(header_token) or _matches(token)):
         raise HTTPException(status_code=401, detail="bad or missing token")
+
+
+def _matches(supplied: str | None) -> bool:
+    """Constant-time compare against AUTH_TOKEN. See main.py's `_token_ok`."""
+    if supplied is None or config.AUTH_TOKEN is None:
+        return False
+    return secrets.compare_digest(
+        supplied.encode("utf-8"), config.AUTH_TOKEN.encode("utf-8")
+    )
+
+
+# Serialise and rate-limit the two routes that move models in and out of VRAM.
+# Module-level, so the limit is per-server rather than per-request: two clients
+# alternating between models would otherwise thrash 8-9 GB back and forth with
+# ~200 bytes per request, and concurrent calls would race on config.OLLAMA_MODEL.
+_vram_lock = asyncio.Lock()
+_last_vram_op = 0.0
+
+
+async def _vram_gate() -> None:
+    """Refuse a model load/evict that arrives too soon after the last one."""
+    global _last_vram_op
+    since = time.monotonic() - _last_vram_op
+    if since < config.MODEL_SWITCH_COOLDOWN_S:
+        raise HTTPException(
+            status_code=429,
+            detail=f"model changed {since:.1f}s ago; wait "
+                   f"{config.MODEL_SWITCH_COOLDOWN_S - since:.1f}s",
+        )
+    _last_vram_op = time.monotonic()
+
+
+async def _require_pulled(client: httpx.AsyncClient, model: str) -> None:
+    """Reject any model name that is not already pulled.
+
+    Both write routes take a model name from the request body and hand it to
+    Ollama, which has no auth of its own. Restricting them to names Ollama
+    already reports keeps an arbitrary attacker-supplied string out of that
+    call, and out of the log line that follows it -- an unvalidated name can
+    carry newlines and forge log entries.
+    """
+    tags = await _ollama(client, "/api/tags")
+    if "_error" in tags:
+        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {tags['_error']}")
+    available = {m.get("name") for m in tags.get("models", []) or []}
+    if model not in available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{model} is not pulled. Available: {sorted(available)}",
+        )
 
 
 async def _ollama(client: httpx.AsyncClient, path: str, **kw) -> dict:
@@ -158,15 +216,9 @@ async def select_model(body: SelectRequest, request: Request,
     _require_token(token, x_auth_token)
     client: httpx.AsyncClient = request.app.state.http
 
-    tags = await _ollama(client, "/api/tags")
-    if "_error" in tags:
-        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {tags['_error']}")
-    available = {m.get("name") for m in tags.get("models", []) or []}
-    if body.model not in available:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{body.model} is not pulled. Available: {sorted(available)}",
-        )
+    async with _vram_lock:
+        await _vram_gate()
+        await _require_pulled(client, body.model)
 
     previous = config.OLLAMA_MODEL
     config.OLLAMA_MODEL = body.model
@@ -208,6 +260,12 @@ async def evict(body: EvictRequest, request: Request,
     """
     _require_token(token, x_auth_token)
     client: httpx.AsyncClient = request.app.state.http
+    # Same allowlist as POST /api/model. This route used to pass the body
+    # straight through, so it accepted any string -- which made it both an
+    # existence oracle for arbitrary model names and a log-forging primitive.
+    async with _vram_lock:
+        await _vram_gate()
+        await _require_pulled(client, body.model)
     result = await _ollama(client, "/api/generate",
                            json={"model": body.model, "keep_alive": 0,
                                  "prompt": "", "stream": False})

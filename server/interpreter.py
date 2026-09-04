@@ -16,6 +16,7 @@ degrade gracefully -- the transcript still reaches the user, just with a
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 
 import httpx
@@ -202,6 +203,51 @@ def _ollama_stats(body: dict | None) -> dict:
     }
 
 
+# Belt-and-braces: the shipped prompt delimits with quotes, not tags, so this
+# matches nothing today. It is here so that if the tag variant is ever revisited
+# (see the docstring below), a spoken "</utterance>" cannot close the fence.
+_UNSAFE_RE = re.compile(r"</?\s*(?:utterance|context)\s*>", re.I)
+
+
+def _fence(line: str) -> str:
+    """Flatten one transcript line so it cannot escape its delimiter.
+
+    The transcript is whatever someone said into the mic -- the one part of the
+    prompt an outsider controls. Two things let a spoken line stop being data
+    and start looking like prompt structure:
+
+      * newlines, which forge new sections ("Newest line: ...", "System: ...")
+      * the fence tags themselves, which close the span early and leave the rest
+        of the sentence sitting outside it, addressed to the model
+
+    Collapsing whitespace removes both. This is deliberately a *mechanical*
+    defence with no prompt text change: for any line without newlines the prompt
+    is byte-identical to before, so it cost nothing on the eval (93% ALL, 2/4
+    mismatch, every guard-rail category 100% -- same as baseline, 3 runs).
+
+    Two stronger variants were tried and REJECTED on measurement, both 3 runs
+    against qwen3:14b via `python -m eval.model_eval`:
+
+      * Fencing the line in <utterance></utterance> tags instead of quotes:
+        90% ALL, sarcasm 100% -> 75%. Losing the wording "Newest line, interpret
+        only this one" reliably cost sar-04.
+      * Adding a paragraph to SYSTEM_PROMPT stating that the transcript is data
+        rather than instructions: 91% ALL, sarcasm 83%, and it made sar-04
+        flap between runs.
+
+    Also rejected: stripping quotes so the line cannot escape its delimiter.
+    The character class catches apostrophes too, turning "It's" into "Its" --
+    it mangles ordinary speech, and scored worst of all (89%, mismatch 1/4).
+
+    So the model is not told to distrust the transcript; it is simply never
+    handed anything shaped like a new instruction line. That leaves an attacker
+    one flat line inside quotes, which is a far weaker position than being able
+    to forge a "System:" line -- and it keeps the prompt, which is the product,
+    exactly as it was measured.
+    """
+    return _UNSAFE_RE.sub("", " ".join(str(line).split()))
+
+
 class Interpreter:
     """Stateful per-conversation interpreter holding the rolling context.
 
@@ -227,11 +273,11 @@ class Interpreter:
         earlier = list(self._context)
         if earlier:
             parts.append("Earlier lines (context only):")
-            parts.extend(f"- {line}" for line in earlier)
+            parts.extend(f"- {_fence(line)}" for line in earlier)
             parts.append("")
         if voice_hint:
             parts.append(f"voice sounded like: {voice_hint}")
-        parts.append(f'Newest line, interpret only this one: "{newest}"')
+        parts.append(f'Newest line, interpret only this one: "{_fence(newest)}"')
         return "\n".join(parts)
 
     async def interpret(self, transcript: str, voice: dict | None = None) -> dict:

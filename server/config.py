@@ -39,11 +39,51 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean env var. Accepts 0/1, true/false, yes/no, on/off."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_token(name: str) -> str | None:
+    """Read the auth token, collapsing every 'empty' spelling to None.
+
+    `AUTH_TOKEN=""` used to be the worst of both worlds: the `is not None` check
+    reported auth as ENABLED -- in the startup log and on the dashboard -- while
+    the empty string was itself the valid credential, so a client authenticated
+    by sending nothing at all. Whitespace-only had the same shape. Both now mean
+    "unset", which is reported honestly and caught by the startup guard in
+    main.py.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return raw.strip() or None
+
+
 # --- Server -----------------------------------------------------------------
 PORT: int = _env_int("PORT", 8000)
-# If unset, auth is disabled and any first-frame token is accepted. This keeps
-# the browser test client and the future ESP32 firmware on one code path.
-AUTH_TOKEN: str | None = os.environ.get("AUTH_TOKEN")
+# Bind address. Loopback by default: cloudflared reaches the server over
+# 127.0.0.1 (see tunnel/README.md), so binding every interface buys the tunnel
+# nothing while putting the server on whatever LAN the machine is attached to.
+# On a public network -- a cafe, a campus, a conference -- that is a second
+# entrance that bypasses Cloudflare and anything you put in front of it.
+# Set HOST=0.0.0.0 deliberately when you actually want LAN access.
+HOST: str = _env_str("HOST", "127.0.0.1")
+
+# If None, auth is disabled and any first-frame token is accepted. Fine on
+# loopback, unacceptable on any other bind -- hence ALLOW_NO_AUTH below.
+AUTH_TOKEN: str | None = _env_token("AUTH_TOKEN")
+
+# Refuse to start unauthenticated on a non-loopback bind. Running wide open is
+# still possible, but it must now be asked for rather than being what you get by
+# forgetting. This matters because a *named* tunnel is a separate long-lived
+# process: it outlives the start script that sets AUTH_TOKEN, so a stray
+# `python -m server.main` was enough to put the real public hostname in front of
+# an unauthenticated server.
+ALLOW_NO_AUTH: bool = _env_bool("ALLOW_NO_AUTH", False)
 
 # --- Audio format (fixed by the wire protocol) ------------------------------
 # The protocol promises raw PCM, 16 kHz, mono, int16 little-endian. These are
@@ -84,14 +124,6 @@ CONTEXT_LINES: int = _env_int("CONTEXT_LINES", 12)  # rolling transcript window
 OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)
 OLLAMA_TIMEOUT_S: float = _env_float("OLLAMA_TIMEOUT_S", 30.0)
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    """Read a boolean env var. Accepts 0/1, true/false, yes/no, on/off."""
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # --- Speech emotion recognition (SER) ---------------------------------------
@@ -135,6 +167,23 @@ SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
 #   emotion2vec -- emotion2vec_plus_*: ~90M/~300M, categorical only (no VAD dims)
 SER_BACKEND: str = _env_str("SER_BACKEND", "auto")
 
+# Pin the model to an exact upstream commit. Empty means "use the vetted
+# revision for this model if we know one, else track the hub".
+#
+# This matters most for the MERaLiON backend, which loads with
+# `trust_remote_code=True` -- i.e. it downloads and EXECUTES Python from the
+# hub at import time. Unpinned, that is "whatever the repo's main branch says
+# today", so a maintainer push or a hub account compromise changes the code
+# running on this machine at the next restart, silently. ser.py therefore ships
+# the commit that was actually reviewed and benchmarked, and a human has to
+# bump it.
+#
+# The emotion2vec/ModelScope default backend cannot be pinned the same way:
+# upstream publishes only a moving `master` branch for it -- no tags, no commit
+# refs -- so there is nothing immutable to point at. Its protection is that the
+# weights are already cached locally and it does not execute downloaded code.
+SER_REVISION: str = _env_str("SER_REVISION", "")
+
 # Gloss thresholds for the valence/arousal words in the interpreter prompt.
 # These are a property of the BACKEND, not of the concept: a model whose valence
 # only ever spans 0.12-0.41 (MERaLiON, measured over 1440 RAVDESS clips) will
@@ -164,3 +213,51 @@ WS_KEEPALIVE_CHECK_S: float = _env_float("WS_KEEPALIVE_CHECK_S", 5.0)
 # How often to emit VAD telemetry frames on a /stream?vad=1 connection. ~10/s is
 # enough to watch a level meter move without flooding the log in remote.html.
 VAD_TELEMETRY_INTERVAL_S: float = _env_float("VAD_TELEMETRY_INTERVAL_S", 0.1)
+
+# --- Exposure limits --------------------------------------------------------
+# None of these constrain a conforming client: the wire protocol sends ~20-100ms
+# of PCM per frame and speaks at most one utterance per second. They exist
+# because every one of them is unbounded by default, and this server is reachable
+# from the internet through a tunnel.
+
+# How long a freshly-accepted socket may go without sending its auth token.
+# Without a bound, a peer that connects and stays silent is held forever: the
+# websocket layer answers protocol pings on its behalf, so it costs the attacker
+# nothing and never times out. A real client sends the token immediately.
+WS_AUTH_TIMEOUT_S: float = _env_float("WS_AUTH_TIMEOUT_S", 5.0)
+
+# Largest single websocket message accepted. uvicorn's default is 16 MiB, which
+# is ~5000x any legitimate audio frame; one such message segments into ~500
+# utterances and spawns ~1000 pipeline jobs in a single read. 64 KiB is two
+# seconds of audio -- generous for a frame, useless as an amplifier.
+WS_MAX_MESSAGE_BYTES: int = _env_int("WS_MAX_MESSAGE_BYTES", 65_536)
+
+# Ceiling on concurrent connections (uvicorn's limit_concurrency, covering HTTP
+# and websockets). Unset by default, i.e. unlimited.
+MAX_CONNECTIONS: int = _env_int("MAX_CONNECTIONS", 32)
+
+# Utterances that may be in the pipeline at once, per connection. Whisper and
+# SER both serialise globally (~3 utterances/sec for the whole process), so
+# without a bound a client can queue work far faster than it drains and the
+# backlog is retained audio. Over the cap the utterance is dropped and counted,
+# never queued -- dropping a word beats an unbounded queue that ends in an OOM.
+# 3 is well clear of conversational speech, which produces about one per second.
+MAX_INFLIGHT_UTTERANCES: int = _env_int("MAX_INFLIGHT_UTTERANCES", 3)
+
+# Close a connection that has sent no audio for this long. The keepalive pings
+# were holding idle sockets open indefinitely, which is exactly what an attacker
+# wants and what an abandoned browser tab does by accident. 0 disables the close
+# and restores ping-forever. Generously above any pause in real conversation.
+WS_IDLE_CLOSE_S: float = _env_float("WS_IDLE_CLOSE_S", 900.0)
+
+# Time budget for the trailing utterance flushed after a client disconnects.
+# Worth attempting -- a real client that drops mid-sentence still wants the read
+# -- but nobody is waiting on the other end, so it must not pin the pipeline for
+# a full Ollama timeout.
+WS_FLUSH_TIMEOUT_S: float = _env_float("WS_FLUSH_TIMEOUT_S", 8.0)
+
+# Minimum gap between interpreter model switches / evictions. Each one moves
+# 8-9 GB in or out of VRAM; back-to-back calls thrash the GPU and can leave a
+# model partly on CPU, which reads as "the LLM got slow" rather than as an
+# attack. Cheap to send, expensive to serve -- so rate-limit it.
+MODEL_SWITCH_COOLDOWN_S: float = _env_float("MODEL_SWITCH_COOLDOWN_S", 10.0)

@@ -94,7 +94,7 @@ keep it; that is the trade for needing no account. Copy it fresh each run.
 Or use the helper, which starts both and prints the URL prominently:
 
 ```powershell
-tunnel\start.bat          # Windows
+tunnel\start.ps1          # Windows
 ```
 ```bash
 ./tunnel/start.sh         # Linux / macOS

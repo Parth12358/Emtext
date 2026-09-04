@@ -26,12 +26,22 @@ eval/*_results.csv
 # braces for the day someone copies one in "just to test".
 .emtext/
 auth_token
+token.txt
 *.pem
-cert.pem
 .cloudflared/
 config.yml
+config.yaml
+# cloudflared accepts either extension, so ignore both spellings above.
 *-credentials.json
+credentials.json
+secrets.json
 # cloudflared writes tunnel creds as <uuid>.json
 [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*.json
+# keys of every other shape
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 .env
 .env.*

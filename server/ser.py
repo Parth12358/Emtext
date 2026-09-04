@@ -148,6 +148,23 @@ def _pick_backend() -> str:
 _lock = threading.Lock()
 
 
+# Upstream commits that were actually reviewed and benchmarked for this project.
+# Only models that execute downloaded code need to be here -- the point is that
+# a hub-side change cannot alter what runs locally without a human editing this
+# dict (or setting SER_REVISION). Bump deliberately, then re-run
+# `python -m eval.ser_eval` before trusting the new numbers.
+_VETTED_REVISIONS = {
+    "MERaLiON/MERaLiON-SER-v1": "7e3ee6fa4534dea8316e8ca43e377e2fbb58496b",
+}
+
+
+def _revision_for(model: str) -> str | None:
+    """Which upstream revision to load. None means 'track the hub'."""
+    if config.SER_REVISION:
+        return config.SER_REVISION          # explicit override always wins
+    return _VETTED_REVISIONS.get(model)     # else the pin, if we have one
+
+
 def _load_meralion() -> None:
     """Primary backend: MERaLiON-SER-v1 via transformers.
 
@@ -159,11 +176,17 @@ def _load_meralion() -> None:
     from transformers import AutoModelForAudioClassification, AutoProcessor
 
     # `trust_remote_code` is required: the two-head architecture lives in
-    # custom modelling code in the repo, not in transformers itself.
-    _processor = AutoProcessor.from_pretrained(config.SER_MODEL)
+    # custom modelling code in the repo, not in transformers itself. That means
+    # this call downloads and EXECUTES Python from the hub, so it is pinned to
+    # an exact commit -- see _revision_for() and config.SER_REVISION. Without a
+    # pin, a push to the model repo changes the code that runs here at the next
+    # restart, with nothing in the logs to say so.
+    rev = _revision_for(config.SER_MODEL)
+    _processor = AutoProcessor.from_pretrained(config.SER_MODEL, revision=rev)
     _model = AutoModelForAudioClassification.from_pretrained(
         config.SER_MODEL,
         trust_remote_code=True,
+        revision=rev,
     )
     _model.eval()
     _model.to(config.SER_DEVICE)
@@ -205,7 +228,16 @@ def _load_emotion2vec() -> None:
     # unavailable -- so on a machine with a CUDA/XPU torch build this backend
     # would silently take the GPU that is reserved for the LLM. Being explicit
     # means the hardware split holds by instruction rather than by accident.
-    _model = AutoModel(model=name, device=config.SER_DEVICE, disable_update=True)
+    # Deliberately NOT passing trust_remote_code: with it, FunASR will both
+    # import a .py shipped with the model AND pip-install a requirements.txt
+    # downloaded from the model repo. Leaving it off keeps a model-repo
+    # compromise from becoming arbitrary package installation on this host.
+    #
+    # model_revision only if one is configured: ModelScope publishes just a
+    # moving `master` for this model, so there is no immutable ref to pin by
+    # default (see config.SER_REVISION).
+    kw = {"model_revision": config.SER_REVISION} if config.SER_REVISION else {}
+    _model = AutoModel(model=name, device=config.SER_DEVICE, disable_update=True, **kw)
     # FunASR reports labels per result rather than exposing a fixed ordered
     # vocabulary, so record what we normalise TO rather than inventing an order.
     _labels = tuple(sorted(set(_EMOTION2VEC_MAP.values())))

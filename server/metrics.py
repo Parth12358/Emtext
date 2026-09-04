@@ -23,6 +23,7 @@ worse than no dashboard.
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import statistics
@@ -190,6 +191,17 @@ def system_stats() -> dict:
 _gpu_cache: dict = {"available": None, "reason": "not sampled yet"}
 _gpu_thread: threading.Thread | None = None
 
+# Absolute path, not the bare name "powershell". CreateProcess resolves a bare
+# name against the application directory and then the CURRENT WORKING DIRECTORY
+# before System32 -- and the server's cwd is the repo root. Anything that can
+# drop a file there (a malicious dependency's setup.py, an unpacked dataset)
+# would get executed as the server user every poll. The command itself was never
+# injectable (argv list, constant script); this closes the other half.
+_POWERSHELL = os.path.join(
+    os.environ.get("SystemRoot", r"C:\Windows"),
+    "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+)
+
 _PS_GPU = r"""
 $ErrorActionPreference='SilentlyContinue'
 $u = (Get-Counter '\GPU Engine(*)\Utilization Percentage').CounterSamples |
@@ -217,7 +229,7 @@ def _poll_gpu_once() -> dict:
                 "reason": f"GPU counters are Windows-only (running {platform.system()})"}
     try:
         out = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_GPU],
+            [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _PS_GPU],
             capture_output=True, text=True, timeout=25,
         ).stdout
     except Exception as exc:  # noqa: BLE001

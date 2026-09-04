@@ -680,8 +680,8 @@ cloudflared tunnel --url http://localhost:8000     # terminal 2
 ```
 
 cloudflared prints a random `https://<random>.trycloudflare.com` URL. **It
-changes every restart** — that is the trade for needing no account. `tunnel/start.sh`
-and `tunnel/start.bat` start both and print the URL prominently.
+changes every restart** — that is the trade for needing no account. `tunnel/start.ps1`
+(Windows) and `tunnel/start.sh` start both and print the URL prominently.
 
 This is also the only way to test the microphone on a phone: browsers require a
 **secure origin** for `getUserMedia`, and `localhost` is the only exception. The

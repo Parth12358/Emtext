@@ -165,7 +165,9 @@
   </div>
   <div class="hint">
     Prefill these with <code>?url=…&amp;token=…</code>. The quick-tunnel hostname
-    changes on every restart, so the fields stay editable.
+    changes on every restart, so the fields stay editable. A <code>?url=</code>
+    pointing at a <b>different</b> origin is ignored — type it yourself instead,
+    since this page sends your token to whatever that field says.
   </div>
 </div>
 
@@ -238,7 +240,24 @@ const params = new URLSearchParams(location.search);
 
 // Prefill from ?url=/?token=, else from whatever origin served this page, so
 // opening /remote.html on the tunnel itself needs no typing at all.
-el("url").value = params.get("url") || location.origin;
+//
+// With one restriction: a ?url= naming a DIFFERENT origin is ignored. This page
+// sends the AUTH_TOKEN as the first websocket frame to whatever that field
+// says, so honouring a foreign ?url= turned a link on this trusted origin into
+// a credential harvester -- open it, paste the token the form asks for, press
+// the one obvious button, and the token goes to the attacker; if their server
+// then replies {"type":"ready"} the Stream mic button lights up and sends them
+// the room. Typing a foreign host by hand still works, because that is what
+// this page is for. A link just no longer does it on your behalf.
+const wantedUrl = params.get("url");
+let blockedUrl = "";
+if (wantedUrl) {
+  // isSameOrigin() normalises the same way baseUrl() will, so a bare hostname
+  // like "evil.example" is judged as the https://evil.example it becomes.
+  if (isSameOrigin(wantedUrl)) el("url").value = wantedUrl;
+  else blockedUrl = wantedUrl;
+}
+if (!el("url").value) el("url").value = location.origin;
 el("token").value = params.get("token") || "";
 
 let ws = null;
@@ -293,11 +312,25 @@ function wsUrlFrom(httpUrl) {
   return u.toString();
 }
 
-function baseUrl() {
-  let v = el("url").value.trim().replace(/\/+$/, "");
+// One normaliser, used by BOTH the ?url= origin check and baseUrl(). They must
+// agree on what a string means: while they disagreed, "?url=evil.example" read
+// as a same-origin relative path to the check (so it was allowed through) and as
+// a bare hostname to baseUrl(), which prepended https:// and turned it into
+// someone else's server. Same input, two answers, guard bypassed.
+function normaliseUrl(v) {
+  v = String(v || "").trim().replace(/\/+$/, "");
   // Tolerate a pasted bare hostname -- easy to do on a phone.
   if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
   return v;
+}
+
+function isSameOrigin(v) {
+  try { return new URL(normaliseUrl(v)).origin === location.origin; }
+  catch { return false; }   // unparseable -> not ours
+}
+
+function baseUrl() {
+  return normaliseUrl(el("url").value);
 }
 
 // ----- checks ---------------------------------------------------------------
@@ -366,6 +399,22 @@ async function checkHealth() {
 // ----- websocket ------------------------------------------------------------
 function connect() {
   const wsUrl = wsUrlFrom(baseUrl());
+
+  // Second layer, for a host typed or pasted into the field rather than passed
+  // in a link: say plainly where the token is about to go before it goes there.
+  // The first frame on this socket is the AUTH_TOKEN, and a websocket is exempt
+  // from the same-origin policy, so nothing else stops it leaving this origin.
+  let target;
+  try { target = new URL(wsUrl).host; } catch { target = wsUrl; }
+  if (target !== location.host && el("token").value) {
+    const ok = confirm(
+      "Send your AUTH_TOKEN to " + target + "?\n\n" +
+      "This page is served by " + location.host + ". Only continue if you " +
+      "recognise the address above as your own server."
+    );
+    if (!ok) { log("er", "cancelled — token not sent to " + target); return; }
+  }
+
   const secure = wsUrl.startsWith("wss:");
   check("c-scheme", secure ? "ok" : "warn", secure ? "wss (encrypted)" : "ws (plaintext)");
   check("c-ws", "pend", "connecting…");
@@ -729,6 +778,13 @@ el("mic").addEventListener("click", async () => {
 
 checkSecure();
 check("c-scheme", "pend", wsUrlFrom(baseUrl() || location.origin).startsWith("wss:") ? "wss (on connect)" : "ws (on connect)");
+if (blockedUrl) {
+  // Loud, because the only way to arrive here is by following a link that tried
+  // to aim this page -- and the token typed into it -- at someone else's server.
+  log("er", "IGNORED ?url=" + blockedUrl + " — it is not " + location.origin);
+  log("er", "a link tried to point this page at another server. Type the address "
+          + "yourself if you meant to test one.");
+}
 log("in", "ready — check the URL and token, then press Run diagnostics");
 </script>
 </body>

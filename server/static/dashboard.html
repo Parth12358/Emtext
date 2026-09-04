@@ -180,8 +180,32 @@
 // ---------------------------------------------------------------------------
 const el = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const TOKEN = params.get("token") || "";
-const q = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+// Take the token out of the address bar, then send it as a header instead.
+// In the URL it ended up in the server access log (once per 2s poll), in
+// Cloudflare's edge logs, in browser history, and in any screenshot of this
+// page. The server still accepts ?token=, so a hand-pasted link keeps working;
+// this page just stops leaving it lying around afterwards.
+//
+// sessionStorage, not a bare variable, so a refresh does not 401 -- stripping
+// the URL without this made F5 log you out, which is the kind of friction that
+// gets a security fix reverted. It is a strictly better home than the URL was:
+// scoped to this tab, dropped when the tab closes, and never synced to history,
+// bookmarks or another device. (Wrapped, because a browser set to block site
+// data throws on access rather than returning null.)
+const KEY = "emtext_token";
+const store = {
+  get() { try { return sessionStorage.getItem(KEY) || ""; } catch { return ""; } },
+  set(v) { try { sessionStorage.setItem(KEY, v); } catch {} },
+};
+const TOKEN = params.get("token") || store.get();
+if (params.get("token")) {
+  store.set(TOKEN);
+  if (window.history?.replaceState) {
+    params.delete("token");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  }
+}
 let failures = 0;
 
 const fmtS = (v) => v == null ? "—" : (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
@@ -223,15 +247,38 @@ function spark(svg, values, colour) {
     `<polyline points="0,40 ${d} 300,40" fill="${colour}" opacity="0.12" stroke="none"/>`;
 }
 
+// This page renders strings it did not author: Ollama model metadata, Python
+// exception text, and raw HTTP response bodies (which, through a tunnel, can be
+// an error page written by something other than this server). None of it may
+// reach an HTML parser. The page holds the auth token, so a single injected
+// `<img onerror=...>` here would be a token theft, and there is no CSP behind it.
+// `esc` for values that must sit inside generated markup; `setEmpty` for the
+// plain-text placeholder boxes, which need no markup at all.
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function setEmpty(node, text) {
+  const d = document.createElement("div");
+  d.className = "empty";
+  d.textContent = text;
+  node.replaceChildren(d);
+}
+
 function tile(n, label, sub) {
   return `<div class="tile"><div class="n">${n}</div><div class="l">${label}</div>` +
          (sub ? `<div class="s">${sub}</div>` : "") + `</div>`;
 }
 
 async function api(path, opts) {
-  const res = await fetch(path + q, opts);
+  const o = { ...(opts || {}) };
+  o.headers = { ...(o.headers || {}) };
+  if (TOKEN) o.headers["X-Auth-Token"] = TOKEN;
+  const res = await fetch(path, o);
   if (res.status === 401) throw new Error("unauthorised — add ?token=… to this page's URL");
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  // Truncated, and only ever rendered with textContent by the callers: this
+  // string is a raw response body, which through a tunnel can be an error page
+  // written by something other than this server.
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
   return res.json();
 }
 
@@ -263,7 +310,7 @@ function render(d) {
     el("sys-note").textContent =
       `Whisper and SER run on CPU by design — the GPU is reserved for the LLM.`;
   } else {
-    el("sys").innerHTML = `<div class="empty">unavailable: ${sys.reason || "?"}</div>`;
+    setEmpty(el("sys"), `unavailable: ${sys.reason || "?"}`);
   }
   spark(el("spark-cpu"), (d.history || []).map((h) => h.cpu), "#3a7afe");
 
@@ -283,7 +330,7 @@ function render(d) {
       "(a query costs ~2.6s, too slow to do per request). Values are summed " +
       "across processes, so a type can exceed 100%.";
   } else {
-    el("gpu").innerHTML = `<div class="empty">unavailable — ${gpu.reason || "?"}</div>`;
+    setEmpty(el("gpu"), `unavailable — ${gpu.reason || "?"}`);
     el("gpu-note").textContent =
       "Ollama's own VRAM figures below are the more useful GPU number anyway.";
   }
@@ -324,7 +371,7 @@ function render(d) {
   // --- recent ---
   const r = el("recent");
   if (!p.recent || !p.recent.length) {
-    r.innerHTML = `<div class="empty">nothing yet — talk to the app and it appears here</div>`;
+    setEmpty(r, "nothing yet — talk to the app and it appears here");
   } else {
     r.innerHTML = "";
     for (const u of p.recent) {
@@ -334,7 +381,7 @@ function render(d) {
       if (u.voice && u.voice.emotion) bits.push(`voice ${u.voice.emotion}`);
       if (u.offline) bits.push("LLM OFFLINE");
       d2.innerHTML =
-        `<div class="txt"></div><div class="rd"></div><div class="mt">${bits.join("  ·  ")}</div>`;
+        `<div class="txt"></div><div class="rd"></div><div class="mt">${esc(bits.join("  ·  "))}</div>`;
       d2.querySelector(".txt").textContent = u.transcript;
       d2.querySelector(".rd").textContent = u.read || "";
       r.appendChild(d2);
@@ -344,12 +391,12 @@ function render(d) {
 
 function dist(target, obj, colours) {
   const items = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
-  if (!items.length) { target.innerHTML = `<div class="empty">none yet</div>`; return; }
+  if (!items.length) { setEmpty(target, "none yet"); return; }
   const total = items.reduce((a, [, n]) => a + n, 0);
   target.innerHTML = items.map(([k, n]) => {
     const w = (n / total) * 100;
     const col = colours[k] ? `var(${colours[k]})` : "var(--accent)";
-    return `<div class="row"><span class="k">${k}</span>` +
+    return `<div class="row"><span class="k">${esc(k)}</span>` +
            `<span class="v">${n} · ${w.toFixed(0)}%</span></div>` +
            `<div class="bar"><div style="width:${w}%;background:${col}"></div></div>`;
   }).join("");
@@ -361,7 +408,7 @@ async function loadModels() {
   try {
     const d = await api("/api/models");
     if (!d.reachable) {
-      box.innerHTML = `<div class="empty">Ollama unreachable — ${d.error || ""}</div>`;
+      setEmpty(box, `Ollama unreachable — ${d.error || ""}`);
       return;
     }
     const stats = await api("/api/stats");
@@ -373,9 +420,9 @@ async function loadModels() {
       div.className = "model";
       const sel = m.name === d.selected;
       div.innerHTML =
-        `<span class="name">${m.name}</span>` +
-        `<span class="meta">${m.size_gb} GB${m.parameter_size ? " · " + m.parameter_size : ""}` +
-        `${m.quantization ? " · " + m.quantization : ""}</span>` +
+        `<span class="name">${esc(m.name)}</span>` +
+        `<span class="meta">${esc(m.size_gb)} GB${m.parameter_size ? " · " + esc(m.parameter_size) : ""}` +
+        `${m.quantization ? " · " + esc(m.quantization) : ""}</span>` +
         (sel ? `<span class="badge sel">in use</span>` : "") +
         (res ? `<span class="badge ${res.fully_on_gpu ? "gpu" : "cpu"}">` +
                `${res.vram_gb} GB ${res.fully_on_gpu ? "on GPU" : "PARTLY CPU"}</span>` : "");
@@ -411,7 +458,7 @@ async function loadModels() {
       box.appendChild(div);
     }
   } catch (e) {
-    box.innerHTML = `<div class="empty">${e.message}</div>`;
+    setEmpty(box, e.message);
   }
 }
 

@@ -120,9 +120,24 @@ same wire protocol**.
   (`server/static/index.html`). **Never hardcode `ws://`** -- browsers block it as
   mixed content from an HTTPS page, so it works on localhost and then fails
   silently and totally behind any TLS terminator. The ESP32 needs `wss://` too.
-- `AUTH_TOKEN` unset means **any first frame is accepted**. That is fine for
-  localhost and unacceptable the moment the server is reachable from outside;
-  there is no rate limiting, origin check or connection cap behind it.
+- `AUTH_TOKEN` unset means **any first frame is accepted**, and empty/whitespace
+  now normalises to unset (it used to report "auth enabled" while the empty
+  string was the valid credential). Fine on loopback; on any other bind the
+  server **refuses to start** unless `ALLOW_NO_AUTH=1`. `HOST` defaults to
+  `127.0.0.1` — cloudflared connects over loopback, so binding `0.0.0.0` only
+  adds a LAN entrance that bypasses the tunnel.
+- **The exposure limits in `config.py` are load-bearing, not decoration.**
+  `WS_MAX_MESSAGE_BYTES`, `MAX_INFLIGHT_UTTERANCES`, `MAX_CONNECTIONS`,
+  `WS_AUTH_TIMEOUT_S`, `WS_IDLE_CLOSE_S` and `ws_per_message_deflate=False`
+  each close a measured amplification: one 16 MiB frame segmented into ~500
+  utterances, and PCM deflates ~21:1, so ~1.6 KB on the wire bought a full
+  Whisper+SER+LLM job. A conforming client never approaches any of them, so the
+  ESP32 contract is unaffected — but don't "simplify" them away.
+- Transcripts reach the LLM through `interpreter._fence()`, which collapses
+  whitespace so a spoken line cannot forge a new prompt section. Keep it
+  **mechanical**: three prompt-text variants were measured and all scored worse
+  (see the `_fence` docstring for the numbers). `SYSTEM_PROMPT` is byte-identical
+  to its pre-hardening form on purpose.
 - Cloudflare **quick tunnel** is the documented path out (`tunnel/README.md`):
   `cloudflared tunnel --url http://localhost:8000`, random hostname, changes every
   restart. The server stays unaware of it -- no tunnel code, no config.

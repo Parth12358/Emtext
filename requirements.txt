@@ -1,3 +1,10 @@
+# This is the human-readable list of DIRECT dependencies and why each is here.
+# For a reproducible install use the pinned set instead -- these bare names
+# resolve ~101 packages fresh every time, which is not what you want on a
+# machine exposed to the internet:
+#
+#     pip install -r requirements.lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
 fastapi
 uvicorn[standard]
 faster-whisper

@@ -182,9 +182,28 @@
 "use strict";
 
 // ----- protocol / connection ------------------------------------------------
-// Auth token from ?token=... , defaulting to "dev" (the server accepts anything
-// when AUTH_TOKEN is unset, but we still must send a first TEXT frame).
-const TOKEN = new URLSearchParams(location.search).get("token") || "dev";
+// Auth token from ?token=... . The protocol requires a first TEXT frame either
+// way, so an absent token still sends something -- but it sends an empty string
+// rather than the literal "dev" this used to default to. A real default is a
+// real credential: it only had to match AUTH_TOKEN once (someone typing
+// AUTH_TOKEN=dev while debugging) to make the server open to a one-word guess.
+// Strip the token from the address bar once it is in hand, and keep it in
+// sessionStorage so a refresh still connects. Out of the URL it stays out of
+// browser history, bookmarks and screenshots; the websocket carries it as a
+// frame, not as part of a URL, so nothing needs it there. sessionStorage is
+// per-tab, dropped when the tab closes, and never synced anywhere.
+const _params = new URLSearchParams(location.search);
+const _KEY = "emtext_token";
+const _read = () => { try { return sessionStorage.getItem(_KEY) || ""; } catch { return ""; } };
+const TOKEN = _params.get("token") || _read();
+if (_params.get("token")) {
+  try { sessionStorage.setItem(_KEY, TOKEN); } catch {}
+  if (window.history?.replaceState) {
+    _params.delete("token");
+    const _rest = _params.toString();
+    history.replaceState(null, "", location.pathname + (_rest ? "?" + _rest : ""));
+  }
+}
 // Derive the websocket scheme from the page, never hardcode it. A browser blocks
 // ws:// from an https:// page as mixed content, so a hardcoded ws:// works fine
 // on localhost and then fails silently and completely the moment the app is

@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 from pathlib import Path
 
@@ -38,8 +39,64 @@ from .transcriber import transcribe
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="emtext")
+# docs/redoc/openapi are OFF. FastAPI mounts them unauthenticated by default,
+# and they are registered in this constructor -- *before* the StaticFiles mount
+# at "/" -- so the catch-all never shadows them. On a public hostname that hands
+# a stranger the whole API surface (every route, both request schemas, and the
+# fact that auth is a `token` query param), plus a point-and-click console at
+# /docs for firing POST /api/model. /docs also loads Swagger's JS from a CDN,
+# which this project otherwise deliberately avoids.
+app = FastAPI(title="emtext", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(dashboard.router)
+
+# Security headers on every response. There were none, and the pages carry the
+# auth token, so a single injected element would have been a token theft.
+#
+# CSP notes, because two directives look wrong until you know why:
+#   * 'unsafe-inline' is unavoidable. These are deliberately single-file pages
+#     with no build step (a project rule), so all script and style is inline.
+#     A per-response nonce would be strictly better and stays compatible with
+#     "no build step" -- worth doing if these pages grow.
+#   * blob: in script-src/worker-src is required by the AudioWorklet: both
+#     capture pages construct the processor from a Blob URL.
+#   * connect-src allows arbitrary https/wss ON PURPOSE. remote.html exists to
+#     point at whatever hostname the quick tunnel produced this restart, so it
+#     cannot be locked to 'self' without destroying the page's reason to exist.
+#     What it can't do -- and now can't -- is silently take that host from a
+#     link (see remote.html) or pull a script, style, or image from anywhere.
+# frame-ancestors is the one that matters most day to day: it stops a foreign
+# page framing the dashboard and clickjacking the model switch / evict buttons.
+_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' 'unsafe-inline' blob:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self' https: wss: ws:; "
+    "worker-src 'self' blob:; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Frame-Options": "DENY",              # legacy twin of frame-ancestors
+    "X-Content-Type-Options": "nosniff",
+    # The token can still reach a URL by hand (?token=), so never send a
+    # Referer that could carry it -- or the tunnel hostname -- to another origin.
+    "Referrer-Policy": "no-referrer",
+    # The app needs the microphone; nothing else does, and no embedder should.
+    "Permissions-Policy": "microphone=(self), camera=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -88,6 +145,22 @@ async def _startup() -> None:
     else:
         log.info("auth enabled (AUTH_TOKEN set, %d chars)", len(config.AUTH_TOKEN))
 
+    # Warning-only was not enough. The warning goes to stderr, which the start
+    # scripts redirect into a temp file nobody reads, and a named tunnel is a
+    # separate long-lived process -- so a `python -m server.main` typed by hand
+    # put the real public hostname in front of an open server, silently. Refuse
+    # instead. Loopback stays open with no ceremony (that is the dev path), and
+    # ALLOW_NO_AUTH=1 is there for anyone who genuinely wants the old behaviour.
+    if config.AUTH_TOKEN is None and not config.ALLOW_NO_AUTH:
+        if config.HOST not in ("127.0.0.1", "::1", "localhost"):
+            raise SystemExit(
+                f"refusing to start: AUTH_TOKEN is unset and HOST is {config.HOST}, "
+                "which is reachable from outside this machine.\n"
+                "  set a token:        python tunnel/token.py\n"
+                "  or bind loopback:   HOST=127.0.0.1 (the default)\n"
+                "  or override:        ALLOW_NO_AUTH=1"
+            )
+
 
 async def _sample_system_loop() -> None:
     """One CPU/RAM/GPU sample a second, for the dashboard sparklines."""
@@ -115,6 +188,38 @@ async def _send(ws: WebSocket, message: dict) -> None:
         await ws.send_text(json.dumps(message))
     except (WebSocketDisconnect, RuntimeError):
         pass
+
+
+async def _close_quietly(ws: WebSocket, code: int) -> None:
+    """Close a socket, ignoring a peer that has already gone.
+
+    Rejection paths run against clients that are frequently hostile or already
+    disconnected; a raise here would turn a refused handshake into a traceback.
+    """
+    try:
+        await ws.close(code=code)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
+def _token_ok(supplied: str) -> bool:
+    """Constant-time token check.
+
+    Compared as *bytes*: `secrets.compare_digest` raises TypeError on a str
+    containing non-ASCII, and the supplied value is attacker-chosen -- so the
+    obvious str form would hand a remote peer an uncaught exception. Encoding
+    first cannot fail, because a websocket TEXT frame is already valid Unicode.
+
+    The timing channel this closes is not realistically exploitable through
+    Cloudflare (nanoseconds of signal under milliseconds of jitter, against a
+    256-bit token). It is here because this file is the reference the ESP32
+    firmware will be written from, and it should not model `==` on a secret.
+    """
+    if config.AUTH_TOKEN is None:
+        return True
+    return secrets.compare_digest(
+        supplied.encode("utf-8"), config.AUTH_TOKEN.encode("utf-8")
+    )
 
 
 def _log_task_error(task: asyncio.Task) -> None:
@@ -219,12 +324,30 @@ async def stream(ws: WebSocket) -> None:
     await ws.accept()
 
     # --- handshake: first frame is the auth token (TEXT) --------------------
+    # Bounded on three axes, because everything before the token check is work
+    # done on behalf of an unauthenticated stranger:
+    #   * time    -- without a timeout a peer that connects and says nothing is
+    #                held forever (the websocket layer answers protocol pings for
+    #                it, so it never looks idle and costs the attacker nothing).
+    #   * type    -- starlette's receive_text() does message["text"], so a BINARY
+    #                first frame raised an uncaught KeyError: a traceback per
+    #                attempt, into a log file that does not rotate.
+    #   * length  -- a token is 43 chars; anything near the frame cap is an
+    #                attempt to make us allocate before we have checked anything.
     try:
-        token = await ws.receive_text()
-    except WebSocketDisconnect:
+        token = await asyncio.wait_for(
+            ws.receive_text(), timeout=config.WS_AUTH_TIMEOUT_S
+        )
+    except (WebSocketDisconnect, asyncio.TimeoutError, KeyError):
+        await _close_quietly(ws, code=1008)
         return
-    if config.AUTH_TOKEN is not None and token != config.AUTH_TOKEN:
-        await ws.close(code=1008)  # policy violation
+    if len(token) > 512 or not _token_ok(token):
+        # Count and log it: a rejected handshake used to be completely silent,
+        # so there was no signal that anyone was probing and nothing to act on.
+        metrics.record_event("auth_failed")
+        client = ws.client.host if ws.client else "?"
+        log.warning("rejected /stream handshake from %s", client)
+        await _close_quietly(ws, code=1008)  # policy violation
         return
 
     metrics.connection_opened()
@@ -264,8 +387,18 @@ async def stream(ws: WebSocket) -> None:
     async def keepalive() -> None:
         while True:
             await asyncio.sleep(config.WS_KEEPALIVE_CHECK_S)
-            if time.monotonic() - last_audio >= config.WS_IDLE_PING_S:
+            idle = time.monotonic() - last_audio
+            # Ping to hold the connection open through Cloudflare...
+            if idle >= config.WS_IDLE_PING_S:
                 await _send(ws, {"type": "ping", "t": time.time()})
+            # ...but eventually let it go. Pinging forever meant an idle socket
+            # was never reclaimed: a post-auth client could hold connections at
+            # zero cost, and the server helpfully kept them alive. A real
+            # listener sends audio; silence for this long is an abandoned tab.
+            if config.WS_IDLE_CLOSE_S > 0 and idle >= config.WS_IDLE_CLOSE_S:
+                log.info("closing idle /stream connection (%.0fs without audio)", idle)
+                await _close_quietly(ws, code=1000)
+                return
 
     keepalive_task = asyncio.create_task(keepalive())
 
@@ -325,6 +458,16 @@ async def stream(ws: WebSocket) -> None:
             # Hot path: just segment. This returns instantly for the common
             # case (mid-utterance) and occasionally hands back finished audio.
             for audio in segmenter.feed(data):
+                # Backpressure. Whisper and SER both serialise process-wide, so
+                # the pipeline drains ~3 utterances/sec no matter how many
+                # arrive; without a bound a client can queue work far faster
+                # than that and the backlog IS retained audio. Conversational
+                # speech produces about one utterance a second, so a real
+                # client never reaches this. Drop rather than queue: losing a
+                # word beats an unbounded queue that ends as an OOM.
+                if len(pending) >= config.MAX_INFLIGHT_UTTERANCES:
+                    metrics.record_event("utterance_dropped")
+                    continue
                 uid += 1
                 await _send(ws, {"type": "status", "state": "heard"})
                 if vad_telemetry:
@@ -356,15 +499,30 @@ async def stream(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        # Flush a trailing utterance if the client dropped mid-sentence.
-        tail = segmenter.flush()
-        if tail is not None:
-            uid += 1
-            await _process_utterance(ws, interpreter, uid, tail)
+        # Release the accounting and the background work FIRST. This used to run
+        # after the flush below, which meant a disconnected client still held a
+        # keepalive task, its pending set, and a connections_active slot for as
+        # long as the flush took -- up to a 30s Ollama call. Repeating that on a
+        # loop was a cheap way to accumulate zombie pipelines.
         metrics.connection_closed()
         keepalive_task.cancel()
         for task in pending:
             task.cancel()
+
+        # Flush a trailing utterance if the client dropped mid-sentence. Worth
+        # doing -- a real client that drops mid-sentence still wants the read --
+        # but time-bounded, because nobody is waiting on the other end if the
+        # socket is already gone.
+        tail = segmenter.flush()
+        if tail is not None:
+            uid += 1
+            try:
+                await asyncio.wait_for(
+                    _process_utterance(ws, interpreter, uid, tail),
+                    timeout=config.WS_FLUSH_TIMEOUT_S,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                log.info("dropped trailing utterance after disconnect (timeout)")
 
 
 @app.get("/health")
@@ -401,7 +559,27 @@ def main() -> None:
         format="%(levelname)s:     %(name)s: %(message)s",
     )
 
-    uvicorn.run(app, host="0.0.0.0", port=config.PORT)
+    uvicorn.run(
+        app,
+        host=config.HOST,
+        port=config.PORT,
+        # Every one of these is unbounded or permissive by default, and this
+        # server is reachable from the internet. None of them constrains a
+        # conforming client -- see the "Exposure limits" block in config.py.
+        ws_max_size=config.WS_MAX_MESSAGE_BYTES,
+        # permessage-deflate compresses PCM ~21:1, and the payload is chosen by
+        # the sender. That turned ~1.6 KB on the wire into one full pipeline
+        # job. The real client streams raw PCM continuously, so compression
+        # buys it little and buys an attacker a great deal.
+        ws_per_message_deflate=False,
+        limit_concurrency=config.MAX_CONNECTIONS,
+        backlog=64,
+        # The access log records the query string, and the token travels in it
+        # (?token=... on every dashboard poll, ~2000 lines/hour). The start
+        # scripts redirect this to a file that is only cleared on next launch,
+        # so the credential outlived the process in cleartext.
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

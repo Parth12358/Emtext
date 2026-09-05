@@ -7,6 +7,7 @@
 #include "src/display/display.h"
 #include "src/controls/controls.h"
 #include "src/audio/audio.h"
+#include "src/net/net.h"
 
 // ---- semantic button callbacks (wiring only) ----
 static void onWake() {
@@ -40,6 +41,16 @@ static void onPowerOff() { LOG_WARN("power off (stub)"); }
 static void onOrient(int rot) { display::setRotation(rot); }
 static void onLift() {
   if (display::state() == display::State::Dark) display::setState(display::State::Glance);
+}
+
+// Frames from the network (dispatched on core 1 by net::loop()).
+static void onNetFrame(const proto::Frame& f) {
+  switch (f.type) {
+    case proto::Type::Status:    LOG_INFO("net: status=%s", f.status); break;
+    case proto::Type::Utterance: LOG_INFO("net: utterance #%d '%s'", f.id, f.transcript); break;
+    case proto::Type::Read:      LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read); break;
+    default: break;
+  }
 }
 
 void setup() {
@@ -82,6 +93,10 @@ void setup() {
   // Stage 3: bring up the mic + energy gate.
   audio::begin();
 
+  // Stage 4: bring up the network owner (runs on its own task on core 0).
+  net::begin();
+  net::onFrame(onNetFrame);
+
   // seed fake data so glance/history/status show something (real reads land in Stage 6)
   display::setGlance("hey, nice work", "positive", "hey nice work");
   display::setConnection("searching");
@@ -94,6 +109,14 @@ void loop() {
   controls::loop();
   display::loop();
   audio::loop();
+  net::loop();
+
+  // reflect the network state on the display's connection dot
+  static net::State lastNet = net::State::Off;
+  if (net::state() != lastNet) {
+    lastNet = net::state();
+    display::setConnection(lastNet == net::State::Ready ? "ready" : "searching");
+  }
 
   static uint32_t last = 0;
   uint32_t now = millis();

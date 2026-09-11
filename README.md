@@ -36,9 +36,10 @@ emtext is two codebases in one repo, joined only by the websocket **wire protoco
 The wire protocol is the contract between them (raw PCM 16 kHz mono int16 in;
 `ready`/`status`/`utterance`/`read` JSON out), so the two are developed independently.
 **Firmware progress:** board bring-up, config/NVS + serial console, the display + controls
-UX, and mic capture with an energy gate are done (Stages 0–3 of 9); connectivity
-(WiFi/TLS/WebSocket) and a phone-based Wi-Fi provisioning portal are next. Full module
-architecture and the staged plan live in [firmware/README.md](firmware/README.md).
+UX, mic capture with an energy gate, and connectivity — an authenticated, **cert-validated
+`wss://`** link to this server on a dedicated core so audio capture never stalls — are done
+(Stages 0–4 of 9). Audio streaming (Stage 5) and a phone-based Wi-Fi provisioning portal are
+next. Full module architecture and the staged plan live in [firmware/README.md](firmware/README.md).
 
 Everything below documents the **server half**.
 

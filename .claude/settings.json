@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ollama list)",
+      "Bash(tasklist *)",
+      "Bash(sc query *)",
+      "Bash(where *)"
+    ]
+  }
+}

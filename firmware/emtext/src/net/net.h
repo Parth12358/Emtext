@@ -14,4 +14,5 @@ namespace net {
   State       state();     // atomic-ish read, safe from core 1
   const char* stateName();
   void        onFrame(void (*cb)(const proto::Frame&));   // dispatched on core 1
+  void        sendAudio(const int16_t* pcm, size_t n);    // core 1 -> TX queue -> core 0
 }

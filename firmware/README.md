@@ -20,7 +20,7 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 3 mic + energy gate | `audio` | ✅ done |
 | 4 connectivity | `net`, `transport`, `proto` | ✅ 4a–4d (validated wss) |
 | 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ⬜ after 4 |
-| 5 wire protocol end-to-end | `net` + `proto` + `audio` | ⬜ |
+| 5 wire protocol end-to-end | `net` + `proto` + `audio` | 🟡 5.1–5.3 done · 5.4 next |
 | 6 glance rendering (real reads) | `display` | ⬜ |
 | 7 audio cues | `cues` | ⬜ |
 | 8 power management | `power` | ⬜ |
@@ -75,9 +75,12 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   `setAutoReconnect(false)` + disconnect-before-retry, NTP (`configTzTime`), the logged state
   machine (searching→connected→socket-connecting→ready), backoff 1→5 s, WebSocket connect to
   `/stream` via `transport`, token auth handshake, auth-reject halt (close-before-`ready` →
-  `Halted`, auto-resumes on token change), and **TLS cert validation** against the GTS root
-  bundle. *Next (Stage 5):* `sendAudio()`, the drop-oldest outage buffer, and the degraded state.
-  Exposes `begin()`, `loop()`, `state()`, `onFrame(cb)`.
+  `Halted`, auto-resumes on token change), TLS cert validation against the GTS bundle (AHC
+  backend), and **live audio streaming** — `sendAudio()` (core 1) → a **~3 s drop-oldest PSRAM
+  ring** → task drains in ~64 ms frames → `sendBIN` (5.2/5.3, verified: real `utterance`/`read`
+  come back, and audio spoken during a ~3 s WiFi drop survives). *Next:* degraded state (5.4).
+  Exposes `begin()`, `loop()`,
+  `state()`, `onFrame(cb)`, `sendAudio(pcm,n)`.
 - **`transport`** ✅ — WebSocket-over-TLS, abstracted for swappability. `connect()` does the TLS
   handshake **and** the HTTP upgrade in one call; `sendText/sendBin/poll/connected/close`. Two
   backends, selected by `TRANSPORT_BACKEND_L2004` in `transport.h`; used only from the core-0
@@ -250,9 +253,11 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
 - **4P — Wi-Fi provisioning portal** ⬜ `portal`: SoftAP + captive page + form → writes `config`
   → `net` reconnects. Toggled from the Status screen (BtnB, context-sensitive). WPA2 on the AP.
   Built *after* 4, since it just writes the config the STA path already consumes.
-- **5 — wire protocol end-to-end** ⬜ send token, stream gated PCM as BINARY frames, parse
-  `ready/status/utterance/read/ping`, echo `pong`; add the 2–3 s outage send buffer in `net`.
-  Verify: speak → `utterance`+`read` in serial; 3 s WiFi drop loses no audio.
+- **5 — wire protocol end-to-end** 🟡 **5.1 ✅** TX path proven (synthetic burst → `status:heard`);
+  **5.2 ✅** real mic streaming — `audio.onChunk → net::sendAudio` → cross-core handoff →
+  `sendBIN`; **verified: speak → `utterance` + `read` come back**. **5.3 ✅** ~3 s drop-oldest
+  PSRAM outage ring — **verified: audio spoken during a ~3 s WiFi drop survives**. **5.4** degraded
+  state. (Requires the Links2004 backend — AHC's sub-framing is too slow for sustained streaming.)
 - **6 — glance rendering (real reads)** ⬜ wire `read` → `display::setGlance` (≤8 words),
   processing indicator, history, status. Verify: read on screen within 3 s of utterance end.
 - **7 — audio cues** ⬜ `cues`: ≤150 ms tones, negative + mismatch only, silent for

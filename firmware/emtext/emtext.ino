@@ -98,6 +98,9 @@ void setup() {
   net::begin();
   net::onFrame(onNetFrame);
 
+  // Stage 5.2: gated mic chunks -> network (cross-core handoff).
+  audio::onChunk([](const int16_t* p, size_t n){ net::sendAudio(p, n); });
+
   // seed fake data so glance/history/status show something (real reads land in Stage 6)
   display::setGlance("hey, nice work", "positive", "hey nice work");
   display::setConnection("searching");

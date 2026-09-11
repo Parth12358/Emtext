@@ -6,6 +6,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <esp_heap_caps.h>
+#include <string.h>
+#include <stdio.h>
 
 // Stage 4a: WiFi (fallback list) + NTP + the logged state machine, running on a
 // dedicated core-0 task. The socket step (TLS + WebSocket + auth) is stubbed here
@@ -18,6 +22,18 @@ namespace {
   void (*cbFrame)(const proto::Frame&) = nullptr;
   uint32_t backoffMs = 1000;
   int      authFails = 0;   // consecutive close-before-ready cycles (bad token)
+  const uint32_t PING_MS     = 15000;   // client keepalive interval
+  const uint32_t DEGRADED_MS = 45000;   // no server frame this long (socket up) -> degraded
+
+  // Cross-core audio handoff (5.3): a drop-oldest byte ring in PSRAM. core 1 (sendAudio)
+  // writes, core 0 (task) drains -> sendBIN. Sized for a ~3 s outage so a WiFi blip loses
+  // no audio (requirement Section 2). Mutex-guarded (both cores touch head/tail).
+  const size_t      RING_WANT = 3000 * 16 * 2;   // 3 s * 16 samples/ms * 2 bytes = 96000
+  uint8_t*          ring = nullptr;
+  size_t            ringCap = 0;                 // actual capacity allocated
+  size_t            ringHead = 0, ringTail = 0, ringCount = 0;
+  SemaphoreHandle_t ringMx = nullptr;
+  uint32_t          droppedBytes = 0;
 
   const char* NAMES[] = {
     "off", "searching", "connected", "socket-connecting", "ready", "degraded", "halted"
@@ -98,26 +114,6 @@ namespace {
   }
   void resetBackoff() { backoffMs = 1000; }
 
-  // 5.1: one-shot synthetic burst to prove the TX path + server ingest end-to-end,
-  // before any mic/cross-core wiring. Removed in 5.2. Loud noise trips the server VAD;
-  // trailing silence lets END_SILENCE_MS close the utterance -> `status: heard` returns.
-  void sendTestBurst() {
-    LOG_INFO("net: [5.1] sending synthetic audio burst (watch for status:heard)");
-    const int CH = 1024;                 // 64 ms at 16 kHz -> 2048 bytes/frame
-    static int16_t tb[CH];
-    for (int fr = 0; fr < 16; fr++) {    // ~1 s loud noise (>> server SPEECH_RMS=500)
-      for (int i = 0; i < CH; i++) tb[i] = (int16_t)random(-6000, 6000);
-      transport::sendBin((const uint8_t*)tb, CH * sizeof(int16_t));
-      vTaskDelay(pdMS_TO_TICKS(64));
-    }
-    for (int i = 0; i < CH; i++) tb[i] = 0;
-    for (int fr = 0; fr < 13; fr++) {    // ~0.8 s silence -> end-of-utterance
-      transport::sendBin((const uint8_t*)tb, CH * sizeof(int16_t));
-      vTaskDelay(pdMS_TO_TICKS(64));
-    }
-    LOG_INFO("net: [5.1] burst done");
-  }
-
   void task(void*) {
     for (;;) {
       setState(net::State::Searching);
@@ -143,12 +139,15 @@ namespace {
       String   triedToken = cc.token;
       uint32_t openedAt   = millis();
       bool     gotReady   = false;
-      bool     sentTest   = false;
       char     buf[512];
+      uint32_t lastRx     = millis();
+      uint32_t lastPing   = millis();
 
       while (transport::connected() && WiFi.status() == WL_CONNECTED) {
         size_t n = transport::poll(buf, sizeof(buf));
         if (n > 0) {
+          lastRx = millis();
+          if (gotReady && st == net::State::Degraded) setState(net::State::Ready);   // recovered
           proto::Frame f;
           proto::parse(buf, f);
           if (f.type == proto::Type::Ready) {
@@ -158,7 +157,38 @@ namespace {
           }
           xQueueSend(rxq, &f, 0);
         }
-        if (gotReady && !sentTest) { sentTest = true; sendTestBurst(); }  // 5.1 one-shot
+
+        // 5.4: client keepalive ping (server echoes pong -> keeps a quiet link fresh).
+        if (gotReady && millis() - lastPing >= PING_MS) {
+          lastPing = millis();
+          char pb[48];
+          snprintf(pb, sizeof(pb), "{\"type\":\"ping\",\"t\":%lu}", (unsigned long)millis());
+          transport::sendText(pb);
+        }
+        // 5.4: no server frame for DEGRADED_MS while the socket is still up = degraded.
+        // Keep the socket and keep buffering into the ring -- do NOT tear down.
+        if (gotReady && st == net::State::Ready && (millis() - lastRx) > DEGRADED_MS) {
+          setState(net::State::Degraded);
+        }
+        if (gotReady) {                          // 5.3: drain the PSRAM ring -> server
+          static uint8_t txbuf[2048];            // ~64 ms per frame
+          for (;;) {
+            xSemaphoreTake(ringMx, portMAX_DELAY);
+            size_t take = (ringCount < sizeof(txbuf)) ? ringCount : sizeof(txbuf);
+            take &= ~((size_t)1);                // keep int16-aligned
+            if (take) {
+              size_t first = ringCap - ringTail;
+              if (first > take) first = take;
+              memcpy(txbuf, ring + ringTail, first);
+              if (take > first) memcpy(txbuf + first, ring, take - first);
+              ringTail = (ringTail + take) % ringCap;
+              ringCount -= take;
+            }
+            xSemaphoreGive(ringMx);
+            if (!take) break;
+            transport::sendBin(txbuf, take);
+          }
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
       }
       transport::close();
@@ -185,6 +215,17 @@ namespace {
 
 void net::begin() {
   rxq = xQueueCreate(8, sizeof(proto::Frame));
+  ringMx = xSemaphoreCreateMutex();
+  ring = (uint8_t*)heap_caps_malloc(RING_WANT, MALLOC_CAP_SPIRAM);
+  ringCap = RING_WANT;
+  if (!ring) {                                 // no PSRAM -> smaller internal fallback
+    ringCap = 16 * 1024;
+    ring = (uint8_t*)heap_caps_malloc(ringCap, MALLOC_CAP_8BIT);
+    LOG_WARN("net: no PSRAM; TX ring = %u B internal", (unsigned)ringCap);
+  } else {
+    LOG_INFO("net: TX ring %u B in PSRAM (~%us)", (unsigned)ringCap,
+             (unsigned)(ringCap / (16 * 2) / 1000));
+  }
   // 32 KB stack: the TLS handshake is stack-hungry, and the Links2004 backend
   // reaches mbedtls several frames deeper than AHC did -- 16 KB overflowed.
   xTaskCreatePinnedToCore(task, "net", 32768, nullptr, 1, &taskh, 0);   // core 0
@@ -202,3 +243,27 @@ void net::loop() {
 net::State net::state() { return st; }
 const char* net::stateName() { return NAMES[(int)st]; }
 void net::onFrame(void (*cb)(const proto::Frame&)) { cbFrame = cb; }
+
+// Called on core 1 (from audio::onChunk). Copies the chunk into the TX queue,
+// dropping the oldest if it's full, so a network stall never blocks capture.
+void net::sendAudio(const int16_t* pcm, size_t n) {
+  if (!ring || !ringMx) return;
+  size_t bytes = n * sizeof(int16_t);
+  const uint8_t* src = (const uint8_t*)pcm;
+  if (bytes > ringCap) { src += (bytes - ringCap); bytes = ringCap; }   // clamp (never hit)
+
+  xSemaphoreTake(ringMx, portMAX_DELAY);
+  if (ringCount + bytes > ringCap) {           // drop oldest to make room
+    size_t drop = ringCount + bytes - ringCap;
+    ringTail = (ringTail + drop) % ringCap;
+    ringCount -= drop;
+    droppedBytes += drop;
+  }
+  size_t first = ringCap - ringHead;
+  if (first > bytes) first = bytes;
+  memcpy(ring + ringHead, src, first);
+  if (bytes > first) memcpy(ring, src + first, bytes - first);
+  ringHead = (ringHead + bytes) % ringCap;
+  ringCount += bytes;
+  xSemaphoreGive(ringMx);
+}

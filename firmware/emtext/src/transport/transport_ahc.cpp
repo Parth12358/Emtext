@@ -1,8 +1,13 @@
 #include "transport.h"
 #include "../logx.h"
+#include "certs.h"               // Google Trust Services roots (R1-R4)
 #include <WiFiClientSecure.h>
 #include <ArduinoHttpClient.h>   // WebSocketClient + TYPE_TEXT/TYPE_BINARY
 #include <string.h>
+
+// 4d: validate the server cert against the GTS root bundle. Flip to 1 as an escape
+// hatch if a cert change ever blocks connecting (then refresh certs.h).
+#define TLS_INSECURE 0
 
 // ArduinoHttpClient backend. NOTE: its WebSocketClient has a 128-byte TX buffer and
 // sends whole (masked, un-fragmented) messages -- fine for the token + JSON here;
@@ -16,7 +21,11 @@ namespace {
 bool transport::connect(const char* host, uint16_t port, const char* path) {
   close();                          // tear down any previous session
   tls = new WiFiClientSecure();
-  tls->setInsecure();               // 4d: swap to setCACert()/setCACertBundle()
+#if TLS_INSECURE
+  tls->setInsecure();               // escape hatch: encrypt but skip validation
+#else
+  tls->setCACert(GTS_ROOTS_PEM);    // validate against the GTS root bundle
+#endif
   tls->setHandshakeTimeout(15);     // seconds
   ws  = new WebSocketClient(*tls, host, port);
   int rc = ws->begin(path);         // TLS handshake + HTTP upgrade; 0 == HTTP 101

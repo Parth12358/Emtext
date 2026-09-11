@@ -18,7 +18,7 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 1 config + logging | `config`, `logx` | ✅ done |
 | 2 controls + display skeleton | `controls`, `display` | ✅ done |
 | 3 mic + energy gate | `audio` | ✅ done |
-| 4 connectivity | `net`, `transport`, `proto` | 🟡 4a–4c done · 4d (cert) next |
+| 4 connectivity | `net`, `transport`, `proto` | ✅ 4a–4d (validated wss) |
 | 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ⬜ after 4 |
 | 5 wire protocol end-to-end | `net` + `proto` + `audio` | ⬜ |
 | 6 glance rendering (real reads) | `display` | ⬜ |
@@ -67,20 +67,21 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   value-type `Frame` (fixed char buffers so it queues across cores by value), `parse(json,
   Frame&)`, `toneName()`. Deps: `ArduinoJson` v7.
 
-**Network** (🟡 `net`/`transport` 4a–4c done; 4d cert-validation + degraded pending):
+**Network** (✅ 4a–4d done — authenticated + cert-validated `wss`; degraded folds into Stage 5):
 
-- **`net`** 🟡 — **the single network owner**, on a **FreeRTOS task pinned to core 0** so the
+- **`net`** ✅ — **the single network owner**, on a **FreeRTOS task pinned to core 0** so the
   blocking WiFi/TLS work never stalls the core-1 loop; frames cross to core 1 through a queue
-  drained in `loop()`. *Done (4a–4c):* WiFi over the fallback list (+ scan diagnostic),
+  drained in `loop()`. *Done (4a–4d):* WiFi over the fallback list (+ scan diagnostic),
   `setAutoReconnect(false)` + disconnect-before-retry, NTP (`configTzTime`), the logged state
   machine (searching→connected→socket-connecting→ready), backoff 1→5 s, WebSocket connect to
-  `/stream` via `transport`, token auth handshake, and auth-reject halt (close-before-`ready` →
-  `Halted`, auto-resumes on token change). *Next:* 4d cert validation (`setInsecure` →
-  `setCACert`/bundle) + degraded state, and (Stage 5) `sendAudio()` + the drop-oldest outage
-  buffer. Exposes `begin()`, `loop()`, `state()`, `onFrame(cb)`.
+  `/stream` via `transport`, token auth handshake, auth-reject halt (close-before-`ready` →
+  `Halted`, auto-resumes on token change), and **TLS cert validation** against the GTS root
+  bundle. *Next (Stage 5):* `sendAudio()`, the drop-oldest outage buffer, and the degraded state.
+  Exposes `begin()`, `loop()`, `state()`, `onFrame(cb)`.
 - **`transport`** ✅ — WebSocket-over-TLS, abstracted for swappability. `connect()` does the TLS
   handshake **and** the HTTP upgrade in one call; `sendText/sendBin/poll/connected/close`. Owns
-  the `WiFiClientSecure` for the session. Backend `transport_ahc` (ArduinoHttpClient) built;
+  the `WiFiClientSecure` for the session and validates the server cert against the GTS root bundle
+  (`certs.h`, `#define TLS_INSECURE 1` to bypass). Backend `transport_ahc` (ArduinoHttpClient) built;
   `transport_l2004` (Links2004) is the Stage-5 swap if the 128 B TX cap bites. Used only from
   the core-0 task, so no thread-safety needed.
 - **`portal`** ⬜ — phone-based Wi-Fi provisioning. `net` switches the radio to **SoftAP**;
@@ -227,12 +228,11 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
 - **3 — mic + energy gate** ✅ `M5.Mic` 16 kHz, DC-corrected AC RMS + peak/clip, gate at
   `energyFloor` + 500 ms hangover, `AUDIO_ENERGY_SERIAL` meter. Verify: RMS rises on speech,
   gate holds ~500 ms, mute/pause stop the mic.
-- **4 — connectivity** 🟡 `net` + `transport`. **4a ✅** WiFi (fallback list + scan diagnostic) +
-  NTP + logged core-0 state machine; **4b ✅** TLS `setInsecure()` + `GET /health` (verified on
-  hardware: `200`, `body-ok=1`, TLS up ~715 ms); **4c ✅** `transport` WebSocket to `/stream` +
-  token auth → `ready` (verified: `net -> ready`, dot green), backoff/reconnect + auth-reject
-  halt done; **4d** swap `setInsecure` → cert validation (`setCACert`/bundle) + degraded state
-  (degraded folds into Stage 5's audio buffer).
+- **4 — connectivity** ✅ `net` + `transport`. **4a ✅** WiFi (fallback list + scan diagnostic) +
+  NTP + logged core-0 state machine; **4b ✅** TLS + `GET /health` (`200`, `body-ok=1`); **4c ✅**
+  `transport` WebSocket to `/stream` + token auth → `ready` (dot green), backoff/reconnect +
+  auth-reject halt; **4d ✅** `setCACert` GTS root bundle (`certs.h`) — validated `wss` handshake
+  (verified on hardware, ~2 s). Degraded state folds into Stage 5.
 - **4P — Wi-Fi provisioning portal** ⬜ `portal`: SoftAP + captive page + form → writes `config`
   → `net` reconnects. Toggled from the Status screen (BtnB, context-sensitive). WPA2 on the AP.
   Built *after* 4, since it just writes the config the STA path already consumes.

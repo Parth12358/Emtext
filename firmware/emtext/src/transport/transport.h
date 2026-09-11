@@ -1,6 +1,11 @@
 #pragma once
 #include <Arduino.h>
 
+// Backend selector: 1 = Links2004 arduinoWebSockets (one frame per chunk — needed for
+// real-time streaming); 0 = ArduinoHttpClient (128 B TX buffer, sub-framed — too slow
+// for sustained streaming, kept for reference). Only the selected .cpp compiles.
+#define TRANSPORT_BACKEND_L2004 1
+
 // WebSocket-over-TLS transport, abstracted so the backend is swappable. Used only
 // from net's core-0 task, so it needs no thread-safety. connect() performs the TLS
 // handshake AND the HTTP upgrade in one call. Backend selected at build time

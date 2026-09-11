@@ -79,11 +79,20 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   bundle. *Next (Stage 5):* `sendAudio()`, the drop-oldest outage buffer, and the degraded state.
   Exposes `begin()`, `loop()`, `state()`, `onFrame(cb)`.
 - **`transport`** ✅ — WebSocket-over-TLS, abstracted for swappability. `connect()` does the TLS
-  handshake **and** the HTTP upgrade in one call; `sendText/sendBin/poll/connected/close`. Owns
-  the `WiFiClientSecure` for the session and validates the server cert against the GTS root bundle
-  (`certs.h`, `#define TLS_INSECURE 1` to bypass). Backend `transport_ahc` (ArduinoHttpClient) built;
-  `transport_l2004` (Links2004) is the Stage-5 swap if the 128 B TX cap bites. Used only from
-  the core-0 task, so no thread-safety needed.
+  handshake **and** the HTTP upgrade in one call; `sendText/sendBin/poll/connected/close`. Two
+  backends, selected by `TRANSPORT_BACKEND_L2004` in `transport.h`; used only from the core-0
+  task, so no thread-safety needed.
+  - **`transport_l2004`** (Links2004 arduinoWebSockets) — **active.** `sendBIN` sends a full
+    2048 B chunk as **one** frame → real-time capable. Measured: the 5.1 synthetic burst
+    (~1.8 s of audio) sends in **~1.96 s**. Needs the net task at **32 KB** stack (its SSL path
+    reaches mbedtls deeper than AHC; 16 KB overflowed → `LoadProhibited`). ⚠️ **On insecure TLS
+    for now** (`L2004_INSECURE 1`, `beginSSL`): `beginSslWithCA` against the GTS bundle fails
+    (connection/upgrade are fine — cert path only; likely heap/handshake-timeout). Hardening
+    TODO: try pinning **GTS Root R4 alone** (1 cert vs 4) + a handshake timeout.
+  - **`transport_ahc`** (ArduinoHttpClient) — works but **too slow for sustained streaming.** Its
+    128 B TX buffer can't be raised from the sketch (its impl `.cpp` compiles with the default),
+    so a chunk is split into ~17 sub-frames = ~270 tiny TLS records/s; the same 5.1 burst took
+    **~6-7 s**. Kept as reference/fallback, and it **does** validate the GTS bundle (`setCACert`).
 - **`portal`** ⬜ — phone-based Wi-Fi provisioning. `net` switches the radio to **SoftAP**;
   `portal` serves a self-contained config page (`WebServer` + `DNSServer` captive redirect),
   the form writes `config` + `save()`, then `net` returns to STA and reconnects. Owns only the
@@ -209,6 +218,11 @@ Conventions:
   out" is a network-state decision; `audio` doesn't know about the network. `audio` just
   captures, gates, and emits; `net` owns the send queue that absorbs an outage (Stage 5).
 - **Mute cuts the mic**, not just the cues — so mute and pause both gate the mic.
+- **⚠️ TLS is insecure on the active (Links2004) backend** — a known regression from 4d. Cert
+  validation works under AHC but `beginSslWithCA` fails under Links2004, so it runs `beginSSL`
+  (encrypted, unvalidated) for now. Fine for dev on a trusted network; **must be fixed before
+  deployment** (try single-cert GTS Root R4 + handshake timeout). The `L2004_INSECURE` flag
+  gates it.
 - **Open decision — the low-confidence *source*.** `display` can dim an uncertain read, but the
   `read` frame carries no confidence yet. Options (server-side, the user's call): hedged
   language in the `read` text ("sounds like she's joking"), and/or an additive optional

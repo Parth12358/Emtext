@@ -98,6 +98,26 @@ namespace {
   }
   void resetBackoff() { backoffMs = 1000; }
 
+  // 5.1: one-shot synthetic burst to prove the TX path + server ingest end-to-end,
+  // before any mic/cross-core wiring. Removed in 5.2. Loud noise trips the server VAD;
+  // trailing silence lets END_SILENCE_MS close the utterance -> `status: heard` returns.
+  void sendTestBurst() {
+    LOG_INFO("net: [5.1] sending synthetic audio burst (watch for status:heard)");
+    const int CH = 1024;                 // 64 ms at 16 kHz -> 2048 bytes/frame
+    static int16_t tb[CH];
+    for (int fr = 0; fr < 16; fr++) {    // ~1 s loud noise (>> server SPEECH_RMS=500)
+      for (int i = 0; i < CH; i++) tb[i] = (int16_t)random(-6000, 6000);
+      transport::sendBin((const uint8_t*)tb, CH * sizeof(int16_t));
+      vTaskDelay(pdMS_TO_TICKS(64));
+    }
+    for (int i = 0; i < CH; i++) tb[i] = 0;
+    for (int fr = 0; fr < 13; fr++) {    // ~0.8 s silence -> end-of-utterance
+      transport::sendBin((const uint8_t*)tb, CH * sizeof(int16_t));
+      vTaskDelay(pdMS_TO_TICKS(64));
+    }
+    LOG_INFO("net: [5.1] burst done");
+  }
+
   void task(void*) {
     for (;;) {
       setState(net::State::Searching);
@@ -123,6 +143,7 @@ namespace {
       String   triedToken = cc.token;
       uint32_t openedAt   = millis();
       bool     gotReady   = false;
+      bool     sentTest   = false;
       char     buf[512];
 
       while (transport::connected() && WiFi.status() == WL_CONNECTED) {
@@ -137,6 +158,7 @@ namespace {
           }
           xQueueSend(rxq, &f, 0);
         }
+        if (gotReady && !sentTest) { sentTest = true; sendTestBurst(); }  // 5.1 one-shot
         vTaskDelay(pdMS_TO_TICKS(2));
       }
       transport::close();
@@ -163,8 +185,9 @@ namespace {
 
 void net::begin() {
   rxq = xQueueCreate(8, sizeof(proto::Frame));
-  // 16 KB stack: the TLS handshake (Stage 4c+) is stack-hungry.
-  xTaskCreatePinnedToCore(task, "net", 16384, nullptr, 1, &taskh, 0);   // core 0
+  // 32 KB stack: the TLS handshake is stack-hungry, and the Links2004 backend
+  // reaches mbedtls several frames deeper than AHC did -- 16 KB overflowed.
+  xTaskCreatePinnedToCore(task, "net", 32768, nullptr, 1, &taskh, 0);   // core 0
   LOG_INFO("net: task started on core 0");
 }
 

@@ -1,4 +1,5 @@
 #include "transport.h"
+#if !TRANSPORT_BACKEND_L2004      // AHC backend (kept for reference; Links2004 is default)
 #include "../logx.h"
 #include "certs.h"               // Google Trust Services roots (R1-R4)
 #include <WiFiClientSecure.h>
@@ -46,9 +47,20 @@ bool transport::sendText(const char* s) {
 
 bool transport::sendBin(const uint8_t* data, size_t n) {
   if (!ws) return false;
-  ws->beginMessage(TYPE_BINARY);
-  ws->write(data, n);
-  return ws->endMessage() == 0;
+  // AHC's WebSocketClient has a 128 B TX buffer, and a sketch-side #define can't raise
+  // it (its impl .cpp compiles with the default). So split into sub-frames that fit;
+  // the server's segmenter concatenates consecutive binary frames into one PCM stream.
+  // If sustained-stream overhead bites, swap to the Links2004 backend (one frame/chunk).
+  const size_t MAX = 120;                 // even -> stays int16-aligned
+  while (n > 0) {
+    size_t part = (n > MAX) ? MAX : n;
+    ws->beginMessage(TYPE_BINARY);
+    ws->write(data, part);
+    if (ws->endMessage() != 0) return false;
+    data += part;
+    n -= part;
+  }
+  return true;
 }
 
 size_t transport::poll(char* buf, size_t cap) {
@@ -70,3 +82,5 @@ void transport::close() {
   if (ws)  { delete ws;  ws  = nullptr; }
   if (tls) { tls->stop(); delete tls; tls = nullptr; }
 }
+
+#endif  // !TRANSPORT_BACKEND_L2004

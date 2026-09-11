@@ -51,11 +51,15 @@ namespace {
     gateOpen = (lastVoiced != 0) && (now - lastVoiced <= HANGOVER_MS);
 
 #if AUDIO_ENERGY_SERIAL
-    int bars = lastRms / 50; if (bars > 24) bars = 24;
-    char bar[25]; for (int i = 0; i < 24; i++) bar[i] = (i < bars) ? '#' : ' '; bar[24] = 0;
-    bool clip = (lastPeak >= 32000);   // full-scale int16 is 32767
-    Serial.printf("[mic] rms=%4d peak=%5d |%s| %s%s\n",
-                  lastRms, lastPeak, bar, gateOpen ? "VOICED" : "", clip ? " CLIP!" : "");
+    // Runtime-gated on DEBUG so the meter doesn't drown other logs: `set log 3`
+    // shows it, `set log 2` (INFO, default) hides it -- no reflash needed.
+    if (logx::level() >= logx::DEBUG) {
+      int bars = lastRms / 50; if (bars > 24) bars = 24;
+      char bar[25]; for (int i = 0; i < 24; i++) bar[i] = (i < bars) ? '#' : ' '; bar[24] = 0;
+      bool clip = (lastPeak >= 32000);   // full-scale int16 is 32767
+      Serial.printf("[mic] rms=%4d peak=%5d |%s| %s%s\n",
+                    lastRms, lastPeak, bar, gateOpen ? "VOICED" : "", clip ? " CLIP!" : "");
+    }
 #endif
 
     // Only emit while the gate is open (voiced or within the hangover window).

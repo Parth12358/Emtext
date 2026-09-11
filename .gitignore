@@ -45,3 +45,4 @@ id_rsa*
 id_ed25519*
 .env
 .env.*
+firmware/emtext/secrets.h

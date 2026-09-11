@@ -167,6 +167,16 @@
   </div>
 
   <div class="card wide">
+    <h2>Connected clients</h2>
+    <div id="clients"><div class="empty">nobody connected</div></div>
+    <div class="note">
+      One row per open <code>/stream</code> socket. Through a tunnel every
+      connection arrives from cloudflared on loopback, so the address comes from
+      <code>CF-Connecting-IP</code> when present and falls back to the socket peer.
+    </div>
+  </div>
+
+  <div class="card wide">
     <h2>Recent utterances</h2>
     <div id="recent"><div class="empty">nothing yet — talk to the app and it appears here</div></div>
   </div>
@@ -229,6 +239,74 @@ function rows(target, pairs) {
   }
 }
 
+// A client's User-Agent is whatever the client says it is, so it is only ever
+// shown via textContent (below) and is reduced to a short label here. Order
+// matters: Edge and Chrome both claim "Safari", Edge also claims "Chrome".
+function agentLabel(ua) {
+  if (!ua) return "unknown";
+  const s = String(ua);
+  const hit = [
+    [/ESP32|esp-idf|Arduino/i, "ESP32"],
+    [/Edg\//, "Edge"],
+    [/OPR\/|Opera/i, "Opera"],
+    [/Firefox\//, "Firefox"],
+    [/Chrome\//, "Chrome"],
+    [/Safari\//, "Safari"],
+    [/curl|wget|python|httpx|websockets/i, "script"],
+  ].find(([re]) => re.test(s));
+  let name = hit ? hit[1] : "unknown";
+  if (/iPhone|iPad|iOS/i.test(s)) name += " · iOS";
+  else if (/Android/i.test(s)) name += " · Android";
+  else if (/Windows/i.test(s)) name += " · Windows";
+  else if (/Macintosh|Mac OS/i.test(s)) name += " · macOS";
+  else if (/Linux/i.test(s)) name += " · Linux";
+  return name;
+}
+
+function renderClients(list) {
+  const box = el("clients");
+  if (!list.length) { setEmpty(box, "nobody connected"); return; }
+  box.replaceChildren();
+  for (const c of list) {
+    const row = document.createElement("div");
+    row.className = "model";
+
+    const name = document.createElement("span");
+    name.className = "name";
+    // textContent, not innerHTML: `peer` comes from a request header and is
+    // client-controlled, so it must never reach an HTML parser.
+    name.textContent = c.peer || "unknown address";
+
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    const kb = (c.audio_bytes || 0) / 1024;
+    meta.textContent =
+      `${agentLabel(c.agent)} · up ${dur(c.connected_s)}` +
+      ` · ${c.utterances || 0} utt` +
+      ` · ${kb > 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.round(kb) + " KB"}`;
+    if (c.agent) meta.title = c.agent;   // full UA on hover, still not markup
+
+    row.append(name, meta);
+
+    // Idle is the useful at-a-glance signal: a connected client sending no
+    // audio looks identical to a working one without it.
+    const idle = document.createElement("span");
+    const quiet = (c.idle_s || 0) > 5;
+    idle.className = "badge" + (quiet ? "" : " gpu");
+    idle.textContent = quiet ? `idle ${dur(c.idle_s)}` : "streaming";
+    row.appendChild(idle);
+
+    if (c.vad) {
+      const b = document.createElement("span");
+      b.className = "badge";
+      b.textContent = "vad";
+      b.title = "connected with ?vad=1 (diagnostics)";
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+  }
+}
+
 function bar(v) {
   const cls = v > 90 ? "crit" : v > 70 ? "hot" : "";
   return `<div class="bar"><div class="${cls}" style="width:${Math.min(100, v || 0)}%"></div></div>`;
@@ -286,6 +364,8 @@ async function api(path, opts) {
 function render(d) {
   const p = d.pipeline, c = d.config, sys = d.system, gpu = d.gpu;
   el("uptime").textContent = `up ${dur(p.uptime_s)}`;
+
+  renderClients(p.clients || []);
 
   const cnt = p.counters || {};
   el("tiles").innerHTML =

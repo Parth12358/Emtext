@@ -55,21 +55,96 @@ _emotions: Counter[str] = Counter()
 _recent: deque[dict] = deque(maxlen=40)
 _connections_active = 0
 
+# --- live clients -----------------------------------------------------------
+# One entry per open /stream connection, removed on close. Bounded twice over:
+# by MAX_CONNECTIONS (uvicorn refuses past it) and by _CLIENT_CAP below, which
+# is pure paranoia in case a close is ever missed -- an unbounded dict here
+# would be a slow leak in the one module that must never destabilise the server.
+_clients: dict[int, dict] = {}
+_client_seq = 0
+_CLIENT_CAP = 128
+
 # --- system sampling --------------------------------------------------------
 _sys_history: deque[dict] = deque(maxlen=_SYS_WINDOW)
 
 
-def connection_opened() -> None:
-    global _connections_active
+def connection_opened(*, peer: str | None = None, agent: str | None = None,
+                      vad: bool = False) -> int:
+    """Register a live connection and return its id.
+
+    Every argument is optional and the id may be ignored, so the old
+    `connection_opened()` / `connection_closed()` call pair still behaves exactly
+    as before -- it just shows up on the dashboard as an unlabelled client.
+    """
+    global _connections_active, _client_seq
     with _lock:
         _connections_active += 1
         _counters["connections_total"] += 1
+        _client_seq += 1
+        cid = _client_seq
+        if len(_clients) < _CLIENT_CAP:
+            _clients[cid] = {
+                "id": cid,
+                "peer": peer,
+                "agent": agent,
+                "vad": vad,
+                "opened_at": time.time(),
+                "last_seen": time.time(),
+                "utterances": 0,
+                "audio_bytes": 0,
+            }
+        return cid
 
 
-def connection_closed() -> None:
+def connection_closed(cid: int | None = None) -> None:
     global _connections_active
     with _lock:
         _connections_active = max(0, _connections_active - 1)
+        if cid is not None:
+            _clients.pop(cid, None)
+
+
+def client_seen(cid: int | None, audio_bytes: int = 0,
+                utterance: bool = False) -> None:
+    """Note activity on a live connection.
+
+    Deliberately lock-free: this is called from the websocket read loop on every
+    audio frame, and that loop must never wait on anything (CLAUDE.md). Field
+    assignment on an existing dict is atomic under the GIL, and readers take a
+    copy, so the worst case is a reader seeing a count that is one frame stale --
+    which is fine for a 2-second dashboard poll and not worth a lock on the hot
+    path.
+    """
+    entry = _clients.get(cid) if cid is not None else None
+    if entry is None:
+        return
+    entry["last_seen"] = time.time()
+    if audio_bytes:
+        entry["audio_bytes"] = entry["audio_bytes"] + audio_bytes
+    if utterance:
+        entry["utterances"] = entry["utterances"] + 1
+
+
+def _clients_locked() -> list[dict]:
+    """Snapshot of live connections, newest first. **Caller must hold _lock.**
+
+    Split from `clients()` because `pipeline_stats()` calls this while already
+    holding the lock, and `threading.Lock` is not reentrant -- acquiring it twice
+    on one thread deadlocks the request.
+    """
+    now = time.time()
+    snapshot = [dict(c) for c in _clients.values()]
+    for c in snapshot:
+        c["connected_s"] = round(now - c["opened_at"], 1)
+        c["idle_s"] = round(now - c["last_seen"], 1)
+    snapshot.sort(key=lambda c: c["opened_at"], reverse=True)
+    return snapshot
+
+
+def clients() -> list[dict]:
+    """Snapshot of live connections, newest first."""
+    with _lock:
+        return _clients_locked()
 
 
 def record_utterance(
@@ -139,6 +214,9 @@ def pipeline_stats() -> dict:
         return {
             "uptime_s": round(time.time() - _started_at, 1),
             "connections_active": _connections_active,
+            # Live per-connection rows. Built inside the lock-free helper above,
+            # so this stays a cheap dict copy like everything else here.
+            "clients": _clients_locked(),
             "counters": dict(_counters),
             "latency": {k: _summary(v) for k, v in _latencies.items()},
             "tones": dict(_tones),

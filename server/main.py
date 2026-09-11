@@ -350,7 +350,19 @@ async def stream(ws: WebSocket) -> None:
         await _close_quietly(ws, code=1008)  # policy violation
         return
 
-    metrics.connection_opened()
+    # Identify the connection for the dashboard. All of this is best-effort and
+    # display-only -- nothing downstream branches on it.
+    #
+    # CF-Connecting-IP first: behind the tunnel every connection arrives from
+    # cloudflared on loopback, so ws.client.host is always 127.0.0.1 and tells
+    # you nothing about which device is actually streaming.
+    _peer = ws.headers.get("cf-connecting-ip") or (ws.client.host if ws.client else None)
+    _agent = (ws.headers.get("user-agent") or "")[:120] or None
+    client_id = metrics.connection_opened(
+        peer=_peer,
+        agent=_agent,
+        vad=ws.query_params.get("vad") in ("1", "true", "yes"),
+    )
 
     await _send(ws, {"type": "ready"})
     await _send(ws, {"type": "status", "state": "listening"})
@@ -428,6 +440,9 @@ async def stream(ws: WebSocket) -> None:
                 continue
 
             last_audio = time.monotonic()
+            # Lock-free by design -- see metrics.client_seen. One dict write per
+            # frame, so the read loop is not made to wait on telemetry.
+            metrics.client_seen(client_id, audio_bytes=len(data))
 
             # --- VAD telemetry -------------------------------------------
             # Throttled to ~10/s: enough to watch a level meter move, cheap
@@ -469,6 +484,7 @@ async def stream(ws: WebSocket) -> None:
                     metrics.record_event("utterance_dropped")
                     continue
                 uid += 1
+                metrics.client_seen(client_id, utterance=True)
                 await _send(ws, {"type": "status", "state": "heard"})
                 if vad_telemetry:
                     # Why this utterance closed, and how much of it was actually
@@ -504,7 +520,7 @@ async def stream(ws: WebSocket) -> None:
         # keepalive task, its pending set, and a connections_active slot for as
         # long as the flush took -- up to a 30s Ollama call. Repeating that on a
         # loop was a cheap way to accumulate zombie pipelines.
-        metrics.connection_closed()
+        metrics.connection_closed(client_id)
         keepalive_task.cancel()
         for task in pending:
             task.cancel()

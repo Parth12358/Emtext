@@ -434,6 +434,75 @@ sarcasm/irony boundary is subtle enough that labelling it consistently in
 
 ---
 
+## The server's memory is dominated by one checkpoint (mostly fixed)
+
+**Status:** largely fixed 2026-09-10, one avenue left · **Affects:**
+`server/ser.py`, `server/config.py`, `eval/slim_ser_ckpt.py`
+
+The running server was using **3,055 MB working set / 4,041 MB private**. Staged
+measurement (reproducing the live process to within 4 MB):
+
+| stage | RSS | delta |
+|---|---|---|
+| bare python | 25 MB | |
+| + torch | 198 MB | +162 |
+| + whisper `base` int8 | 368 MB | +156 |
+| + funasr import | 552 MB | +184 |
+| **+ emotion2vec SER model** | **3,048 MB** | **+2,496** |
+| + fastapi/uvicorn/httpx | 3,051 MB | +4 |
+
+The SER load was **82% of the process**, against a live model of **358 MB**. Two
+causes, multiplying:
+
+1. **The checkpoint is two-thirds training baggage.** `model.pt` is 1,066 MB:
+   `model` 355.4 MB, `last_optimizer_state` **710.9 MB** (Adam momentum +
+   variance, exactly 2x the weights), everything else ~0.
+2. **FunASR deep-copies it.** `load_pretrained_model.py` does `torch.load(path)`
+   then `copy.deepcopy(ori_state)` before extracting the one key it wants. Peak
+   1066 + 1066 + 355 = 2,487 MB, matching the measured +2,496 MB.
+
+And **the peak is permanent** -- `del` + `gc.collect()` frees nothing measurable,
+because the Windows allocator does not return the pages. Peak allocation *is*
+steady-state RSS, so the only lever is allocating less.
+
+### Fixed
+
+- `python -m eval.slim_ser_ckpt` writes `models/emotion2vec_plus_base_slim/`
+  with the optimizer state stripped: 1,066 MB -> 355 MB. `config.SER_MODEL_DIR`
+  picks it up automatically when present, falls back to the hub id when absent.
+  The ModelScope cache is never modified.
+- `ser._patch_funasr_deepcopy()` removes the redundant copy, re-deriving the
+  safety invariant (`ori_state` dead after the copy, `src_state` never assigned
+  into) from the installed source each time, and failing open.
+
+**Result: 3,055 MB -> 1,278 MB working set, 4,041 -> 2,086 MB private.** SER
+output is **bit-identical**: 160 RAVDESS clips, 0 prediction mismatches, max
+confidence delta 0.000000 against the original checkpoint.
+
+### Still open: FunASR imports its entire package
+
+`funasr/__init__.py` ends with `import_submodules(__name__)`, which walks and
+imports **all 431 of its modules** to give you one class. That drags in
+transformers, modelscope, librosa, numba, llvmlite, scipy and sklearn -- none of
+which the emotion2vec inference path uses. Measured cost: **+184 MB**.
+
+Note this defeats `ser.py`'s careful deferral of `transformers` (it is imported
+only inside `_load_meralion()`): modelscope's lazy-import shim imports it anyway,
+transitively, on the emotion2vec path. FunASR does have a lazy `__getattr__`, but
+`import_submodules` runs unconditionally first, so it buys nothing.
+
+Not obviously fixable without either vendoring the two modules we need or
+pre-empting `sys.modules`, both uglier than 184 MB is worth. Recorded so the next
+person does not re-derive it.
+
+### The emergency lever
+
+`SER_ENABLED=0` drops the whole thing -- torch, funasr, transformers, modelscope
+and the model -- for about **1.1 GB**, at the cost of the `voice` field entirely.
+The guard returns before `import torch`, so nothing heavy is imported at all.
+
+---
+
 ## Audio-native LLM could replace Whisper entirely
 
 **Status:** idea, blocked on tooling · **Affects:** architecture

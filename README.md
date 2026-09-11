@@ -316,7 +316,7 @@ transcript. It runs on CPU, like Whisper — the GPU stays reserved for the LLM.
 
 | Env var              | Default | What it does |
 |----------------------|---------|--------------|
-| `SER_ENABLED`        | `true`  | Set to `0` to turn SER off: skips the 2.9 GB download and ~2 GB of RAM, drops the `voice` field, and removes the added latency below. |
+| `SER_ENABLED`        | `true`  | Set to `0` to turn SER off: skips the model download and ~1.1 GB of RAM (it is the largest single thing in the process), drops the `voice` field, and removes the added latency below. |
 | `SER_MODEL`          | `emotion2vec/emotion2vec_plus_base` | Model id — see the table below. |
 | `SER_BACKEND`        | `auto`  | `auto` infers from the model name; force with `meralion` or `emotion2vec`. |
 | `SER_DEVICE`         | `cpu`   | Leave it — the Arc B580 is for Ollama. |

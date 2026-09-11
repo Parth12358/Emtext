@@ -5,6 +5,9 @@ experiments/*.wav
 experiments/prosody/
 experiments/asr/
 data/
+# Locally-derived model weights (eval/slim_ser_ckpt.py). ~355 MB, rebuildable
+# from the ModelScope cache in one command, and pointless to version.
+models/
 # Eval results ARE tracked: they are the evidence behind the model choices in
 # server/config.py, and a diff on them shows exactly what a change did to
 # accuracy. ~700K of CSV, which is worth it. Only the regenerable and transient

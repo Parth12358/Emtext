@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 import numpy as np
 
@@ -132,6 +133,10 @@ _torch = None
 _backend: str | None = None  # "meralion" | "emotion2vec" | None when unavailable
 # Populated from the checkpoint at load time; falls back to EMOTIONS above.
 _labels: tuple[str, ...] = EMOTIONS
+
+# One-shot guard for the FunASR loader patch below. Set on the first attempt
+# whether or not it succeeded, so a failure is never retried per load.
+_deepcopy_patched = False
 
 
 def _pick_backend() -> str:
@@ -201,6 +206,80 @@ def _load_meralion() -> None:
         _labels = EMOTIONS
 
 
+def _patch_funasr_deepcopy() -> None:
+    """Stop FunASR duplicating the whole checkpoint while loading it.
+
+    `funasr/train_utils/load_pretrained_model.py` does:
+
+        ori_state = torch.load(path, map_location=map_location)
+        src_state = copy.deepcopy(ori_state)
+        src_state = src_state["model"] if "model" in src_state else src_state
+
+    `ori_state` is never referenced again after that copy, and `src_state` is
+    only ever read (`.keys()`, `src_state[k]`) -- never mutated. So the deepcopy
+    duplicates the entire checkpoint for no reason. With the slimmed file that
+    is 355 MB of pure waste; with the original it was 1,066 MB.
+
+    Patching a vendored dependency is not something to do lightly, so this is
+    narrow and conservative:
+
+      * It only swaps `copy.deepcopy` for a shallow `dict(...)` **inside that one
+        module**, by giving the module its own `copy` shim. Nothing else in the
+        process sees a different `copy`.
+      * It verifies the upstream source still matches the shape described above
+        before touching anything. If FunASR changes the function, the patch is
+        skipped and the only cost is the memory we have today.
+      * It fails open. `ser.py`'s contract is that a load failure degrades to
+        "SER unavailable" rather than raising, and a patch failure must not be
+        worse than not patching.
+    """
+    global _deepcopy_patched
+    if _deepcopy_patched:
+        return
+    _deepcopy_patched = True   # set first: one attempt, success or not
+
+    try:
+        import copy as _copy
+        import inspect
+        import re
+
+        from funasr.train_utils import load_pretrained_model as _lpm
+
+        src = inspect.getsource(_lpm.load_pretrained_model)
+        # Re-derive the invariant rather than trusting a remembered line number:
+        # the copy is redundant only if `ori_state` is genuinely dead after it
+        # and the copy is never written through. Check both, in the installed
+        # source, every time.
+        marker = "copy.deepcopy(ori_state)"
+        if marker not in src:
+            log.debug("funasr loader no longer deepcopies; nothing to patch")
+            return
+        after = src.split(marker, 1)[1]
+        if "ori_state" in after:                       # still used -> copy may be load-bearing
+            log.debug("funasr still reads ori_state after copying; not patching")
+            return
+        if re.search(r"src_state\s*\[[^\]]+\]\s*=", src):   # assigned into -> must stay deep
+            log.debug("funasr mutates src_state; not patching")
+            return
+
+        class _ShallowCopy:
+            """`copy` with deepcopy weakened to a top-level dict copy."""
+
+            def __getattr__(self, item):              # anything else passes through
+                return getattr(_copy, item)
+
+            @staticmethod
+            def deepcopy(obj, memo=None, _nil=None):
+                # A shallow dict is enough: the caller only reads through it, and
+                # the tensors it hands to load_state_dict are copied there anyway.
+                return dict(obj) if isinstance(obj, dict) else _copy.copy(obj)
+
+        _lpm.copy = _ShallowCopy()
+        log.info("SER: skipping FunASR's redundant checkpoint deepcopy")
+    except Exception as exc:  # noqa: BLE001 -- never let an optimisation break loading
+        log.debug("could not patch funasr deepcopy (%s); continuing", exc)
+
+
 def _load_emotion2vec() -> None:
     """Fallback backend: emotion2vec_plus_* via FunASR.
 
@@ -213,15 +292,41 @@ def _load_emotion2vec() -> None:
     """
     global _model, _labels
 
+    _patch_funasr_deepcopy()
+
     from funasr import AutoModel
 
-    # The same weights are published under two ids: "emotion2vec/..." on Hugging
-    # Face and "iic/..." on ModelScope, which is where FunASR fetches from.
-    # Accept the Hugging Face spelling (it is what the model card shows) and
-    # translate, so SER_MODEL doesn't have to know which hub is underneath.
-    name = config.SER_MODEL
-    if name.lower().startswith("emotion2vec/"):
-        name = "iic/" + name.split("/", 1)[1]
+    # Prefer a local slimmed checkpoint when one has been built. FunASR treats a
+    # path that exists as a local model and skips the hub entirely, so this is
+    # the whole integration -- see eval/slim_ser_ckpt.py for what it strips and
+    # why it is worth ~1.4 GB of RSS.
+    #
+    # The existence check lives here rather than in config.py on purpose:
+    # config.py documents itself as doing no I/O so the pure segmenter can
+    # import it cheaply, and a stat() would break that.
+    name = ""
+    if config.SER_MODEL_DIR:
+        local = Path(config.SER_MODEL_DIR)
+        if not local.is_absolute():
+            local = Path(__file__).resolve().parent.parent / local
+        if (local / "model.pt").exists():
+            name = str(local)
+            log.info("SER: using slimmed local checkpoint (%s)", local)
+
+    if not name:
+        # The same weights are published under two ids: "emotion2vec/..." on
+        # Hugging Face and "iic/..." on ModelScope, which is where FunASR
+        # fetches from. Accept the Hugging Face spelling (it is what the model
+        # card shows) and translate, so SER_MODEL doesn't have to know which hub
+        # is underneath.
+        name = config.SER_MODEL
+        if name.lower().startswith("emotion2vec/"):
+            name = "iic/" + name.split("/", 1)[1]
+
+    # Note for whoever adds a backend here: _pick_backend() keys on the substring
+    # "emotion2vec", which a path like .../emotion2vec_plus_base_slim preserves,
+    # and the "emotion2vec/" -> "iic/" rewrite above is a startswith() so a
+    # Windows path never trips it. Both keep working with a local directory.
 
     # `device` must be passed explicitly. FunASR's AutoModel defaults to
     # device="cuda" and only falls back to CPU when CUDA happens to be

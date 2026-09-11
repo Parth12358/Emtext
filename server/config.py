@@ -130,9 +130,12 @@ OLLAMA_TIMEOUT_S: float = _env_float("OLLAMA_TIMEOUT_S", 30.0)
 # Reads *how* a line sounded, so the interpreter can compare voice against
 # words -- the mismatch between the two is what exposes sarcasm and masking.
 # Like Whisper, this is pinned to CPU so the Arc B580 stays free for the LLM.
-# Set SER_ENABLED=0 to skip loading the model entirely (saves ~2 GB of RAM and
-# the first-run download); the pipeline then behaves exactly as it did before
-# SER existed.
+# Set SER_ENABLED=0 to skip loading the model entirely; the pipeline then
+# behaves exactly as it did before SER existed. It is the single biggest thing
+# in the process -- measured at +1,068 MB of a 1,269 MB server once the slimmed
+# checkpoint below is in use (it was +2,496 MB of 3,051 MB before that), because
+# the guard returns before `import torch`, so funasr, transformers and modelscope
+# are never imported either.
 SER_ENABLED: bool = _env_bool("SER_ENABLED", True)
 # emotion2vec by default, measured against MERaLiON on all 1440 RAVDESS clips:
 #   accuracy  86%   vs 61.3% macro recall
@@ -149,6 +152,23 @@ SER_ENABLED: bool = _env_bool("SER_ENABLED", True)
 # which is too compressed to be useful anyway.
 SER_MODEL: str = _env_str("SER_MODEL", "emotion2vec/emotion2vec_plus_base")
 SER_DEVICE: str = _env_str("SER_DEVICE", "cpu")
+
+# Local directory holding a SLIMMED copy of the emotion2vec checkpoint. When it
+# exists, ser.py loads from here instead of the ModelScope cache; when it does
+# not, nothing changes and the hub id above is used. Build it with
+# `python -m eval.slim_ser_ckpt`.
+#
+# Worth ~1.4 GB of resident memory, which is not obvious from the file size.
+# ModelScope ships the full pretraining state: 355 MB of weights plus 711 MB of
+# Adam optimizer state that inference never touches. FunASR then `torch.load`s
+# the file AND `copy.deepcopy`s it before extracting the one key it wants, so
+# the 711 MB is materialised twice. Measured: the SER load alone accounts for
+# +2,496 MB of a ~3.0 GB process, against a live model of 358 MB. The peak is
+# also permanent -- gc frees nothing measurable because the allocator does not
+# return the pages -- so allocating less is the only lever.
+#
+# Set to "" to force the hub path.
+SER_MODEL_DIR: str = _env_str("SER_MODEL_DIR", "models/emotion2vec_plus_base_slim")
 # Below this softmax probability the categorical label is close to a coin flip,
 # so the interpreter is told to treat the voice signal as weak rather than
 # letting it override a plain reading of the words.
@@ -164,7 +184,10 @@ SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
 # name contains "emotion2vec" uses the FunASR backend, everything else uses the
 # transformers/MERaLiON one. Set explicitly to force a backend.
 #   meralion    -- MERaLiON-SER-v1: 0.8B, 7 emotions + valence/arousal/dominance
-#   emotion2vec -- emotion2vec_plus_*: ~90M/~300M, categorical only (no VAD dims)
+#   emotion2vec -- emotion2vec_plus_*: ~90M/~300M params, categorical only (no
+#                  VAD dims). Note that is the PARAMETER count: the checkpoint
+#                  ModelScope ships is 1,066 MB, because two thirds of it is
+#                  Adam optimizer state. See SER_MODEL_DIR above.
 SER_BACKEND: str = _env_str("SER_BACKEND", "auto")
 
 # Pin the model to an exact upstream commit. Empty means "use the vetted

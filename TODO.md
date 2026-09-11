@@ -161,6 +161,277 @@ with a +0.085 pleasant/unpleasant separation, which made every utterance read as
 "negative" against the default gloss thresholds -- the failure this check exists
 to catch.
 
+### The compensating guard rail does not fire (found 2026-09-05)
+
+Worse than "no valence": the prompt paragraph that exists to cover for a missing
+voice signal is skipped in exactly this case. `interpreter.py` ends with *"When
+there is no `voice:` field you are reading text alone... be especially careful
+not to over-read sarcasm into plain sentences."* On emotion2vec the `voice:`
+field **is** present -- it just has no numbers. So the five mismatch rules that
+key on valence are inert, *and* the caution that compensates for their absence
+never triggers. The model is handed rules it cannot apply and denied the warning
+that would make it fall back safely.
+
+Concretely, what reaches the LLM:
+
+```
+default (emotion2vec):  voice sounded like: angry (conf 0.77)
+MERaLiON:               voice sounded like: angry (conf 0.77), valence 0.13 (negative), arousal 0.68 (elevated)
+```
+
+`VALENCE_LOW/HIGH` and `AROUSAL_LOW/HIGH` are therefore unreachable on the
+shipped default; only `SER_MIN_CONFIDENCE` does any work.
+
+### Cheaper candidate than a second model: use the distribution we already have
+
+`_analyze_emotion2vec()` computes a **full 7-class probability distribution** and
+then discards everything but the argmax. Expected valence over that distribution
+-- map each label to a valence anchor, take the probability-weighted mean --
+would restore a *continuous* signal for no download, no extra forward pass and no
+new dependency. It is not a true acoustic valence measurement (it is a function
+of the categorical posterior, so it cannot see anything the labels don't already
+encode), but it turns a hard label into a graded one, which is what the mismatch
+rule needs to reason about degree.
+
+Worth trying before `audeering`, and it can be compared against it on the same
+eval. Either way `VALENCE_LOW/HIGH` must be re-profiled against the actual output
+range first -- see the MERaLiON failure above.
+
+### Measure the marginal gain before assuming valence is worth it (2026-09-10)
+
+Two literature findings say the expected payoff is smaller than it looks, and both
+argue for measuring rather than adopting:
+
+1. **Acoustic valence may partly be laundered text.** The transformer gains that
+   "closed the valence gap" come substantially from models implicitly encoding
+   *linguistic* content, not from better acoustic modelling. A system that already
+   has a transcript may therefore gain much less than the published CCC suggests.
+2. **Text beat audio outright on the closest real-world analogue.** Continuous
+   satisfaction/frustration tracking on real call-centre speech: linguistic-only
+   **CCC 0.924**, acoustic-only **0.806**, best fusion **0.920** -- fusion did not
+   beat text (arXiv 2310.04481).
+
+So the experiment worth running is not "does valence help" but **"does valence help
+*over the transcript the interpreter already has*"**. `eval/model_eval` can answer
+this directly: the `mm-*` pairs hold text constant and vary only voice. See
+`RESEARCH.md` §4.2 and §4.4.
+
+### STRONGER: valence may be the wrong target entirely (2026-09-10)
+
+Wagner et al. (IEEE TPAMI) closed the valence gap to CCC 0.638 and then showed
+*why* it worked -- verbatim from the abstract: their success on valence "is based
+on **implicit linguistic information** learnt during fine-tuning of the transformer
+layers, which explains why they perform on-par with recent multimodal approaches
+that explicitly utilise textual information."
+
+The cleanest confirmation is a distillation table. Wav2Small compresses a VAD
+teacher into 72K parameters:
+
+| | arousal | dominance | **valence** |
+|---|---|---|---|
+| teacher | ~0.73 | ~0.63 | **0.676** |
+| 72K student | ~0.66 | ~0.56 | **~0.37** |
+| relative loss | -10% | -11% | **-45%** |
+
+Arousal survives compression; valence collapses. You cannot distil lexical
+understanding into 72K parameters -- which is exactly the prediction if acoustic
+valence is mostly implicit ASR.
+
+**Two consequences, and the second is the important one:**
+
+1. An acoustic valence model spends CPU re-deriving, worse, a signal the
+   interpreter LLM already extracts from the transcript.
+2. **A partly-lexical valence head tends to AGREE with the text, so it will
+   under-fire on precisely the sarcasm cases the mismatch rule exists to catch.**
+   That is a plausible mechanism for MERaLiON's measured 0.143 happy-vs-angry
+   separation, and it is directly testable: check whether its valence output
+   correlates more with a text sentiment score than with any prosodic feature.
+
+**Revised recommendation: keep emotion2vec, let the LLM own valence from the
+transcript, and rebuild the mismatch rule on arousal + dominance** -- CCC 0.745
+and 0.655, genuinely paralinguistic, and unavailable from text:
+
+| words say | arousal | dominance | likely reading |
+|---|---|---|---|
+| positive | low | low | masking / flat compliance / "fine" that isn't |
+| positive | high | high | genuine enthusiasm |
+| negative | high | high | real anger or complaint |
+| negative | low | low | sadness, resignation |
+
+The expected-valence-from-distribution idea above is still the cheapest way to get
+a graded signal, but it should now target **arousal and dominance anchors**, not
+valence. Full argument and ranked alternatives in `RESEARCH.md` §4.5-4.6 and §6.2.
+
+Licence note for whoever evaluates `audeering/...-msp-dim`: it is
+**CC-BY-NC-SA-4.0, research only**. Fine as an offline measurement instrument,
+fatal if emtext ever ships as more than a personal project. The Odyssey 2024
+WavLM baselines (`3loi/SER-Odyssey-Baseline-WavLM-*`) are **MIT** but 0.3B
+parameters -- slower than the MERaLiON already rejected.
+
+---
+
+## Sarcasm is never tested on real speech
+
+**Status:** open, undocumented until now · **Found:** 2026-09-05, auditing what
+the server actually checks · **Affects:** `eval/tone_cases.jsonl`,
+`eval/pipeline_eval.py`
+
+Sarcasm is the product's headline capability and **no test anywhere uses a real
+human being sarcastic**. Three separate gaps stack up.
+
+### The mismatch pairs test an input production never emits
+
+The four `mm-*` pairs are the only check that the voice signal is used at all.
+Their `voice` dicts are hand-typed JSON literals, and their valence separation is
+far wider than any real measurement:
+
+| pair | valence a / b | gap |
+|---|---|---|
+| mm-01 | 0.86 / 0.13 | 0.73 |
+| mm-02 | 0.83 / 0.18 | 0.65 |
+| mm-03 | 0.79 / 0.11 | 0.68 |
+| mm-04 | 0.62 / 0.15 | 0.47 |
+
+Measured MERaLiON valence over all 1440 RAVDESS clips (`eval/results/ser.csv`):
+happy mean **0.329**, angry mean **0.187** -- a real separation of **0.143**,
+three to five times narrower than the synthetic pairs. And on the *default*
+backend there is no valence at all, so these cases exercise a code path the
+shipped configuration never reaches.
+
+So the suite proves the LLM reasons correctly over a clean, well-separated voice
+field. It cannot show the field is ever that clean -- and `ser.csv` says it isn't.
+
+### RAVDESS is the wrong shape for sarcasm, permanently
+
+Eight *acted* basic emotions over two semantically neutral sentences ("Kids are
+talking by the door"). Sarcasm needs words that assert something and prosody that
+contradicts them; RAVDESS is emotional prosody over emotionally null words -- the
+opposite arrangement. No amount of tuning makes it a sarcasm benchmark.
+
+The numbers confirm it. Across all **942** end-to-end audio rows in
+`eval/results/pipeline.csv`, `llm_tone` was:
+
+| neutral | negative | positive | mixed | **sarcastic** |
+|---|---|---|---|---|
+| 581 | 300 | 60 | 1 | **0** |
+
+and `tone_expected` only ever contains negative/positive/neutral. Sarcasm has
+never been emitted on real audio and is not even scoreable there.
+
+### `experiments/make_mismatch.ps1` is a demo, not an eval
+
+Three unlabeled, unscored SAPI TTS lines, referenced by nothing under `eval/`.
+Note that the prosody literature backs two of its three knobs -- sarcasm
+correlates with reduced pitch and slower rate -- but reports that **amplitude
+does not** differentiate, so its `volume="soft"` is not evidence-based.
+
+### What would actually close this
+
+A corpus of real sarcastic speech. **MUStARD** (MIT licence, 690 audiovisual
+utterances) and **MUStARD++** (1,202 utterances, 601 sarcastic / 601 not) are the
+obvious candidates, both sourced from sitcoms. Caveat before anyone downloads
+them: sitcom audio carries laugh tracks, music and overlapping speakers, so it is
+usable for scoring *the interpreter* on known-sarcastic clips and a poor fit for
+judging the VAD or WER. Even 20-30 self-recorded clips of one sentence said
+sincerely vs sarcastically would be a stronger test of the core claim than
+anything currently in the repo.
+
+Cheap interim step that needs no audio: add mismatch pairs whose valence gap is
+~0.14 rather than ~0.7, and label-only pairs with no valence at all, so the suite
+can score the default configuration instead of an idealised one.
+
+### What "good" actually looks like (2026-09-10) -- set the bar honestly
+
+Before building a sarcasm benchmark, know the ceilings, because the current eval's
+93% invites a badly miscalibrated target:
+
+- **Humans reach ~81-85%** on text with full conversation context, and only
+  **~68% on sarcasm specifically** in naturalistic video *with audio, video and
+  context all available* (RISC). There is no regime where humans are near-perfect.
+- **Sarcasm labels are themselves unreliable.** MUStARD's inter-annotator
+  agreement is Cohen's **k = 0.15**; MUStARD++ later corrected **343 of its 690**
+  labels. On iSarcasm, third-party annotators **missed 30% of author-intended
+  sarcasm** and **45% of what they called sarcastic was not intended as such**.
+- **Spontaneous sarcasm is not acoustically marked.** Rockwell found listeners
+  could discriminate *posed* sarcasm but **not spontaneous** sarcasm; Bryant &
+  Fox Tree found only amplitude variability differed in real spontaneous speech.
+  "There is no single ironic tone of voice" is replicated across labs.
+- **Adding audio makes current sarcasm models worse**, not better: +8-13 points of
+  false positives with only 7-10 points of false-negative reduction, and
+  prosody-only collapses to 14-22% F1. Manipulating *only* pitch and pause length
+  on non-sarcastic clips drove false positives to 60%.
+
+That last point names a failure emtext already exhibits: `qwen3:14b` scores 100%
+on the sarcasm category and 2/4 on mismatch pairs **because it fails the sincere
+halves**. That is sarcasm over-firing, which for this product is the more damaging
+error -- it teaches the listener to distrust ordinary speech. Full citations in
+`RESEARCH.md` §2.
+
+---
+
+## The model table hides a deterministic sarcasm failure (`sar-04`)
+
+**Status:** open, documentation fix · **Found:** 2026-09-05 · **Affects:**
+`README.md` model comparison table
+
+Recomputed from `eval/results/model.csv` (270 rows = 30 cases x 3 models x
+3 runs):
+
+| model | overall | sarcasm | mismatch pairs |
+|---|---|---|---|
+| gemma3:12b | 93.3% | **9/12 (75%)** | 4/4 |
+| qwen3:8b | 83.3% | **9/12 (75%)** | 4/4 |
+| qwen3:14b | 93.3% | **12/12 (100%)** | 2/4 |
+
+The README table carries overall / mismatch / speed but **no sarcasm column**,
+and describes `gemma3:12b`'s weakness as an "occasional passive-aggression miss".
+Every sarcasm miss in the file is the same case -- `sar-04`, *"No, please, take
+your time. It's not like I have anywhere to be."* -- and both `gemma3:12b` and
+`qwen3:8b` fail it on **all three runs**. It is deterministic, not occasional,
+and it is the most conversationally common form in the set (sarcasm carried by an
+explicit negation rather than by an intensifier like "oh great").
+
+Note the shape of the two failures is opposite, and the table currently makes
+them look alike: `qwen3:14b` detects sarcasm perfectly and **over-applies** it
+(its 2/4 comes from failing the `a` halves, where a confidently happy voice
+should rule sarcasm out), while the other two **under-detect** it. For this
+product those are not equally bad -- a false positive teaches the listener to
+distrust ordinary speech.
+
+Add the sarcasm column and correct the note. Cheap, and it prevents the next
+model choice being made on a table that omits the axis the product is named for.
+
+---
+
+## Irony is not modelled, and an "ironic" answer is silently lost
+
+**Status:** open, low priority · **Found:** 2026-09-05 · **Affects:**
+`server/interpreter.py`
+
+There is no mention of irony anywhere in the repo -- a case-insensitive search
+for `iron(y|ic)` across `.py`, `.html`, `.md`, `.jsonl` and `.txt` returns
+nothing. `TONES` is `("positive", "negative", "neutral", "sarcastic", "mixed")`,
+so irony is folded entirely into "sarcastic".
+
+That is a defensible product decision, but it has an undefended edge. The
+response validator does:
+
+```python
+if tone not in TONES:
+    tone = "neutral"
+```
+
+So a model that answers `"ironic"` -- a plausible thing for an LLM to volunteer,
+and the `RESPONSE_SCHEMA` enum only constrains models whose Ollama build honours
+schemas -- is recorded as **neutral**, the maximally wrong bucket, rather than
+the adjacent "sarcastic". A one-line synonym map (`ironic`/`sardonic` ->
+`sarcastic`) would fail safe instead.
+
+Adding a real `irony` tone is a bigger decision: it would invalidate the eval
+baseline and require re-running `python -m eval.model_eval`, and the
+sarcasm/irony boundary is subtle enough that labelling it consistently in
+`tone_cases.jsonl` is its own project.
+
 ---
 
 ## Audio-native LLM could replace Whisper entirely
@@ -182,3 +453,24 @@ Two properties would be given up: **progressive disclosure** (today the transcri
 ships as soon as Whisper finishes, with the read following) and **graceful
 degradation** (today an Ollama outage still yields transcripts). Worth a measured
 spike, not adoption on principle.
+
+### Downgraded 2026-09-10: there is now evidence against this
+
+Audio LLMs largely do not listen. On 2,000 adversarial items pairing audio with a
+transcript asserting the *wrong* paralinguistic attribute, **GPT-4o Audio scored
+8.6% on ground truth while agreeing with the misleading transcript 81.6% of the
+time**; the mean across 12 models was 15.3% vs 64.3% (arXiv 2605.27772,
+corroborated by the independent LISTEN benchmark). Layer probing found the
+acoustic information is present in the encoder and degrades at the encoder-LLM
+interface.
+
+That is fatal to the specific gain this entry proposes. The mismatch rule needs
+**two independent channels**. If the voice reading comes from an audio LLM it is
+largely a laundered transcript -- and since the interpreter already receives the
+transcript, the rule would be comparing the text against itself and reporting
+confident agreement rather than information. A separate acoustic-only SER model
+is architecturally correct *because it cannot cheat*.
+
+Revised status: **not a cost/latency question, a signal-independence question.**
+If this is ever spiked, the thing to measure first is whether the audio path
+disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §4.3.

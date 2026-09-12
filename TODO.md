@@ -543,3 +543,180 @@ is architecturally correct *because it cannot cheat*.
 Revised status: **not a cost/latency question, a signal-independence question.**
 If this is ever spiked, the thing to measure first is whether the audio path
 disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §4.3.
+
+---
+
+## No diarization: every voice in the room is treated as one speaker
+
+**Status:** open, scoped and measured, nothing implemented · **Found:**
+2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:** `server/segmenter.py`,
+`server/main.py`, the `read` frame, and every conversational-dynamics feature
+`RESEARCH.md` §6.3 gates on diarization
+
+emtext currently interprets the microphone, not a speaker. The user's own voice,
+their conversational partner's, and a television are one undifferentiated stream,
+so the interpreter is regularly handed the user's own words and asked what the
+"speaker" meant by them. `RESEARCH.md` §1.5 says pointing the interpreter at the
+speaker rather than the user is the thing emtext gets *right*; without speaker
+identity that is true only by luck.
+
+### The segmenter cannot see turn changes (this is the load-bearing finding)
+
+Measured with the real `Segmenter` (`SPEECH_RMS=150`, RAVDESS pairs, 40 trials
+per gap): two different actors, A then B, separated by a gap.
+
+| gap between turns | utterances produced | one glued utterance |
+|---|---|---|
+| 100 ms | 1.07 | **92%** |
+| 200 ms | 1.05 | **95%** |
+| 400 ms | 1.02 | **92%** |
+| 600 ms | 1.15 | **85%** |
+| 800 ms | 1.80 | 15% |
+| 1000 ms | 1.80 | 18% |
+
+`END_SILENCE_MS` is 650 and Stivers et al. put the cross-language response-gap
+mode at **0-200 ms** (§5.1). So a *normally fast* reply is glued to the question
+it answers, and the cliff sits just above the range where real conversation
+lives. **One speaker label per utterance is therefore not sufficient**, and
+neither is lowering `END_SILENCE_MS` on its own -- 200 ms of trailing silence is
+also mid-sentence breathing, so that trades this bug for sentence fragments.
+
+### CAM++ is already installed and costs almost nothing
+
+`funasr` (already a dependency for the emotion2vec SER backend) ships the CAM++
+speaker-embedding model, the spectral-clustering backend, and the `sv_chunk` /
+`distribute_spk` helpers. `AutoModel(model="cam++")` resolves to
+`iic/speech_campplus_sv_zh-cn_16k-common` (~27 MB) and emits a 192-d embedding.
+It loads with `trust_remote_code: False`, i.e. the same safety posture `ser.py`
+already documents for emotion2vec.
+
+Measured on this machine (CPU, 12 cores):
+
+- **20 ms per 2 s utterance** -- against 87 ms for emotion2vec SER and ~300 ms
+  for Whisper `base`. It disappears inside the existing `asyncio.gather`.
+- **No measurable peak-RSS increase.** The weights are ~30 MB and torch/funasr
+  are already resident because SER loaded them.
+- One new dependency: `kaldi-native-fbank` (308 KB wheel). FunASR needs an fbank
+  backend for CAM++ and emotion2vec does not, so this path is currently missing
+  it. `torchaudio` also satisfies it and is much larger.
+
+### How well it actually separates speakers (RAVDESS, 24 actors, 1407 clips)
+
+RAVDESS is the right adversarial test: every actor speaks the *same two
+sentences*, so lexical content is controlled and any separation is speaker
+identity. Mean trimmed clip length is 1.7 s -- emtext's real utterance length.
+
+Textbook verification (one utterance vs one enrolled profile):
+
+| enrollment | EER |
+|---|---|
+| 6 calm/neutral clips | 14.8% |
+| 8 clips spanning all 8 emotions | 11.8% |
+| + AS-norm against a 200-clip impostor cohort | **6.3%** |
+
+**Emotion degrades own-voice match, and this is the trap.** Same-speaker cosine
+against a calm-enrolled profile, by the emotion of the test clip:
+
+```
+calm 0.758 | happy 0.606 | disgust 0.600 | sad 0.600
+surprised 0.596 | angry 0.543 | fearful 0.522
+```
+
+Enrol only on calm speech and a fixed threshold rejects the user *precisely when
+they are upset* -- the state the app exists to be useful in. Enrollment must
+span the emotional range; it is worth 3 EER points on its own.
+
+### The decision rule matters more than the model
+
+emtext is not doing open-set verification. It hears a conversation, almost
+always two people, and only has to answer "is this the user". Classifying each
+utterance by **nearest centroid**, where the partner's centroid is accumulated
+online from utterances already rejected as not-the-user (120 random actor pairs):
+
+| enrollment | rule | accuracy | user kept | partner kept |
+|---|---|---|---|---|
+| calm | fixed threshold 0.45 | 88.2% | 89.4% | 87.1% |
+| calm | online partner model | 89.5% | 88.7% | 90.4% |
+| spread | fixed threshold 0.45 | 87.5% | 90.0% | 85.0% |
+| **spread** | **online partner model** | **94.3%** | **95.9%** | **92.7%** |
+
+Same-sex pairs 91.6%, opposite-sex 97.7%. The online partner centroid needs no
+enrollment from anyone but the user and is worth ~7 points.
+
+### Do NOT try to cut a glued utterance into pieces
+
+Two rules were measured on utterances known to contain a turn change:
+
+1. **Blind 2-means over 1 s / 0.25 s windows.** Given that there are two
+   speakers it finds the seam in 60/60 clips, median boundary error 215 ms, for
+   212 ms of CPU. But *deciding* there are two speakers fails badly: on
+   single-speaker audio the cluster distance is 0.428 (sd 0.137) against 0.594
+   (sd 0.121) for two speakers, so at any usable threshold **24-84% of
+   single-speaker utterances get falsely cut in half.** One person shifting
+   emotion mid-utterance looks exactly like a second person.
+2. **Windows scored against the enrolled user centroid** (a supervised 1-vs-rest
+   question instead of an unsupervised one). Better, still not good enough: at
+   thr 0.40 / 3-window run, 19% false splits against 61-74% of real turn changes
+   caught.
+
+Splitting the audio means handing the interpreter half a sentence and inventing
+a speaker who was never there. The failure is silent and unfalsifiable from the
+transcript, which is the same shape as the VAD bug at the top of this file.
+
+### What does work: label the utterance, don't cut it
+
+The *fraction of 1 s windows matching the enrolled user* separates cleanly:
+
+```
+user only 0.75 | mixed (contains a turn change) 0.43 | partner only 0.08
+```
+
+Thresholding that fraction at lo=0.15 / hi=0.75 gives a 3-way label:
+
+```
+              user  partner  mixed
+user           65%      7%     28%
+partner         1%     84%     14%
+mixed           4%     13%     83%
+```
+
+78.9% overall, and the number that actually matters -- **a partner's line
+mislabelled as the user's, i.e. silently dropped, is 1.4%.** The errors are
+concentrated in the safe direction: 28% of the user's own lines land in `mixed`
+and simply get interpreted anyway, which is exactly today's behaviour.
+
+### Proposed shape (not implemented)
+
+- New `server/speaker.py` with the same contract as `ser.py`: loaded once, CPU,
+  **never raises**, returns None when unavailable, and the rest of the codebase
+  knows only `speaker.identify()` and `speaker.available()`.
+- A third job in the existing `asyncio.gather` in `_process_utterance`, so it
+  costs max(), not sum().
+- Additive `"speaker": {"label": "user"|"other"|"mixed"|"unknown", "score": f}`
+  on the `read` frame. Optional and omittable -- same rule as `voice`.
+- Enrollment is a new `/api/enroll` route storing a centroid, plus online
+  adaptation of the partner centroid per connection (it must reset per
+  connection; it is a property of the conversation, not of the user).
+- The interpreter prompt gets told whose line it is reading, and `own-voice`
+  lines stay in the rolling context (they are what the partner is responding to)
+  but do not get a read of their own.
+
+### Open questions before building
+
+- All of the above is clean studio audio, one voice per file. A real room adds
+  reverberation, overlap, and a shared mic. **Nothing here has been measured on
+  a real two-person recording** and it should be before any of it is trusted.
+- On a head-worn ESP32 mic the user's own voice is close-miked and far louder
+  than anyone else's. Plain RMS plus spectral tilt may do much of this work for
+  free, and should be measured as a baseline *before* adding a model.
+- CAM++ `zh-cn` was used on English speech. ModelScope publishes
+  `speech_campplus_sv_en_voxceleb_16k`, but funasr's `AutoModel` does not
+  register it (`RuntimeError: model ... is not registered`); the weights would
+  have to be loaded into `funasr.models.campplus.model.CAMPPlus` by hand. All
+  numbers above are therefore a floor, not a ceiling.
+- Speaker embeddings are **biometric data**. §6.7's note on EU AI Act Art. 5(1)(f)
+  applies with more force to a stored voiceprint than to a transient SER call.
+
+Reproduce: the probes are throwaway and live in the session scratchpad. A keeper
+version belongs in `eval/spk_eval.py`, alongside `ser_eval.py`, reusing
+`data/ravdess/`.

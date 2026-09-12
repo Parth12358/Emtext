@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>emtext setup</title>
+<style>
+  :root{
+    --bg:#0e1116; --card:#161b22; --fg:#e8ebf0; --muted:#8b93a3;
+    --accent:#4a9eff; --line:#242b36; --field:#0f141b; --ok:#3fb37f;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--fg);
+    font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  .wrap{max-width:440px;margin:0 auto;padding:26px 18px 48px}
+  header{text-align:center;padding:22px 0 6px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+       display:inline-block;margin-right:7px;vertical-align:middle}
+  .logo{font-weight:700;font-size:22px;letter-spacing:.3px;vertical-align:middle}
+  .sub{color:var(--muted);font-size:13px;margin-top:5px}
+  form{margin-top:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+        padding:18px 16px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset}
+  label{display:block;font-size:12px;font-weight:600;letter-spacing:.3px;
+        text-transform:uppercase;color:var(--muted);margin:16px 0 7px}
+  label:first-of-type{margin-top:2px}
+  input{width:100%;padding:13px 12px;font-size:16px;color:var(--fg);
+        background:var(--field);border:1px solid var(--line);border-radius:10px;
+        outline:none;transition:border-color .15s}
+  input:focus{border-color:var(--accent)}
+  input::placeholder{color:#59606e}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  button{width:100%;margin-top:22px;padding:14px;font-size:16px;font-weight:600;
+         color:#fff;background:var(--accent);border:0;border-radius:11px}
+  button:active{filter:brightness(.9)}
+  .foot{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="dot"></span><span class="logo">emtext</span>
+    <div class="sub">pendant Wi-Fi setup</div>
+  </header>
+
+  <form method="POST" action="/save">
+    <div class="card">
+      <label>Wi-Fi network</label>
+      <input name="ssid" value="%SSID%" placeholder="network name"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+
+      <label>Wi-Fi password</label>
+      <input name="pass" type="password" placeholder="leave blank to keep current">
+
+      <label>Server host</label>
+      <input name="host" value="%HOST%" placeholder="emtext.example.com"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="hint">hostname only — no https:// and no /stream</div>
+
+      <label>Access token</label>
+      <input name="token" type="password" placeholder="leave blank to keep current">
+
+      <button type="submit">Save &amp; reconnect</button>
+    </div>
+  </form>
+
+  <div class="foot">The pendant saves this and reconnects. You can then rejoin your own Wi-Fi.</div>
+</div>
+</body>
+</html>

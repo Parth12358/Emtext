@@ -44,12 +44,26 @@ static void onLift() {
 }
 
 // Frames from the network (dispatched on core 1 by net::loop()).
+static String g_lastTranscript;   // from `utterance`; shown under the read on the glance
+
 static void onNetFrame(const proto::Frame& f) {
   switch (f.type) {
-    case proto::Type::Ready:     LOG_INFO("net: [frame] ready"); break;
-    case proto::Type::Status:    LOG_INFO("net: status=%s", f.status); break;
-    case proto::Type::Utterance: LOG_INFO("net: utterance #%d '%s'", f.id, f.transcript); break;
-    case proto::Type::Read:      LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read); break;
+    case proto::Type::Ready:
+      LOG_INFO("net: [frame] ready");
+      break;
+    case proto::Type::Status:
+      LOG_INFO("net: status=%s", f.status);
+      if (strcmp(f.status, "thinking") == 0) display::setProcessing(true);
+      break;
+    case proto::Type::Utterance:
+      LOG_INFO("net: utterance #%d '%s'", f.id, f.transcript);
+      g_lastTranscript = f.transcript;
+      break;
+    case proto::Type::Read:
+      LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read);
+      display::setProcessing(false);
+      display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript);
+      break;
     default: break;
   }
 }

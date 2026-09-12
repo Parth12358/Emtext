@@ -37,11 +37,11 @@ The wire protocol is the contract between them (raw PCM 16 kHz mono int16 in;
 `ready`/`status`/`utterance`/`read` JSON out), so the two are developed independently.
 **Firmware progress:** board bring-up, config/NVS + serial console, the display + controls
 UX, mic capture with an energy gate, connectivity (authenticated `wss://` on a dedicated core
-so audio capture never stalls), and — the milestone — **live end-to-end streaming**: the pendant
-now streams its mic to this server and gets real `utterance` + `read` frames back (Stages 0–4
-and 5.2 of 9). Remaining: outage buffering (5.3–5.4), rendering reads on the glance screen
-(Stage 6), audio cues, power management, and a phone-based Wi-Fi provisioning portal. Full module
-architecture and the staged plan live in [firmware/README.md](firmware/README.md).
+so audio capture never stalls), and — the milestone — **the full loop working on the device**: the pendant streams its mic to
+this server, survives a ~3 s WiFi drop with no audio loss, and **shows the tone read on its own
+screen** (Stages 0–6 of 9). Remaining: audio cues (Stage 7), power management (8), acceptance/
+compliance (9), and a phone-based Wi-Fi provisioning portal. Full module architecture and the
+staged plan live in [firmware/README.md](firmware/README.md).
 
 Everything below documents the **server half**.
 

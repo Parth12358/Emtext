@@ -20,6 +20,11 @@ namespace {
   bool   paused = false;
   bool   muted = false;
 
+  // history: ring of the last 5 reads, rendered most-recent-first
+  struct Hist { String read; String tone; };
+  Hist hist[5];
+  int  histCount = 0, histNext = 0;
+
   // Desaturated palette (color565). Saturated TFT_* reads as an alarm; muted
   // tones read as observation, per the UX notes.
   uint16_t cPos()  { return M5.Display.color565( 90, 170,  90); }  // green
@@ -44,43 +49,80 @@ namespace {
   }
 
   // Greedy word-wrap at the current text size; fills out[] up to maxLines.
-  int wrapText(const String& s, int areaW, String out[], int maxLines) {
+  // Keep only the first `maxWords` words; append "..." if there were more.
+  String capWords(const String& s, int maxWords) {
+    int words = 0, i = 0;
+    while (i < (int)s.length()) {
+      int sp = s.indexOf(' ', i);
+      if (++words >= maxWords) {
+        int end = (sp < 0) ? s.length() : sp;
+        return (end < (int)s.length()) ? s.substring(0, end) + "..." : s;
+      }
+      if (sp < 0) return s;
+      i = sp + 1;
+    }
+    return s;
+  }
+
+  // Last `n` words of `s` (for the transcript tail).
+  String tailWords(const String& s, int n) {
+    int idx = s.length();
+    for (int w = 0; w < n; w++) {
+      int sp = s.lastIndexOf(' ', idx - 1);
+      if (sp < 0) return s;
+      idx = sp;
+    }
+    return s.substring(idx + 1);
+  }
+
+  // Wrap into <=2 lines at the current text size; if text is left over, the last line
+  // is truncated with an ASCII "..." (default font has no real ellipsis glyph).
+  int wrap2(const String& s, int areaW, String out[2], bool* clipped) {
     auto& d = M5.Display;
-    int n = 0; String cur = ""; int i = 0;
-    while (i < (int)s.length() && n < maxLines) {
+    out[0] = ""; out[1] = ""; *clipped = false;
+    int line = 0, i = 0;
+    while (i < (int)s.length() && line < 2) {
       int sp = s.indexOf(' ', i);
       String word = (sp < 0) ? s.substring(i) : s.substring(i, sp);
-      String trial = cur.length() ? cur + " " + word : word;
-      if (cur.length() == 0 || d.textWidth(trial.c_str()) <= areaW) {
-        cur = trial;
+      String trial = out[line].length() ? out[line] + " " + word : word;
+      if (out[line].length() == 0 || d.textWidth(trial.c_str()) <= areaW) {
+        out[line] = trial;
+        i = (sp < 0) ? s.length() : sp + 1;
       } else {
-        out[n++] = cur; cur = word;
+        line++;
       }
-      i = (sp < 0) ? s.length() : sp + 1;
     }
-    if (n < maxLines && cur.length()) out[n++] = cur;
-    return n;
+    int used = out[1].length() ? 2 : (out[0].length() ? 1 : 0);
+    if (i < (int)s.length()) {                      // overflow -> clip last line with "..."
+      *clipped = true;
+      int last = used ? used - 1 : 0;
+      while (out[last].length() && d.textWidth((out[last] + "...").c_str()) > areaW)
+        out[last] = out[last].substring(0, out[last].length() - 1);
+      out[last] += "...";
+      if (!used) used = 1;
+    }
+    return used;
   }
 
   void drawRead() {
     auto& d = M5.Display;
     int x0 = BAR_W + 6;
-    int areaW = d.width() - x0 - 10;               // right margin leaves room for dot
+    int areaW = d.width() - x0 - 10;                // right margin leaves room for dot
     d.setTextColor(gLowConf ? cDim() : TFT_WHITE, TFT_BLACK);
     d.setTextDatum(middle_left);
 
-    String lines[3]; int n = 0, chosen = 1;
-    for (int size = 2; size >= 1; size--) {         // shrink to fit 2 lines
+    String text = capWords(gRead, 8);               // Section 5: glance shows <= 8 words
+    String lines[2]; int n = 1; bool clipped = true; int chosen = 1;
+    for (int size = 3; size >= 1; size--) {         // largest size that fits without clipping
       d.setTextSize(size);
-      n = wrapText(gRead, areaW, lines, 3);
+      n = wrap2(text, areaW, lines, &clipped);
       chosen = size;
-      if (n <= 2) break;
+      if (!clipped) break;
     }
     d.setTextSize(chosen);
     int lh = d.fontHeight();
-    int shown = (n < 2) ? n : 2;
-    int y = d.height() / 2 - (shown - 1) * lh / 2;
-    for (int k = 0; k < shown; k++) { d.drawString(lines[k].c_str(), x0, y); y += lh; }
+    int y = d.height() / 2 - (n - 1) * lh / 2;
+    for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), x0, y); y += lh; }
   }
 
   void drawGlance() {
@@ -89,11 +131,17 @@ namespace {
     drawBar(b, d.height());
     drawRead();
 
-    // transcript: dim, small, bottom — a check that it heard the right sentence
+    // transcript: just the dim tail — enough to confirm it heard the right sentence
     d.setTextColor(cFaint(), TFT_BLACK);
     d.setTextDatum(bottom_center);
     d.setTextSize(1);
-    d.drawString(gTranscript.c_str(), d.width() / 2, d.height() - 2);
+    String tr = tailWords(gTranscript, 6);
+    while (tr.length() && d.textWidth(tr.c_str()) > d.width() - 8) {
+      int sp = tr.indexOf(' ');
+      if (sp < 0) break;
+      tr = tr.substring(sp + 1);
+    }
+    d.drawString(tr.c_str(), d.width() / 2, d.height() - 2);
 
     if (processing) {                               // heard, still thinking (static)
       d.setTextColor(cMis(), TFT_BLACK);
@@ -145,13 +193,15 @@ namespace {
         d.setTextSize(1);
         d.setTextColor(cDim(), TFT_BLACK);
         d.drawString("history", 4, 4);
-        for (int i = 0; i < 5; i++) {               // "N ago", tone tick, dim text
+        if (histCount == 0) { d.drawString("(nothing yet)", 10, 22); break; }
+        for (int i = 0; i < histCount; i++) {       // most-recent first
+          int idx = (histNext - 1 - i + 10) % 5;
           int y = 22 + i * 16;
-          static const char* fakeTone[5] = { "neutral", "sarcastic", "negative", "positive", "neutral" };
-          Bar tb = toneBar(fakeTone[i]);
+          Bar tb = toneBar(hist[idx].tone);
           if (tb.show) d.fillRect(2, y + 2, 4, 8, tb.color);
           d.setTextColor(cDim(), TFT_BLACK);
-          d.drawString((String(i + 1) + " ago  read " + String(i + 1)).c_str(), 10, y);
+          String label = (i == 0) ? "now  " : (String(i) + " ago ");
+          d.drawString((label + hist[idx].read).c_str(), 10, y);
         }
         break;
 
@@ -194,7 +244,11 @@ void display::setRotation(int rot) {
 void display::setGlance(const String& read, const String& tone,
                         const String& transcript, bool lowConfidence) {
   gRead = read; gTone = tone; gTranscript = transcript; gLowConf = lowConfidence;
-  if (st == State::Glance) draw();
+  hist[histNext].read = read;                    // record into history
+  hist[histNext].tone = tone;
+  histNext = (histNext + 1) % 5;
+  if (histCount < 5) histCount++;
+  if (st == State::Glance) { glanceSince = millis(); draw(); }   // refresh timeout + redraw
 }
 
 void display::setConnection(const String& label) {

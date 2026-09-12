@@ -20,8 +20,8 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 3 mic + energy gate | `audio` | ✅ done |
 | 4 connectivity | `net`, `transport`, `proto` | ✅ 4a–4d (validated wss) |
 | 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ⬜ after 4 |
-| 5 wire protocol end-to-end | `net` + `proto` + `audio` | 🟡 5.1–5.3 done · 5.4 next |
-| 6 glance rendering (real reads) | `display` | ⬜ |
+| 5 wire protocol end-to-end | `net` + `proto` + `audio` | ✅ stream + outage + degraded |
+| 6 glance rendering (real reads) | `display` | ✅ reads + history on glance |
 | 7 audio cues | `cues` | ⬜ |
 | 8 power management | `power` | ⬜ |
 | 9 acceptance + compliance | — | ⬜ |
@@ -78,7 +78,9 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   `Halted`, auto-resumes on token change), TLS cert validation against the GTS bundle (AHC
   backend), and **live audio streaming** — `sendAudio()` (core 1) → a **~3 s drop-oldest PSRAM
   ring** → task drains in ~64 ms frames → `sendBIN` (5.2/5.3, verified: real `utterance`/`read`
-  come back, and audio spoken during a ~3 s WiFi drop survives). *Next:* degraded state (5.4).
+  come back, and audio spoken during a ~3 s WiFi drop survives), plus **degraded** state (5.4) —
+  a 15 s client keepalive ping + a 45 s no-frame watchdog that keeps the socket and keeps
+  buffering instead of tearing down.
   Exposes `begin()`, `loop()`,
   `state()`, `onFrame(cb)`, `sendAudio(pcm,n)`.
 - **`transport`** ✅ — WebSocket-over-TLS, abstracted for swappability. `connect()` does the TLS
@@ -117,7 +119,9 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
 - **`display`** ✅ — owns the screen; four states **Dark / Glance / History / Status** plus a
   **PAUSED** overlay. Exposes `begin()`, `loop()`, `setState()`, `state()`, `setRotation()`,
   `setGlance(read, tone, transcript, lowConfidence=false)`, `setConnection()`,
-  `setProcessing()`, `setPaused()`, `setMuted()`. See **Glance UX** below. Deps: `M5.Display`, config.
+  `setProcessing()`, `setPaused()`, `setMuted()`. Now fed **real `read` frames** (Stage 6) —
+  `setGlance` renders them and records a 5-deep history ring. See **Glance UX** below.
+  Deps: `M5.Display`, config.
 - **`cues`** ⬜ — speaker cues + mute. `begin()`, `onRead(Read)`, `setMuted(bool)`, `loop()`.
   Deps: `M5.Speaker`, `M5.Power`, proto, config.
 - **`power`** ⬜ — PMIC: boot stages, idle/motion auto-off, two-step off, sleep/wake, battery.
@@ -253,13 +257,15 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
 - **4P — Wi-Fi provisioning portal** ⬜ `portal`: SoftAP + captive page + form → writes `config`
   → `net` reconnects. Toggled from the Status screen (BtnB, context-sensitive). WPA2 on the AP.
   Built *after* 4, since it just writes the config the STA path already consumes.
-- **5 — wire protocol end-to-end** 🟡 **5.1 ✅** TX path proven (synthetic burst → `status:heard`);
-  **5.2 ✅** real mic streaming — `audio.onChunk → net::sendAudio` → cross-core handoff →
-  `sendBIN`; **verified: speak → `utterance` + `read` come back**. **5.3 ✅** ~3 s drop-oldest
-  PSRAM outage ring — **verified: audio spoken during a ~3 s WiFi drop survives**. **5.4** degraded
-  state. (Requires the Links2004 backend — AHC's sub-framing is too slow for sustained streaming.)
-- **6 — glance rendering (real reads)** ⬜ wire `read` → `display::setGlance` (≤8 words),
-  processing indicator, history, status. Verify: read on screen within 3 s of utterance end.
+- **5 — wire protocol end-to-end** ✅ **5.1** TX path proven (synthetic burst → `status:heard`);
+  **5.2** real mic streaming — `audio.onChunk → net::sendAudio` → cross-core handoff → `sendBIN`
+  (speak → `utterance` + `read` come back); **5.3** ~3 s drop-oldest PSRAM outage ring (audio
+  during a ~3 s WiFi drop survives); **5.4** degraded state (client ping + 45 s no-frame watchdog,
+  keeps buffering). (Requires the Links2004 backend — AHC's sub-framing is too slow.)
+- **6 — glance rendering (real reads)** ✅ `read` → `display::setGlance` on the glance (white text,
+  tone edge bar, transcript, `...` processing indicator), a real 5-deep history ring, timeout
+  refresh while conversing. Content updates without auto-waking (lift/press to view). **Verified
+  on hardware.**
 - **7 — audio cues** ⬜ `cues`: ≤150 ms tones, negative + mismatch only, silent for
   neutral/positive; mute already gates the mic + shows the glyph. 75% volume cap on battery.
 - **8 — power management** ⬜ `power`: visible boot stages, idle+motion auto-off, two-step off,

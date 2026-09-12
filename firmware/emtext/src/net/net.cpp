@@ -98,11 +98,11 @@ namespace {
     // POSIX TZ "UTC0" -- we only need a correct absolute clock for TLS cert dates.
     configTzTime("UTC0", "pool.ntp.org", "time.google.com");
     struct tm tm;
-    if (getLocalTime(&tm, 10000)) {
+    if (getLocalTime(&tm, 4000)) {              // short wait; NTP keeps syncing in background
       LOG_INFO("net: time synced %04d-%02d-%02d %02d:%02d UTC",
                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
     } else {
-      LOG_WARN("net: NTP sync timed out (ok while TLS is insecure)");
+      LOG_WARN("net: NTP not synced yet (ok while TLS is insecure)");
     }
   }
 

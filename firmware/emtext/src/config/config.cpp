@@ -22,11 +22,25 @@ namespace {
   #ifdef CFG_TOKEN
     cfg.token = CFG_TOKEN;
   #endif
+  #ifdef CFG_AP_SSID
+    cfg.apSsid = CFG_AP_SSID;
+  #endif
+  #ifdef CFG_AP_PASS
+    cfg.apPass = CFG_AP_PASS;
+  #endif
   }
 }
 
 
 const config::Config& config::get() { return cfg; }
+
+void config::setWifi(const String& ssid, const String& pass) {
+  cfg.nets[0].ssid = ssid;
+  cfg.nets[0].pass = pass;
+  cfg.netCount = 1;
+}
+void config::setHost(const String& host)   { cfg.serverHost = host; }
+void config::setToken(const String& token) { cfg.token = token; }
 
 void config::load() {
   applySecrets();

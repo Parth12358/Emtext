@@ -21,4 +21,5 @@ namespace display {
   void  setProcessing(bool on);                // heard, still thinking
   void  setPaused(bool on);                    // privacy switch: mic not listening
   void  setMuted(bool on);                     // muted indicator (mic + cues off)
+  void  setPortal(bool on, const String& ssid, const String& ip);   // setup-AP status
 }

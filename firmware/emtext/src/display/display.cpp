@@ -1,6 +1,7 @@
 #include "display.h"
 #include "../logx.h"
 #include <M5Unified.h>
+#include <math.h>
 
 namespace {
   display::State st = display::State::Dark;
@@ -19,6 +20,8 @@ namespace {
   bool   processing = false;
   bool   paused = false;
   bool   muted = false;
+  bool   portalOn = false;
+  String portalSsid, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
   struct Hist { String read; String tone; };
@@ -41,14 +44,6 @@ namespace {
     return { 0, false, false };  // neutral: absence is the signal
   }
 
-  void drawBar(const Bar& b, int h) {
-    if (!b.show) return;
-    auto& d = M5.Display;
-    if (!b.dashed) { d.fillRect(0, 0, BAR_W, h, b.color); return; }
-    for (int y = 0; y < h; y += 12) d.fillRect(0, y, BAR_W, 7, b.color);  // dashed
-  }
-
-  // Greedy word-wrap at the current text size; fills out[] up to maxLines.
   // Keep only the first `maxWords` words; append "..." if there were more.
   String capWords(const String& s, int maxWords) {
     int words = 0, i = 0;
@@ -62,17 +57,6 @@ namespace {
       i = sp + 1;
     }
     return s;
-  }
-
-  // Last `n` words of `s` (for the transcript tail).
-  String tailWords(const String& s, int n) {
-    int idx = s.length();
-    for (int w = 0; w < n; w++) {
-      int sp = s.lastIndexOf(' ', idx - 1);
-      if (sp < 0) return s;
-      idx = sp;
-    }
-    return s.substring(idx + 1);
   }
 
   // Wrap into <=2 lines at the current text size; if text is left over, the last line
@@ -104,49 +88,46 @@ namespace {
     return used;
   }
 
-  void drawRead() {
+  // Emotion mark: the hero of the glance. A tone-colored curve drawn as overlapping
+  // dots -- upward arc = positive, downward = negative, flat = neutral, wave = mismatch.
+  void drawMark(const String& tone, int cx, int cy, int w, int amp, int rad, uint16_t col) {
     auto& d = M5.Display;
-    int x0 = BAR_W + 6;
-    int areaW = d.width() - x0 - 10;                // right margin leaves room for dot
-    d.setTextColor(gLowConf ? cDim() : TFT_WHITE, TFT_BLACK);
-    d.setTextDatum(middle_left);
-
-    String text = capWords(gRead, 8);               // Section 5: glance shows <= 8 words
-    String lines[2]; int n = 1; bool clipped = true; int chosen = 1;
-    for (int size = 3; size >= 1; size--) {         // largest size that fits without clipping
-      d.setTextSize(size);
-      n = wrap2(text, areaW, lines, &clipped);
-      chosen = size;
-      if (!clipped) break;
+    const int N = 22;
+    for (int i = 0; i <= N; i++) {
+      float t = -1.0f + 2.0f * i / N;                       // -1 .. 1
+      float x = cx + t * (w * 0.5f);
+      float y;
+      if      (tone == "positive")                y = cy + amp * (1 - t * t);   // smile
+      else if (tone == "negative")                y = cy - amp * (1 - t * t);   // frown
+      else if (tone == "sarcastic" || tone == "mixed") y = cy - amp * sinf(t * PI); // wave
+      else                                        y = cy;                       // neutral: flat
+      d.fillCircle((int)x, (int)y, rad, col);
     }
-    d.setTextSize(chosen);
-    int lh = d.fontHeight();
-    int y = d.height() / 2 - (n - 1) * lh / 2;
-    for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), x0, y); y += lh; }
   }
 
   void drawGlance() {
     auto& d = M5.Display;
-    Bar b = toneBar(gTone);
-    drawBar(b, d.height());
-    drawRead();
+    int W = d.width(), H = d.height();
 
-    // transcript: just the dim tail — enough to confirm it heard the right sentence
-    d.setTextColor(cFaint(), TFT_BLACK);
-    d.setTextDatum(bottom_center);
+    // emotion mark = the hero (tone color; neutral is a calm dim flat line)
+    Bar b = toneBar(gTone);
+    uint16_t col = b.show ? b.color : cDim();
+    drawMark(gTone, W / 2, (int)(H * 0.40f), (int)(W * 0.55f), (int)(H * 0.13f), 4, col);
+
+    // the read is a small supporting caption -- not the headline
+    String text = capWords(gRead, 6);
+    d.setTextColor(gLowConf ? cFaint() : cDim(), TFT_BLACK);
+    d.setTextDatum(top_center);
     d.setTextSize(1);
-    String tr = tailWords(gTranscript, 6);
-    while (tr.length() && d.textWidth(tr.c_str()) > d.width() - 8) {
-      int sp = tr.indexOf(' ');
-      if (sp < 0) break;
-      tr = tr.substring(sp + 1);
-    }
-    d.drawString(tr.c_str(), d.width() / 2, d.height() - 2);
+    String lines[2]; bool clip; int n = wrap2(text, W - 12, lines, &clip);
+    int lh = d.fontHeight();
+    int y = H - 4 - n * lh;
+    for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), W / 2, y); y += lh; }
 
     if (processing) {                               // heard, still thinking (static)
       d.setTextColor(cMis(), TFT_BLACK);
       d.setTextDatum(top_left);
-      d.drawString("...", BAR_W + 6, 2);
+      d.drawString("...", 4, 2);
     }
   }
 
@@ -213,6 +194,16 @@ namespace {
         d.drawString(("wifi: " + String(connReady ? "ready" : "searching")).c_str(), 4, 24);
         d.drawString(("batt: " + String(M5.Power.getBatteryLevel()) + "%").c_str(), 4, 40);
         d.drawString(("up:   " + String(millis() / 1000) + "s").c_str(), 4, 56);
+        if (portalOn) {
+          d.setTextColor(cMis(), TFT_BLACK);
+          d.drawString(("setup AP: ON " + portalSsid).c_str(), 4, 76);
+          d.drawString(("join " + portalIp).c_str(), 4, 90);
+        } else {
+          d.setTextColor(cDim(), TFT_BLACK);
+          d.drawString("setup AP: off", 4, 76);
+        }
+        d.setTextColor(cFaint(), TFT_BLACK);
+        d.drawString("[A] toggle AP", 4, 108);
         break;
 
       default: break;
@@ -264,6 +255,11 @@ void display::setProcessing(bool on) {
 void display::setMuted(bool on) {
   muted = on;
   if (!paused && st != State::Dark) draw();
+}
+
+void display::setPortal(bool on, const String& ssid, const String& ip) {
+  portalOn = on; portalSsid = ssid; portalIp = ip;
+  if (!paused && st == State::Status) draw();
 }
 
 void display::setPaused(bool on) {

@@ -15,4 +15,7 @@ namespace net {
   const char* stateName();
   void        onFrame(void (*cb)(const proto::Frame&));   // dispatched on core 1
   void        sendAudio(const int16_t* pcm, size_t n);    // core 1 -> TX queue -> core 0
+  void        reconnect();                                // drop STA + reconnect (after a config change)
+  void        setPortal(bool on);                         // enable/disable the setup AP (from core 1)
+  bool        portalOn();                                 // is the setup AP currently up?
 }

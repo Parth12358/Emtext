@@ -24,6 +24,9 @@ namespace {
   int      authFails = 0;   // consecutive close-before-ready cycles (bad token)
   const uint32_t PING_MS     = 15000;   // client keepalive interval
   const uint32_t DEGRADED_MS = 45000;   // no server frame this long (socket up) -> degraded
+  volatile bool  forceReconnect = false; // set by reconnect() after a config change
+  volatile bool  wantPortal = false;     // desired setup-AP state (set from core 1)
+  bool           apOn = false;           // actual AP state (task-owned, core 0)
 
   // Cross-core audio handoff (5.3): a drop-oldest byte ring in PSRAM. core 1 (sendAudio)
   // writes, core 0 (task) drains -> sendBIN. Sized for a ~3 s outage so a WiFi blip loses
@@ -47,7 +50,7 @@ namespace {
 
   bool connectWiFiOnce(const config::Net& n, uint32_t deadlineMs) {
     if (n.ssid.length() == 0) return false;
-    WiFi.disconnect(true);            // stop any in-flight attempt (fixes "cannot set config")
+    WiFi.disconnect(false);           // drop STA only; keep the setup AP radio up
     vTaskDelay(pdMS_TO_TICKS(150));
     LOG_INFO("net: trying ssid '%s'", n.ssid.c_str());
     WiFi.begin(n.ssid.c_str(), n.pass.length() ? n.pass.c_str() : nullptr);
@@ -80,7 +83,7 @@ namespace {
   bool connectWiFi() {
     const config::Config& c = config::get();
     if (c.netCount == 0) { LOG_ERR("net: no networks configured (set ssid/pass)"); return false; }
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(apOn ? WIFI_AP_STA : WIFI_STA);   // keep the setup AP up only if enabled
     WiFi.setAutoReconnect(false);    // our state machine owns retries, not the driver
     for (uint8_t i = 0; i < c.netCount; i++) {
       if (connectWiFiOnce(c.nets[i], 10000)) {
@@ -114,8 +117,27 @@ namespace {
   }
   void resetBackoff() { backoffMs = 1000; }
 
+  // Apply a pending setup-AP toggle. Runs only on the net task (core 0) so all radio
+  // ops stay single-threaded; setPortal() from core 1 just flips `wantPortal`.
+  void applyPortal() {
+    if (wantPortal == apOn) return;
+    const config::Config& c = config::get();
+    if (wantPortal) {
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP(c.apSsid.c_str(), c.apPass.c_str());
+      LOG_INFO("net: setup AP ON '%s' at %s", c.apSsid.c_str(),
+               WiFi.softAPIP().toString().c_str());
+    } else {
+      WiFi.softAPdisconnect(false);   // stop the AP, keep STA
+      WiFi.mode(WIFI_STA);
+      LOG_INFO("net: setup AP OFF");
+    }
+    apOn = wantPortal;
+  }
+
   void task(void*) {
     for (;;) {
+      applyPortal();
       setState(net::State::Searching);
       if (!connectWiFi()) { backoff(); continue; }
       setState(net::State::Connected);
@@ -143,7 +165,8 @@ namespace {
       uint32_t lastRx     = millis();
       uint32_t lastPing   = millis();
 
-      while (transport::connected() && WiFi.status() == WL_CONNECTED) {
+      while (transport::connected() && WiFi.status() == WL_CONNECTED && !forceReconnect) {
+        applyPortal();
         size_t n = transport::poll(buf, sizeof(buf));
         if (n > 0) {
           lastRx = millis();
@@ -192,6 +215,7 @@ namespace {
         vTaskDelay(pdMS_TO_TICKS(2));
       }
       transport::close();
+      forceReconnect = false;   // consumed
 
       // Auth-reject inference: the AHC lib can't read the 1008 close code, so a
       // socket that closes quickly BEFORE `ready` is treated as a rejected token.
@@ -267,3 +291,11 @@ void net::sendAudio(const int16_t* pcm, size_t n) {
   ringCount += bytes;
   xSemaphoreGive(ringMx);
 }
+
+void net::reconnect() {
+  forceReconnect = true;
+  backoffMs = 1000;   // reconnect promptly after a config change
+}
+
+void net::setPortal(bool on) { wantPortal = on; }
+bool net::portalOn()         { return apOn; }

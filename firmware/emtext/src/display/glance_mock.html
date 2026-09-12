@@ -1,0 +1,47 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>emtext glance — emotion marks</title>
+<style>
+  body{margin:0;background:#05070a;color:#e8ebf0;font:14px/1.4 -apple-system,system-ui,sans-serif;padding:24px}
+  h1{font-size:16px;font-weight:600;text-align:center;color:#8b93a3;margin:0 0 20px}
+  .grid{display:flex;flex-wrap:wrap;gap:22px;justify-content:center}
+  .dev{width:240px;height:135px;background:#0e1116;border:1px solid #222;border-radius:10px;position:relative;overflow:hidden}
+  .cap{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:12px;color:#9aa1b0}
+  .dot{position:absolute;top:8px;right:8px;width:6px;height:6px;border-radius:50%;background:#3fb37f}
+  .name{text-align:center;color:#8b93a3;font-size:12px;margin-top:6px}
+  .cell{display:flex;flex-direction:column;align-items:center}
+</style></head>
+<body>
+<h1>glance — the emotion mark is the hero, read is a small caption</h1>
+<div class="grid">
+
+  <div class="cell"><div class="dev"><span class="dot"></span>
+    <svg width="240" height="135" viewBox="0 0 240 135">
+      <path d="M54 46 Q120 86 186 46" fill="none" stroke="rgb(90,170,90)" stroke-width="8" stroke-linecap="round"/>
+    </svg>
+    <div class="cap">sounds genuinely pleased</div></div>
+    <div class="name">positive — upward arc, green</div></div>
+
+  <div class="cell"><div class="dev"><span class="dot"></span>
+    <svg width="240" height="135" viewBox="0 0 240 135">
+      <path d="M54 62 Q120 22 186 62" fill="none" stroke="rgb(200,80,70)" stroke-width="8" stroke-linecap="round"/>
+    </svg>
+    <div class="cap">she seems upset</div></div>
+    <div class="name">negative — downward arc, red</div></div>
+
+  <div class="cell"><div class="dev"><span class="dot"></span>
+    <svg width="240" height="135" viewBox="0 0 240 135">
+      <path d="M54 54 Q87 84 120 54 T186 54" fill="none" stroke="rgb(220,160,40)" stroke-width="8" stroke-linecap="round"/>
+    </svg>
+    <div class="cap">likely sarcastic</div></div>
+    <div class="name">mismatch — wave, amber</div></div>
+
+  <div class="cell"><div class="dev"><span class="dot"></span>
+    <svg width="240" height="135" viewBox="0 0 240 135">
+      <line x1="54" y1="54" x2="186" y2="54" stroke="rgb(150,150,150)" stroke-width="8" stroke-linecap="round"/>
+    </svg>
+    <div class="cap">taking it literally</div></div>
+    <div class="name">neutral — flat dim line</div></div>
+
+</div>
+</body></html>

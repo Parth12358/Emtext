@@ -8,14 +8,26 @@
 #include "src/controls/controls.h"
 #include "src/audio/audio.h"
 #include "src/net/net.h"
+#include "src/portal/portal.h"
 
 // ---- semantic button callbacks (wiring only) ----
+// Setup AP toggle (pressed from the Status screen).
+static bool g_ap = false;
+static void onToggleAp() {
+  g_ap = !g_ap;
+  net::setPortal(g_ap);
+  portal::setActive(g_ap);
+  display::setPortal(g_ap, config::get().apSsid, "192.168.4.1");
+  LOG_INFO("setup AP %s", g_ap ? "enabled" : "disabled");
+}
+
 static void onWake() {
   using S = display::State;
   switch (display::state()) {
-    case S::Dark:   display::setState(S::Glance);  break;
-    case S::Glance: display::setState(S::History); break;
-    default:        display::setState(S::Glance);  break;
+    case S::Dark:    display::setState(S::Glance);  break;
+    case S::Glance:  display::setState(S::History); break;
+    case S::Status:  onToggleAp();                  break;   // press on the info page toggles the AP
+    default:         display::setState(S::Glance);  break;
   }
 }
 // Mic runs only when neither paused (privacy) nor muted -- so un-muting never
@@ -115,6 +127,9 @@ void setup() {
   // Stage 5.2: gated mic chunks -> network (cross-core handoff).
   audio::onChunk([](const int16_t* p, size_t n){ net::sendAudio(p, n); });
 
+  // Stage 4P: setup AP portal (toggled from the Status screen; serves the config page).
+  portal::begin();
+
   // seed fake data so glance/history/status show something (real reads land in Stage 6)
   display::setGlance("hey, nice work", "positive", "hey nice work");
   display::setConnection("searching");
@@ -128,6 +143,7 @@ void loop() {
   display::loop();
   audio::loop();
   net::loop();
+  portal::loop();
 
   // reflect the network state on the display's connection dot
   static net::State lastNet = net::State::Off;

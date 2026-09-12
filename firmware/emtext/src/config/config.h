@@ -18,7 +18,9 @@ namespace config {
     uint32_t idleTimeoutS = 300; //auto off timer
     uint8_t logLevel = 2;   //  0 ERR; 1 WARN; 2 INFO; 2 DEBUG;
 
-    
+    // permanent setup access point (always on; join to reconfigure)
+    String apSsid = "emtext-setup";
+    String apPass = "emtextsetup";   // >= 8 chars (WPA2); override in secrets.h
   };
 
   void load();  //secrets.h defaults, then NVS overrides
@@ -26,5 +28,10 @@ namespace config {
   void clear(); //wipe NVS namespace
   const Config& get();
   void handleSerial();
+
+  // programmatic setters (used by the Wi-Fi provisioning portal)
+  void setWifi(const String& ssid, const String& pass);
+  void setHost(const String& host);
+  void setToken(const String& token);
 }
 

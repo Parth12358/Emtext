@@ -93,9 +93,12 @@ namespace {
     net::reconnect();
   }
 
-  void handleNotFound() {   // captive portal: send everything to the form
-    server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
-    server.send(302, "text/plain", "");
+  // Captive portal: return the config page for ANY unmatched URL -- including the OS
+  // reachability probes (captive.apple.com, connectivitycheck.gstatic.com/generate_204,
+  // msftconnecttest.com, ...). Getting the form instead of the expected "success"/204
+  // makes iOS/Android/Windows pop their "sign in to network" sheet automatically.
+  void handleNotFound() {
+    server.send(200, "text/html", render());
   }
 }
 

@@ -19,7 +19,7 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 2 controls + display skeleton | `controls`, `display` | ✅ done |
 | 3 mic + energy gate | `audio` | ✅ done |
 | 4 connectivity | `net`, `transport`, `proto` | ✅ 4a–4d (validated wss) |
-| 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ⬜ after 4 |
+| 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ✅ toggle + auto-pop |
 | 5 wire protocol end-to-end | `net` + `proto` + `audio` | ✅ stream + outage + degraded |
 | 6 glance rendering (real reads) | `display` | ✅ reads + history on glance |
 | 7 audio cues | `cues` | ⬜ |
@@ -98,11 +98,15 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
     128 B TX buffer can't be raised from the sketch (its impl `.cpp` compiles with the default),
     so a chunk is split into ~17 sub-frames = ~270 tiny TLS records/s; the same 5.1 burst took
     **~6-7 s**. Kept as reference/fallback, and it **does** validate the GTS bundle (`setCACert`).
-- **`portal`** ⬜ — phone-based Wi-Fi provisioning. `net` switches the radio to **SoftAP**;
-  `portal` serves a self-contained config page (`WebServer` + `DNSServer` captive redirect),
-  the form writes `config` + `save()`, then `net` returns to STA and reconnects. Owns only the
-  HTTP/HTML/form — the radio stays `net`'s. Toggled from the **Status** screen (BtnB, context).
-  AP is WPA2 (the page carries the token). Deps: `WiFi` (AP), `WebServer`, `DNSServer`, config, net.
+- **`portal`** ✅ — phone-based Wi-Fi provisioning (verified on hardware). **Toggled from the
+  Status screen** (BtnA press): `net` brings up an **AP+STA** setup hotspot (`emtext-setup`, WPA2)
+  on core 0; `portal` serves a self-contained config page (`WebServer` + `DNSServer`). **Captive
+  auto-pop:** `onNotFound` returns the form (200) for *any* URL, so the OS reachability probes
+  trigger the "sign in to network" sheet automatically. The form (ssid/pass/host/token) writes
+  `config` + `save()` and calls `net::reconnect()`. Owns only the HTTP/HTML/form — the radio
+  stays `net`'s (`net::setPortal`/`portalOn`, `config::setWifi/setHost/setToken`). To avoid a
+  boot race, the WebServer/DNS start **only when the AP is up**, never at boot. AP off by default.
+  Deps: `WiFi` (AP), `WebServer`, `DNSServer`, config, net.
 
 **I/O** (one hardware resource each):
 
@@ -254,9 +258,10 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
   `transport` WebSocket to `/stream` + token auth → `ready` (dot green), backoff/reconnect +
   auth-reject halt; **4d ✅** `setCACert` GTS root bundle (`certs.h`) — validated `wss` handshake
   (verified on hardware, ~2 s). Degraded state folds into Stage 5.
-- **4P — Wi-Fi provisioning portal** ⬜ `portal`: SoftAP + captive page + form → writes `config`
-  → `net` reconnects. Toggled from the Status screen (BtnB, context-sensitive). WPA2 on the AP.
-  Built *after* 4, since it just writes the config the STA path already consumes.
+- **4P — Wi-Fi provisioning portal** ✅ `portal`: SoftAP + captive page + form → writes `config`
+  → `net` reconnects. Toggled from the Status screen (BtnA press). WPA2 AP, off by default.
+  **Captive auto-pop verified** (form returned for any URL → OS "sign in" sheet). WebServer/DNS
+  start only when the AP is up (avoids a boot race).
 - **5 — wire protocol end-to-end** ✅ **5.1** TX path proven (synthetic burst → `status:heard`);
   **5.2** real mic streaming — `audio.onChunk → net::sendAudio` → cross-core handoff → `sendBIN`
   (speak → `utterance` + `read` come back); **5.3** ~3 s drop-oldest PSRAM outage ring (audio

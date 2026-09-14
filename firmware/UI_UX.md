@@ -1,263 +1,265 @@
-# emtext pendant — UI/UX reference
+# emtext pendant — UI/UX reference & plan
 
 A complete walkthrough of the device's on-screen UI and physical interactions: every screen,
-what it looks like, how you get in and out, what every button and gesture does, and every
-transition between them. It doubles as a **TODO** — rough edges in the built UI are flagged
-⚠️, and UI that isn't built yet is in its own section 🔲.
+what it looks like, how you get in and out, what every button/gesture does, and every transition
+between them. It is **both** a record of what's built **and** the target design we're building
+toward — so each screen is split into what exists today vs. where it's going.
 
-**Source of truth:** this describes the actual code, not an aspiration. Behavior comes from
-`src/display/display.cpp` (screens/rendering), `src/controls/controls.cpp` (button + IMU
-events), `emtext.ino` (what each event *does* — the wiring), and `src/portal/portal.cpp`
-(setup portal). If the doc and the code ever disagree, the code wins — fix the doc.
+**Source of truth for "Now":** the actual code — `src/display/display.cpp` (screens),
+`src/controls/controls.cpp` (button/IMU events), `emtext.ino` (wiring), `src/portal/portal.cpp`
+(portal). If the doc and the code disagree about *Now*, the code wins — fix the doc.
 
-**Legend:** ✅ built & on-device · 🔲 planned, not built · ⚠️ gap / rough edge (a TODO).
+**Legend:** ✅ built & on-device · 🔲 target / planned, not built yet · ⚠️ gap / rough edge.
+Where the code name differs from the new UX name, both are given (e.g. *More Info* is
+`display::State::History` in code).
 
 ---
 
-## 1. UX principles (why it looks the way it does)
+## 1. UX principles
 
-- **The emotion mark is the hero.** The glance leads with a large tone-colored *curve*, not
-  text. The words are a small supporting caption. The device's job is to convey *how something
-  was said* at a glance; the transcript/read is backup, not the headline.
-- **Desaturated palette = observation, not alarm.** Colors are muted on purpose (a green of
-  `(90,170,90)`, a red of `(200,80,70)`). Saturated `TFT_RED`/`TFT_GREEN` read as an alert;
-  muted tones read as a calm note.
-- **Redundant encoding — never color alone.** Tone is carried by *both* the curve shape
-  (smile/frown/wave/flat) *and* color, so it survives color-blindness and a dim screen.
-- **Neutral = absence of signal.** Neutral draws a flat dim line and *no* history tick. When
-  there's nothing worth flagging, the UI stays quiet.
-- **No scrolling text, no continuous animation.** Everything is a static frame; the screen only
-  changes when something actually happens. This keeps it glanceable and saves power.
-- **Privacy is unmistakable.** Pause is a distinct dim screen with a `||` glyph and the word
-  "paused" — it can't be confused with any read screen, and it hard-stops the mic.
+- **The emotion read is the hero.** The glance leads with the emotional tone (symbol + color),
+  not text. Words are supporting context, not the headline.
+- **Desaturated palette = observation, not alarm.** Muted tones read as a calm note, not an alert.
+- **Redundant encoding — never color alone.** Tone is carried by shape *and* color, so it
+  survives color-blindness and a dim screen.
+- **Neutral = quiet.** When there's nothing worth flagging, the UI stays still.
+- **Static frames, no scrolling text / no constant animation** — glanceable and power-cheap.
+  (Animations are an explicit *nice-to-have*, not a default.)
+- **Privacy is unmistakable.** Pause is a distinct screen that hard-stops the mic.
+- **Chrome stays out of the way.** Persistent info (battery, connectivity, clock) lives in a
+  small info bar / corner, never competing with the semantic read.
 
 ---
 
 ## 2. Screen map
 
-Four screens (`display::State`) plus a **Paused** overlay that is a separate flag drawn *ahead
-of* everything, and three small indicator overlays that ride on top of the live screens.
+Four screens + a **Paused** privacy overlay (a flag drawn ahead of everything) + persistent
+chrome overlays (info bar, clock, button-press shadows).
 
-| Screen | Brightness | Purpose | Enter from | Leave to |
-|---|---|---|---|---|
-| **Boot splash** | (default) | "emtext" logo, 600 ms | power on | Dark (auto) |
-| **Dark** ✅ | 0 (off) | resting/idle; screen truly black | boot, 8 s glance timeout | Glance (BtnA / lift) |
-| **Glance** ✅ | 130 | the live read: emotion mark + caption | Dark→BtnA/lift, unpause, "else"→BtnA | History (BtnA), Dark (8 s), Status (BtnB-hold), Paused (BtnB) |
-| **History** ✅ | 130 | last 5 reads, most-recent-first | Glance→BtnA | Glance (BtnA), Status (BtnB-hold), Paused (BtnB) |
-| **Status** ✅ | 130 | wifi/batt/uptime + setup-AP toggle | BtnB-hold (any screen) | AP toggle (BtnA, stays), Paused (BtnB) |
-| **Paused** ✅ (overlay) | 60 | privacy screen; mic hard-off | BtnB click (any screen) | Glance (BtnB click again) |
+| Screen | Code name | Now | Purpose |
+|---|---|---|---|
+| **Boot / Quick Setup** | splash | ✅ splash · 🔲 quick setup | logo + connect progress; offer setup while connecting |
+| **Dark** | `State::Dark` | ✅ | resting/idle; screen black; default state |
+| **Glance** | `State::Glance` | ✅ | the live read: tone symbol + LLM context + chrome |
+| **More Info** | `State::History` | ✅ (as history) | longer LLM context / summary of recent reads |
+| **Settings** | `State::Status` | ✅ scrollable page | rows: wifi/bright/cues/power + portal-lock panel |
+| **Paused** (overlay) | `g_paused` flag | ✅ | privacy screen; mic hard-off |
 
-**Indicator overlays** (drawn only when *not* Dark and *not* Paused):
+**Chrome overlays** (target — ride on top of the live screens):
 
-| Overlay | Where | Meaning |
+| Overlay | Now | Target |
 |---|---|---|
-| Connection **dot** ✅ | top-right | green = net `Ready`; amber = anything else |
-| **Mute glyph** ✅ (circle + slash) | bottom-left | mic muted (BtnA-hold) |
-| **Processing "…"** ✅ | top-left (Glance only) | server sent `status: thinking`; a read is pending |
+| **Info bar** (battery + connectivity) | ⚠️ partial (conn dot only) | ✅ battery level + connectivity indicator, compact |
+| **Clock** | 🔲 | small tasteful face, on the side/out of the way; larger than the summary text, **smaller** than the semantic read |
+| **Mute glyph** | ✅ | mic-slash glyph when cues are muted; mute is now toggled from the Settings `cues` row (not BtnA-hold) |
+| **Processing "…"** | ✅ | shown while a read is pending (`status: thinking`) |
+| **Button-press shadows** | 🔲 | iOS-style on-screen shadow at BtnB / PWR to show where the button is and that it was pressed |
 
 ---
 
 ## 3. Control reference
 
 `M5.update()` runs first in `loop()`, then `controls::loop()` maps raw buttons/IMU to semantic
-callbacks; `emtext.ino` decides what each one does.
+callbacks; `emtext.ino` decides what each does — **context-dependent on the current screen**.
 
-| Input | Event | Action (context-dependent) | Wired in |
-|---|---|---|---|
-| **BtnA** click | `onWake` | Dark→Glance · Glance→History · Status→toggle AP · else→Glance | `emtext.ino:onWake` |
-| **BtnA** hold | `onMute` | toggle mute (mic off if muted-or-paused; mute glyph) | `emtext.ino:onMute` |
-| **BtnB** click | `onPause` | toggle privacy pause (mic hard-off; Paused overlay) | `emtext.ino:onPause` |
-| **BtnB** hold | `onStatus` | go to Status screen | `emtext.ino:onStatus` |
-| **BtnPWR** hold | `onPowerOff` | ⚠️ **stub** — logs only, no shutdown, no UI | `emtext.ino:onPowerOff` |
-| **IMU** tilt | `onOrient(rot)` | auto-rotate the screen (portrait/landscape) | `emtext.ino:onOrient` |
-| **IMU** lift | `onLift` | if Dark → Glance (lift-to-wake) | `emtext.ino:onLift` |
+| Input | Action (by screen) | Wired |
+|---|---|---|
+| **BtnA** click | Dark→Glance · Glance→More Info · More Info→Glance · **Settings→select row** | `onWake` ✅ |
+| **BtnA** hold | Settings→back to Glance · elsewhere→**save a clip** (stub, needs server) | `onMute` ✅ (clip 🔲) |
+| **BtnB** click | **Settings→scroll to next row** · elsewhere→privacy pause | `onPause` ✅ |
+| **BtnB** hold | live screen→open Settings · **Settings→back to Glance** | `onStatus` ✅ |
+| **BtnPWR** hold | → Dark (two-step power-off is Stage 8) | `onPowerOff` ✅ (interim) |
+| **IMU** tilt | auto-rotate | `onOrient` ✅ |
+| **IMU** lift | Dark → Glance (lift-to-wake) | `onLift` ✅ |
 
-**Timings & thresholds:**
-- Glance auto-dims to Dark after **8 s** (`GLANCE_MS`), reset on each new read.
-- Click vs hold is M5Unified's own `wasClicked()` / `wasHold()` (hold ≈ 500 ms default).
-- IMU sampled ~**20 Hz** (every 50 ms). Orientation fires only when the quadrant changes.
-- Lift-to-wake: acceleration magnitude > **1.35 g**, then a **1.5 s** cooldown so it fires once.
-  Both are coarse and meant to be tuned on hardware (`LIFT_G`, `LIFT_COOLDOWN_MS`).
+While the **setup portal is up**, Settings nav is **locked**: BtnB scroll and both back gestures
+are dead; only BtnA (turn portal off) or PWR (→Dark) get you out.
+
+**Timings & thresholds (Now):** Glance auto-dims to Dark after **8 s** (`GLANCE_MS`, reset on
+each read). Click vs hold = M5Unified `wasClicked()`/`wasHold()` (~500 ms). IMU ~**20 Hz**;
+orientation fires on quadrant change. Lift = accel > **1.35 g** then a **1.5 s** cooldown
+(`LIFT_G`, `LIFT_COOLDOWN_MS`, tune on hardware).
 
 ---
 
 ## 4. Per-screen walkthrough
 
-### 4.1 Boot splash ✅
-- **On screen:** "emtext" centered, text size 2, green on a real M5StickS3 / red on any other
-  board (a quick board-detect sanity check), on black. Shown for 600 ms.
-- **How you get here:** power on / reset.
-- **Controls:** none (it's a fixed delay in `setup()` before the display module takes over).
-- **Transitions out:** after 600 ms, `display::begin()` sets **Dark** (brightness 0). Fake seed
-  data is loaded (`"hey, nice work"`, positive) so the first wake shows something.
-- ⚠️ **Gap:** the splash is a dumb delay — it shows nothing about conn(wifi/server) progress.
-  See 🔲 Boot stages (6.1). Also the board-color check is dev scaffolding, not real UX.
+### 4.1 Boot / Quick Setup — ⚠️ needs work (1/10)
+- **Now ✅:** "emtext" centered, size 2, green on a real M5StickS3 / red otherwise (board sanity
+  check), 600 ms, then `display::begin()` sets **Dark**. It's a dumb fixed delay — shows nothing
+  about connection progress.
+- **Target 🔲:** show connect progress (network → server → ready, + per-stage failure), and
+  **offer Quick Setup** while it works toward connecting — i.e. a path into the setup portal
+  right from boot instead of only from deep in Settings, so a first-run/unconfigured device is
+  obviously configurable.
 
 ### 4.2 Dark ✅
-- **On screen:** nothing — brightness 0, black. The device's normal resting state.
-- **How you get here:** after boot; after the 8 s glance timeout.
+- **On screen:** nothing — brightness 0, black. The normal resting state; everything defaults
+  back here.
 - **Controls from here:**
   - **BtnA click** → Glance.
   - **Lift gesture** → Glance.
-  - **BtnB click** → Paused (privacy) — works even from Dark.
-  - **BtnB hold** → Status.
-  - **BtnA hold** → toggles mute (no visible effect while Dark; glyph appears next time a live
-    screen draws). ⚠️ muting while Dark gives no feedback.
-- **Transitions out:** Glance (BtnA/lift), Status (BtnB-hold), Paused (BtnB click).
-- ⚠️ **Key gap:** a `read` arriving while Dark **updates history and the glance buffer but does
-  not wake the screen**. During a live conversation with the screen dark, reads accumulate
-  silently. Decide the intended behavior (see 6-Gaps and 8-Transition map).
-- ⚠️ **Compliance gap:** while Dark the mic may be *live* but there is no external indication of
-  capture state (the brief wants capture-state externally visible).
+  - **BtnB click** → Paused (works even from Dark).
+  - **BtnB hold** → Settings.
+  - **BtnA hold** → 🔲 **record a clip to save** (new; replaces today's mute action).
+- **Transitions out:** Glance (BtnA/lift), Settings (BtnB-hold), Paused (BtnB click),
+  clip capture (BtnA hold, 🔲).
+- ⚠️ **Read while Dark doesn't wake the screen** — reads accumulate silently (open question §10).
+- ⚠️ **No "mic live" affordance while Dark** — capture state should be externally visible
+  (compliance).
 
-### 4.3 Glance ✅ — the hero screen
-- **On screen (top to bottom):**
-  - Connection **dot**, top-right (green/amber).
-  - **Emotion mark** at ~40% height: a tone-colored curve drawn as overlapping dots across ~55%
-    of the width — **smile** (positive, green), **frown** (negative, red), **wave**
-    (sarcastic/mixed, amber), **flat dim line** (neutral).
-  - **Read caption** near the bottom: the read text, capped to **≤6 words** and wrapped to **≤2
-    lines**, in dim gray — or *fainter* gray when the read is low-confidence. This is deliberately
-    small: the mark leads, the words support.
-  - **"…"** top-left if a read is still pending (`status: thinking`).
-  - **Mute glyph** bottom-left if muted.
-- **How you get here:** Dark→BtnA/lift; unpause; the "else" branch of `onWake`; a new read while
-  already on Glance refreshes it in place.
+### 4.3 Glance — the hero screen
+**On-screen info (target):**
+- **Emotional tone** as a symbol (the hero). ✅ built as tone-colored curve (`drawMark`).
+- **Context from the LLM** (the read). ✅ built as a small caption.
+- **Connectivity** to server + wifi. ✅ conn dot; 🔲 richer info bar.
+- **Battery level.** 🔲 (via info bar).
+- **Clock / time.** 🔲
+- **iOS-style button shadows** to hint BtnB/PWR. 🔲
+
+**Nice-to-haves 🔲:** animations · wifi range/ping detail · battery level with uptime-remaining.
+
+- **How you get here:** Dark→BtnA/lift; unpause; a new read while already on Glance refreshes it
+  in place.
 - **Controls from here:**
-  - **BtnA click** → History.
-  - **BtnB hold** → Status.
+  - **BtnA click** → **More Info** (renamed from History).
+  - **BtnB hold** → Settings.
   - **BtnB click** → Paused.
-  - **BtnA hold** → mute toggle.
-- **Transitions out:** History (BtnA), Status (BtnB-hold), Paused (BtnB), **Dark after 8 s** of
-  no new read.
-- ⚠️ **Gap — transcript is dead data:** `emtext.ino` captures the `utterance` transcript into
-  `g_lastTranscript` and passes it to `display::setGlance(...)`, but the current `drawGlance`
-  renders only the mark + read caption — the transcript is never shown. Either surface it
-  (e.g. a press-to-reveal, or on History) or drop the argument.
-- ⚠️ **Open decision — emotion-mark vs. revert:** the mark-as-hero design is the current build.
-  Whether to keep it or revert to a text-led glance is still open (see 6-Gaps).
+  - **BtnA hold** → 🔲 record a clip.
+- **Transitions out:** More Info (BtnA), Settings (BtnB-hold), Paused (BtnB), **Dark after 8 s**
+  of no new read.
+- ⚠️ **Transcript is captured but not shown** (`g_lastTranscript` → `setGlance`, never rendered).
+  Decide: surface it in More Info, or drop it.
 
-### 4.4 History ✅
-- **On screen:** "history" title top-left; then up to **5** most-recent reads, newest first.
-  Each row = a small **tone tick** (colored rectangle; *none* for neutral) + an ordinal label
-  (`now`, `1 ago`, `2 ago`, …) + the read text, dim gray. If empty: "(nothing yet)".
-- **How you get here:** Glance → BtnA click.
+### 4.4 More Info — `State::History` ✅ (being repurposed)
+- **Now ✅:** "history" title + up to 5 recent reads (tone tick + ordinal label + read text),
+  most-recent-first; "(nothing yet)" when empty. Rows aren't width-clipped ⚠️.
+- **Target 🔲:** less of a 5-row list, more of a **detail page** — longer LLM context and a
+  summary of the last few prompts/reads. The place you go when the glance caption isn't enough.
 - **Controls from here:**
   - **BtnA click** → Glance.
-  - **BtnB hold** → Status.
+  - **BtnB hold** → Settings.
   - **BtnB click** → Paused.
-  - **BtnA hold** → mute toggle.
-- **Transitions out:** Glance (BtnA), Status (BtnB-hold), Paused (BtnB). ⚠️ **History does not
-  auto-dim** — only Glance has the 8 s timeout, so History stays lit until you act.
-- ⚠️ **Gap — rows not width-clipped:** row text is drawn raw at x=10; long reads run off the
-  right edge. Reuse `capWords`/`wrap2` (already in `display.cpp`) to clip.
-- ⚠️ **Gap — "now" is redundant** with the Glance you just left; consider relabeling, or showing
-  relative time instead of ordinals.
+  - **BtnA hold** → 🔲 (clip, TBD in this context).
+- ⚠️ **Does not auto-dim** — only Glance times out.
 
-### 4.5 Status ✅
-- **On screen:** "status" title (white); then `wifi: ready|searching`, `batt: N%`,
-  `up: <seconds>s`; a setup-AP block — **ON**: `setup AP: ON <ssid>` + `join <ip>` in amber;
-  **off**: `setup AP: off` in dim gray; and the hint `[A] toggle AP` in faint gray.
-- **How you get here:** **BtnB hold** from any live screen.
-- **Controls from here:**
-  - **BtnA click** → **toggles the setup AP** (this is the *only* screen where BtnA does this).
-    Turning it on brings up the `emtext-setup` hotspot and starts the captive portal (see §5).
-  - **BtnB click** → Paused.
-  - **BtnB hold** → (re)enters Status.
-  - **BtnA hold** → mute toggle.
-- **Transitions out:** stays on Status across an AP toggle (the block updates in place); Paused
-  (BtnB click). ⚠️ **No direct "back":** there's no explicit exit to Glance/Dark other than the
-  8 s-less screens — you leave via Pause, or wait (Status also does **not** auto-dim). Consider a
-  back affordance or a timeout.
-- ⚠️ **Gap — uptime/battery are static:** the screen only redraws on events (AP toggle, net
-  change), so `up:`/`batt:` are stale until something forces a redraw.
+### 4.5 Settings — `State::Status` ✅ (scrollable settings page — built, pending hardware verify)
+A scrollable page (`display.cpp:drawSettings()`), 4 rows with a `>` cursor, a `[B]next [A]sel`
+hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:**
+- **BtnB click** → scroll cursor to next row (wraps).
+- **BtnA click** → select/activate the highlighted row.
+- **BtnB hold** or **BtnA hold** → back to Glance · **PWR** → Dark.
+
+**Rows ✅:**
+
+| Row (code `Setting`) | Value shown | BtnA select does |
+|---|---|---|
+| **wifi** (`Wifi`) | joined SSID (trunc.) | launch/stop the setup **portal** |
+| **bright** (`Brightness`) | `n/4` | cycle 4 brightness presets (`40/90/150/220`), applied live to all lit screens |
+| **cues** (`Mute`) | `on` / `muted` | toggle cue mute (drives the mute glyph; wires to `cues::setMuted` when Stage 7 lands) |
+| **power** (`Power`) | battery `%` | ⚠️ stub — logs only (real power profiles = Stage 8) |
+
+Dropped from the page per the plan: **URL/host** and **token** (secret) aren't shown; **ping**
+isn't surfaced yet (net doesn't measure RTT — future). Uptime/battery live in the footer aside.
+
+**Portal lock ✅:** while the setup AP is up, the page replaces the rows with a credentials
+panel — **`join: <ssid>` · `pass: <apPass>` · `at: 192.168.4.1`** — and **freezes navigation**
+(scroll + both back gestures dead; `settingsLocked()` gates them in `emtext.ino`). The only exits
+are **BtnA** (turn the portal off) or **PWR** (→Dark). This is the "no nav during setup" +
+"show the hotspot password" requirement from §5.
+
+- ⚠️ **Live fields:** the footer's uptime/battery only refresh when the screen redraws on an
+  event, so they can read stale — add a periodic redraw while on this screen.
+- **Nice-to-haves 🔲:** nicer UI · theme control · choose what appears on Glance · surface ping.
 
 ### 4.6 Paused (privacy overlay) ✅
 - **On screen:** dim (brightness 60), a large `||` glyph centered, "paused" along the bottom.
-  Drawn by `drawPaused()` *before* any state check, so it overrides Glance/History/Status.
+  Drawn by `drawPaused()` *before* any state check, so it overrides everything.
 - **How you get here:** **BtnB click** from anywhere (including Dark).
-- **Effect:** `onPause` sets `g_paused` and calls `applyMic()` → the **mic is hard-off** while
-  paused (regardless of mute). This is the privacy stop.
-- **Controls from here:**
-  - **BtnB click** → unpause → **Glance** (which then auto-dims after 8 s).
-  - Other controls still fire their callbacks, but the Paused overlay keeps drawing until you
-    unpause (privacy takes precedence in `draw()`).
-- **Transitions out:** Glance (BtnB click).
-- **Design note:** deliberately unmistakable — distinct brightness, distinct glyph, a word. The
-  one screen that must never be confused with a live read.
+- **Effect:** `onPause` sets `g_paused` → `applyMic()` → **mic hard-off** (regardless of mute).
+  The privacy stop.
+- **Controls:** **BtnB click** → unpause → **Glance** (auto-dims after 8 s). Other callbacks
+  still fire, but the overlay keeps drawing until you unpause (privacy wins in `draw()`).
+- **Design note:** deliberately unmistakable — distinct brightness, glyph, and word; must never
+  be confused with a live read.
 
-### 4.7 Indicator overlays ✅
-- **Connection dot** (top-right): green when `net::state() == Ready`, amber otherwise. Driven
-  from `loop()` in `emtext.ino` whenever net state changes → `display::setConnection`.
-  ⚠️ **Degraded looks like searching** — both render amber; the `Degraded` state (socket alive,
-  no server traffic) is not visually distinct.
-- **Mute glyph** (bottom-left): amber circle with a slash, shown when muted. Only visible on a
-  live screen.
-- **Processing "…"** (top-left, Glance only): amber, shown between `status: thinking` and the
-  read landing. Cleared when the read arrives.
+### 4.7 Chrome overlays
+- **Info bar 🔲:** compact **battery level** + **connectivity indicator**. Today only the
+  connection dot exists (green=`Ready`, amber=else; ⚠️ Degraded looks like searching).
+- **Clock 🔲:** a tasteful face — **not** larger than the semantic info, **larger** than the
+  summary text, tucked to the side and out of the way.
+- **Button-press shadows 🔲:** iOS-style shadow rendered near BtnB / PWR to show where the button
+  is and give press feedback (like the iOS volume indicator).
 
 ---
 
 ## 5. Setup-AP portal UX (Stage 4P) ✅
 
-Reconfigure Wi-Fi/host/token from a phone, with no cable and no app. Full module notes are in
-`firmware/README.md`; the UX flow:
+Reconfigure Wi-Fi/host/token from a phone — no cable, no app. Module notes in `firmware/README.md`.
 
-1. **Enter Status** — BtnB hold. It shows `setup AP: off` + `[A] toggle AP`.
-2. **Toggle the AP on** — BtnA. `net` brings up the `emtext-setup` WPA2 hotspot (default pass
-   `emtextsetup`) on core 0; the Status block flips to `setup AP: ON emtext-setup` / `join
-   192.168.4.1`. The AP is **off by default** and only exists while toggled on.
-3. **Join from the phone** — connect to `emtext-setup`. The **captive "sign in" sheet pops
-   automatically** (the portal returns the config form for *any* URL, so the OS reachability
-   probe triggers it). Manual fallback: browse to `192.168.4.1`.
-4. **Configure** — the page has Wi-Fi network, Wi-Fi password, server host, access token.
-   Blank password/token fields keep the current value. **Save & reconnect** writes NVS and
-   triggers `net::reconnect()`.
-5. **Toggle the AP off** — BtnA again on Status.
+1. **Enter from Settings** (the Wifi SSID row).
+2. **AP comes up** — `net` brings up the `emtext-setup` WPA2 hotspot (default pass `emtextsetup`)
+   on core 0; Settings switches to the **credentials panel** — `join: <ssid>` / `pass: <apPass>`
+   / `at: 192.168.4.1`. Off by default.
+3. **Join from the phone** — the captive "sign in" sheet **pops automatically** (the portal
+   returns the config form for any URL, tripping the OS reachability probe). Fallback:
+   `192.168.4.1`.
+4. **Configure** — Wi-Fi network, Wi-Fi password, server host, token. Blank password/token keep
+   the current value. **Save & reconnect** writes NVS + `net::reconnect()`.
+5. **AP goes off** when you leave setup.
 
-⚠️ **AP-up latency:** if STA is *failing* when you toggle, the AP can take up to ~10 s to appear
-(the net task is busy in a connect attempt); instant when STA is already connected. ⚠️ **TLS is
-currently insecure** on the active WebSocket backend (documented debt in `firmware/README.md`) —
-unrelated to the portal, but relevant before any real deployment.
+**Changes:**
+- ✅ **Nav locked while the portal is up** — `settingsLocked()` freezes scroll + both back
+  gestures; only BtnA (turn off) or PWR (→Dark) escape, so state can't drift mid-configure.
+- ✅ **Hotspot password shown** on-screen (the credentials panel) so the user can join.
+- 🔲 *(nice-to-have)* a **QR code** to join the hotspot / open the page, as a fallback when the
+  captive sheet doesn't pop.
 
----
-
-## 6. Tone → visual mapping ✅
-
-| Tone | Mark shape | Color (`color565`) | History tick | Cue (🔲 planned) |
-|---|---|---|---|---|
-| positive | smile (upward arc) | green `(90,170,90)` | green | silent |
-| negative | frown (downward arc) | red `(200,80,70)` | red | short tone |
-| sarcastic | wave | amber `(220,160,40)` | amber | mismatch tone |
-| mixed | wave | amber `(220,160,40)` | amber | mismatch tone |
-| neutral | flat dim line | dim `(150,150,150)` | *none* | silent |
-
-- **Low-confidence** reads: the caption is drawn in the fainter gray `(90,90,90)` instead of the
-  normal dim gray — the mark still shows, the words recede.
-- **Neutral = absence:** no tick in history, flat line on the glance. Quiet is the message.
+⚠️ **TLS is currently insecure** on the active WebSocket backend (documented debt in
+`firmware/README.md`) — unrelated to the portal, but must be fixed before real deployment.
 
 ---
 
-## 7. Screen transition map ✅
+## 6. Tone → visual mapping ✅ (under revision)
+
+Current build; the exact symbols are being reworked (the emotion-mark-vs-alternative decision is
+open, §10).
+
+| Tone | Mark (now) | Color (`color565`) | History tick |
+|---|---|---|---|
+| positive | smile (upward arc) | green `(90,170,90)` | green |
+| negative | frown (downward arc) | red `(200,80,70)` | red |
+| sarcastic / mixed | wave | amber `(220,160,40)` | amber |
+| neutral | flat dim line | dim `(150,150,150)` | *none* |
+
+Low-confidence reads render the caption in a fainter gray. Neutral = flat + no tick (quiet is
+the message). Cue mapping (🔲 Stage 7) will pair negative + mismatch with a short tone.
+
+---
+
+## 7. Screen transition map (target)
 
 ```
         power on
-           │  (600 ms splash)
+           │  (splash + Quick Setup 🔲)
            ▼
-        ┌──────┐  BtnA / lift          ┌────────┐  BtnA          ┌─────────┐
-        │ Dark │ ────────────────────► │ Glance │ ─────────────► │ History │
-        │      │ ◄──────────────────── │        │ ◄───────────── │         │
-        └──────┘   8 s glance timeout  └────────┘      BtnA      └─────────┘
-           ▲                               │  ▲                       │
-           │       (History/Status do NOT  │  │ unpause               │
-           │        auto-dim)              │  │                       │
-           │                               ▼  │                       │
-   BtnB hold (from any live screen) ──► ┌────────┐                    │
-           │                            │ Status │ ◄──── BtnB hold ───┘
-           │                            └────────┘
-           │                               │  BtnA = toggle setup AP (stays on Status)
+        ┌──────┐  BtnA / lift          ┌────────┐  BtnA          ┌───────────┐
+        │ Dark │ ────────────────────► │ Glance │ ─────────────► │ More Info │
+        │      │ ◄──────────────────── │        │ ◄───────────── │           │
+        └──────┘   8 s glance timeout  └────────┘      BtnA      └───────────┘
+           ▲  ▲                            │  ▲                        │
+           │  │ BtnA hold = record clip 🔲 │  │ unpause                │
+   PWR ────┘  │ (from Dark/Glance)         │  │                        │
+           │                               ▼  │                        │
+   BtnB hold (from any live screen) ──► ┌──────────┐ ◄── BtnB hold ────┘
+           │                            │ Settings │
+           │                            └──────────┘
+           │                          BtnB = scroll · BtnA = select ✅
+           │                          BtnB hold / BtnA hold → Glance · PWR → Dark
+           │                               │  wifi row → launch portal
            │                               ▼
-           │                          [ emtext-setup AP + captive portal ]
+           │                     [ emtext-setup AP + captive portal ]
+           │                     (device nav LOCKED while up ✅)
            │
    BtnB click (from ANY screen, incl. Dark) ──► ┌────────┐
                                                 │ Paused │  (mic hard-off, brightness 60)
@@ -266,81 +268,114 @@ unrelated to the portal, but relevant before any real deployment.
                                                    ▼
                                                 Glance
 
-   ⚠️ read frame while Dark: updates history + glance buffer, but does NOT wake the screen.
+   ⚠️ read frame while Dark: updates buffers, does NOT wake the screen (open question).
    ⚠️ read frame while on Glance: refreshes in place and resets the 8 s timer.
 ```
 
 ---
 
-## 8. ⚠️ Gaps & rough edges (built UI) — the TODO list
+## 8. ⚠️ Gaps & rough edges — the TODO list
 
-Each item names where it lives so it's actionable.
+Built-UI gaps (each names where it lives):
 
 - [ ] **Read while Dark doesn't wake the screen** (`emtext.ino:onNetFrame` + `display::setGlance`).
-      Reads pile up invisibly during a live conversation. Decide: wake on every read / only on
-      non-neutral / never (cue-only). This is the most important UX decision here.
+      Decide: wake on every read / only non-neutral / cue-only. Most important call here.
 - [ ] **Transcript is dead data** (`display.cpp:drawGlance`, `emtext.ino:g_lastTranscript`).
-      Captured and passed but never rendered. Surface it (press-to-reveal / History detail) or
-      drop the argument.
-- [ ] **History rows overflow** (`display.cpp` History case). Not width-clipped; reuse
+      Surface it in More Info or drop it.
+- [ ] **More Info rows overflow** (`display.cpp` History case) — not width-clipped; reuse
       `capWords`/`wrap2`.
-- [ ] **Degraded looks like searching** (`display.cpp:drawConnDot`, `emtext.ino` loop). Give net
-      `Degraded` its own dot color/blink so an outage-in-progress is distinguishable.
-- [ ] **No "mic live" affordance while Dark** (compliance). Capture state should be externally
-      visible when the mic is on; today Dark shows nothing.
-- [ ] **First-run guidance** (`display.cpp` Status/Glance). When never configured, hint the user
-      toward BtnB-hold → toggle AP instead of sitting on "searching" forever.
-- [ ] **Status/History never auto-dim** (`display.cpp:loop`). Only Glance times out; the others
-      stay lit. Consider a shared idle timeout or a back affordance.
-- [ ] **Static fields on Status** (`display.cpp` Status case). `batt:`/`up:` only refresh on an
-      event; add a periodic redraw while on Status.
-- [ ] **Muting while Dark is silent** (`emtext.ino:onMute`). No feedback until a live screen draws.
-- [ ] **History "now" label** duplicates the Glance read; relabel or use relative timestamps.
-- [ ] **Emotion-mark keep-vs-revert** — OPEN DECISION. The mark-as-hero glance (`drawMark` +
-      caption) is the current build; a text-led alternative was the prior design. Pick one.
+- [ ] **Degraded looks like searching** (`display.cpp:drawConnDot`) — give Degraded its own dot.
+- [ ] **No "mic live" affordance while Dark** (compliance).
+- [ ] **Settings/More Info never auto-dim** (`display.cpp:loop`) — Settings now has explicit back
+      (BtnB/BtnA hold) + PWR→Dark, but neither auto-dims on idle. Add an idle timeout.
+- [ ] **Static fields on Settings** — footer uptime/battery only refresh on redraw; add a periodic
+      redraw while on-screen. (ping isn't surfaced at all — net has no RTT yet.)
+
+New target work (from this plan):
+
+- [x] **Settings page** ✅ built — Status is now a scrollable page (wifi/bright/cues/power) with a
+      portal-lock credentials panel. Pending hardware verify.
+- [x] **Mute → Settings toggle** ✅ built — moved to the `cues` row; BtnA-hold freed for clips.
+      Still to wire `cues::setMuted()` when Stage 7 lands (glyph works today).
+- [ ] **Rename + rework** History → **More Info** (detail/summary). Still a 5-row list in code.
+- [ ] **Clips** — BtnA-hold flags the last utterance to the server for later review (§9.7):
+      additive `save` frame + on-screen confirm; server-side file storage + review page.
+      (BtnA-hold currently logs a stub.)
+- [ ] **Info bar** — battery + connectivity, compact.
+- [ ] **Clock** — sized/placed per §4.7.
+- [ ] **Button-press shadows** for BtnB / PWR.
+- [ ] **Quick Setup at boot** + boot-stage progress.
+- [x] **Portal:** ✅ lock nav while up · ✅ show hotspot password. QR fallback still 🔲.
+- [ ] **Emotion-mark keep-vs-revise** — the tone symbol design is still open.
 
 ---
 
-## 9. 🔲 Planned UI (not built yet)
+## 9. 🔲 Planned UI (not built) — maps to remaining stages
 
-Designed here so the UX is decided before it's coded. These map to the remaining firmware stages.
-
-### 9.1 Boot stages (Stage 8)
-Replace the dumb 600 ms splash with visible progress: **network → server → ready**, each
-distinguishable on screen (and later by tone), including per-stage *failure* (e.g. "wifi failed",
-"server unreachable"). The connection dot already encodes ready/not-ready once past boot; boot
-should show the same progression before the first Glance.
+### 9.1 Boot stages + Quick Setup (Stage 8 + this plan)
+Replace the fixed splash with network→server→ready progress (+ per-stage failure), and a path
+into the setup portal from boot.
 
 ### 9.2 Audio cues (Stage 7, `cues` module)
-Short speaker tones **≤150 ms**: a distinct cue for **negative** tone and for **words–voice
-mismatch** (sarcastic/mixed); **silent for neutral/positive**. Mute is the existing BtnA-hold
-(single action, already toggles the glyph). Cap volume to **75%** while on battery. Must not
-disturb mic capture (shared-I2S check). Cue column is stubbed in the tone table (§6).
+Short speaker tones **≤150 ms**: distinct cue for **negative** and for **words–voice mismatch**
+(sarcastic/mixed); **silent** for neutral/positive. Cap volume to **75%** on battery. Mic and
+speaker share I2S, so a cue borrows the bus (suspend mic → play → resume). Mute is a **Settings
+toggle** (§4.5), not a gesture.
+
+### 9.7 Clips — server-stored, reviewed later 🔲
+BtnA-hold (from Dark/Glance) **saves the current moment to the server** so it can be reviewed
+later on a page/dashboard — not kept on the device (it has no storage beyond NVS config).
+
+- **Flow:** BtnA-hold → device sends a small control frame to the server → brief "clip saved"
+  confirmation on screen.
+- **Recommended payload (open q §10.1):** flag the **last utterance/read `id`**. The server
+  already has that utterance's audio, transcript, tone and read, so the device sends only the id
+  — no re-streaming audio. Device already tracks the last read id + `g_lastTranscript`.
+- **Wire protocol:** an **additive** device→server JSON frame, e.g. `{"type":"save","id":<n>}`.
+  Additive-only is required by the protocol contract, and the server already ignores unknown
+  types, so nothing else breaks. Server replies (e.g. `{"type":"saved","id":<n>}`) so the device
+  can confirm on-screen.
+- **Server side (new work, outside firmware):** retain the flagged utterance's
+  {audio, transcript, tone, read, timestamp} and expose it for later review. ⚠️ The brief says
+  **no database** and **no default retention of third-party audio** — clips are **file-based**
+  (a clips folder / JSON index, not a DB) and **user-initiated** (explicit, visible retention,
+  not default), which is the intended way to stay within both rules. This is a deliberate scope
+  addition to confirm.
+- **Compliance note:** because a clip is an explicit user action that retains audio, the "clip
+  saved" confirmation doubles as the visible-retention signal.
 
 ### 9.3 Two-step power-off (Stage 8)
-Replace the `onPowerOff` stub (BtnPWR hold) with a deliberate two-step: an on-screen confirm,
-then a **clean WebSocket close** before sleep, so the server sees a graceful disconnect.
+Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket close** before
+sleep. (PWR-hold currently intended → Dark as an interim.)
 
 ### 9.4 Idle / motion auto-off (Stage 8)
-Auto power-off after a no-speech period, **extended by motion** (IMU): stationary+silent may
-power off; in-motion+silent stays on. Before it sleeps, an **audible warning + on-screen grace
-period** cancellable by any button. Deep sleep with **wake on button**.
+Auto power-off after no-speech, **extended by motion** (IMU); audible warning + on-screen grace
+cancellable by any button; deep sleep + wake-on-button.
 
 ### 9.5 Low battery (Stage 8)
-Signal low battery **once** (not a nagging repeat) — a distinct screen and/or tone.
+Signal low battery **once**, distinct screen and/or tone.
 
 ### 9.6 Degraded / outage visibility (Stage 9)
-The connection interruption must be **visible on screen throughout** a drop and recovery (not
-just a silent amber dot). Pairs with the Degraded-dot gap in §8.
+Interruption visible on screen throughout a drop + recovery, not just a silent amber dot.
 
 ---
 
-## 10. Open questions (decide these next)
+## 10. Decisions & open questions
 
-1. **Read-while-Dark:** wake on every read, only non-neutral, or cue-only? (drives §8 item 1)
-2. **Emotion mark:** keep the mark-as-hero glance, or revert to text-led?
-3. **Transcript:** show it somewhere, or drop it?
-4. **Screen back/idle:** should History/Status auto-dim or get an explicit back?
+**Decided:**
+- ✅ **Clips are stored on the server, reviewed later** (not kept on-device). See §9.7 for the
+   flow and wire-protocol addition.
+- ✅ **Mute is a Settings toggle** (§4.5), not a gesture — freeing BtnA-hold for clips.
 
-*Keep this doc in sync when the display/controls behavior changes — it's meant to be the single
-place to re-read the whole device UX.*
+**Still open:**
+1. **Clip payload:** flag just the last utterance's **id** (server keeps the audio + transcript +
+   read it already has) vs. also saving audio. Recommended: **flag by id** — cheapest, no
+   re-sending audio, and the server already holds everything (§9.7).
+2. **Read-while-Dark:** wake on every read, only non-neutral, or cue-only?
+3. **Tone symbol:** keep the mark-as-hero curve, or revise the symbol set?
+4. **Transcript:** show it in More Info, or drop it?
+5. **Settings back/idle:** explicit back (BtnB-hold/BtnA-hold→Glance, PWR→Dark) plus an idle
+   timeout?
+
+*Keep this doc in sync when display/controls behavior changes — it's the single place to re-read
+the whole device UX.*

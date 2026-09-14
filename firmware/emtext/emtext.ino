@@ -17,7 +17,7 @@ static void onToggleAp() {
   g_ap = !g_ap;
   net::setPortal(g_ap);
   portal::setActive(g_ap);
-  display::setPortal(g_ap, config::get().apSsid, "192.168.4.1");
+  display::setPortal(g_ap, config::get().apSsid, config::get().apPass, "192.168.4.1");
   LOG_INFO("setup AP %s", g_ap ? "enabled" : "disabled");
 }
 
@@ -26,30 +26,61 @@ static void onWake() {
   switch (display::state()) {
     case S::Dark:    display::setState(S::Glance);  break;
     case S::Glance:  display::setState(S::History); break;
-    case S::Status:  onToggleAp();                  break;   // press on the info page toggles the AP
+    case S::Status:  display::settingsSelect();     break;   // BtnA selects the highlighted setting
     default:         display::setState(S::Glance);  break;
   }
 }
-// Mic runs only when neither paused (privacy) nor muted -- so un-muting never
-// silently re-opens the mic while paused.
+// Mic runs whenever we're not paused (privacy). Mute now silences the *cues* only (a
+// Settings toggle), so it no longer gates the mic.
 static bool g_paused = false;
 static bool g_muted  = false;
-static void applyMic() { audio::setPaused(g_paused || g_muted); }
+static void applyMic() { audio::setPaused(g_paused); }
 
+// BtnA hold: back out of Settings; otherwise save a clip (server-stored -- see AGENT_COMMS T1).
 static void onMute() {
-  g_muted = !g_muted;
-  display::setMuted(g_muted);
-  applyMic();
-  LOG_INFO("muted %s (mic %s)", g_muted ? "on" : "off", (g_paused || g_muted) ? "off" : "on");
+  if (display::state() == display::State::Status) {
+    if (!display::settingsLocked()) display::setState(display::State::Glance);
+    return;
+  }
+  LOG_INFO("clip: save last read (TODO -- needs server, AGENT_COMMS T1)");
 }
 static void onPause() {
+  // In Settings, BtnB scrolls the rows instead of toggling privacy pause.
+  if (display::state() == display::State::Status) { display::settingsScroll(); return; }
   g_paused = !g_paused;
   display::setPaused(g_paused);
   applyMic();
   LOG_INFO("streaming %s", g_paused ? "paused" : "resumed");
 }
-static void onStatus()   { display::setState(display::State::Status); }
-static void onPowerOff() { LOG_WARN("power off (stub)"); }
+static void onStatus() {
+  using S = display::State;
+  if (display::state() == S::Status) {          // BtnB hold in Settings = back to Glance
+    if (!display::settingsLocked()) display::setState(S::Glance);
+    return;
+  }
+  display::setState(S::Status);                 // open Settings
+}
+static void onPowerOff() {                      // interim: PWR -> Dark (two-step off is Stage 8)
+  display::setState(display::State::Dark);
+  LOG_WARN("power: -> dark (two-step off TODO)");
+}
+
+// Settings rows that reach other modules (Brightness is handled inside display itself).
+static void onSetting(display::Setting s) {
+  switch (s) {
+    case display::Setting::Wifi:  onToggleAp(); break;          // launch / stop the setup portal
+    case display::Setting::Mute:                                // toggle the audio cues
+      g_muted = !g_muted;
+      display::setMuted(g_muted);
+      // cues::setMuted(g_muted);   // wire this when Stage 7 (cues) lands
+      LOG_INFO("cues %s", g_muted ? "muted" : "on");
+      break;
+    case display::Setting::Power:
+      LOG_WARN("power profile toggle (stub -- Stage 8)");
+      break;
+    default: break;
+  }
+}
 static void onOrient(int rot) { display::setRotation(rot); }
 static void onLift() {
   if (display::state() == display::State::Dark) display::setState(display::State::Glance);
@@ -108,6 +139,7 @@ void setup() {
 
   // Stage 2: bring up the UX modules and wire their events.
   display::begin();
+  display::onSetting(onSetting);     // Settings-page rows -> cross-module actions
   controls::begin();
   controls::onWake(onWake);
   controls::onMute(onMute);

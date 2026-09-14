@@ -1,5 +1,6 @@
 #include "display.h"
 #include "../logx.h"
+#include "../config/config.h"      // settings page shows the wifi ssid + AP credentials
 #include <M5Unified.h>
 #include <math.h>
 
@@ -9,8 +10,16 @@ namespace {
   const uint32_t GLANCE_MS = 8000;
 
   const int      BAR_W = 7;      // tone edge-bar width, px
-  const uint8_t  BRIGHT_GLANCE = 130;
   const uint8_t  BRIGHT_PAUSED = 60;
+
+  // User-adjustable screen brightness (the Settings "bright" row cycles these). Replaces
+  // the old fixed BRIGHT_GLANCE constant so all lit screens follow the chosen preset.
+  const uint8_t  BRIGHT_PRESETS[4] = { 40, 90, 150, 220 };
+  int            brightIdx = 2;                       // -> 150
+  uint8_t        uiBright  = BRIGHT_PRESETS[2];
+
+  int            selCursor = 0;                       // highlighted Settings row
+  void (*cbSetting)(display::Setting) = nullptr;      // cross-module action from a row
 
   String gRead = "(read)";
   String gTone = "neutral";
@@ -21,7 +30,7 @@ namespace {
   bool   paused = false;
   bool   muted = false;
   bool   portalOn = false;
-  String portalSsid, portalIp;
+  String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
   struct Hist { String read; String tone; };
@@ -151,12 +160,72 @@ namespace {
     d.fillCircle(d.width() - 7, 7, 3, connReady ? cPos() : cMis());
   }
 
+  // The Status screen doubles as a scrollable Settings page. BtnB scrolls, BtnA selects
+  // (routing is in emtext.ino). While the setup AP is up the whole page is LOCKED to a
+  // credentials panel -- so the device can't wander mid-configure -- and the only way out
+  // is turning the portal off (BtnA) or PWR.
+  void drawSettings() {
+    auto& d = M5.Display;
+    d.setTextDatum(top_left);
+    d.setTextSize(1);
+
+    if (portalOn) {                                   // locked credentials view
+      d.setTextColor(cMis(), TFT_BLACK);
+      d.drawString("SETUP PORTAL ON", 4, 4);
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.drawString(("join: " + portalSsid).c_str(), 4, 26);
+      d.drawString(("pass: " + portalPass).c_str(), 4, 42);
+      d.drawString(("at:   " + portalIp).c_str(),   4, 58);
+      d.setTextColor(cFaint(), TFT_BLACK);
+      d.drawString("[A] turn off", 4, 84);
+      d.drawString("nav locked in setup", 4, 100);
+      return;
+    }
+
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString("settings", 4, 4);
+    d.setTextColor(cFaint(), TFT_BLACK);
+    d.setTextDatum(top_right);
+    d.drawString("[B]next [A]sel", d.width() - 4, 4);
+    d.setTextDatum(top_left);
+
+    const char* labels[(int)display::Setting::COUNT] = { "wifi", "bright", "cues", "power" };
+    for (int i = 0; i < (int)display::Setting::COUNT; i++) {
+      int  y   = 24 + i * 16;
+      bool sel = (i == selCursor);
+      d.setTextColor(sel ? cPos() : cFaint(), TFT_BLACK);
+      d.drawString(sel ? ">" : " ", 2, y);            // cursor
+      String val;
+      switch ((display::Setting)i) {
+        case display::Setting::Wifi: {                // show the joined ssid, truncated
+          String s = config::get().nets[0].ssid;
+          val = s.length() ? (s.length() > 8 ? s.substring(0, 8) : s) : "(unset)";
+          break;
+        }
+        case display::Setting::Brightness: val = String(brightIdx + 1) + "/4"; break;
+        case display::Setting::Mute:       val = muted ? "muted" : "on";       break;
+        case display::Setting::Power:      val = String(M5.Power.getBatteryLevel()) + "%"; break;
+        default: break;
+      }
+      d.setTextColor(sel ? TFT_WHITE : cDim(), TFT_BLACK);
+      d.drawString((String(labels[i]) + "  " + val).c_str(), 14, y);
+    }
+
+    // aside: live status, deliberately faint and out of the way (never the hero)
+    d.setTextColor(cFaint(), TFT_BLACK);
+    d.setTextDatum(bottom_left);
+    String foot = String(connReady ? "ready" : "search") + " | up " +
+                  String(millis() / 1000) + "s | " +
+                  String(M5.Power.getBatteryLevel()) + "%";
+    d.drawString(foot.c_str(), 4, d.height() - 3);
+  }
+
   void draw() {
     auto& d = M5.Display;
     if (paused) { drawPaused(); return; }           // privacy takes precedence
     d.fillScreen(TFT_BLACK);
     if (st == display::State::Dark) { d.setBrightness(0); return; }
-    d.setBrightness(BRIGHT_GLANCE);
+    d.setBrightness(uiBright);
     drawConnDot();
     if (muted) {                      // muted: mute glyph, bottom-left
       int cx = 12, cy = d.height() - 10, r = 5;
@@ -186,24 +255,8 @@ namespace {
         }
         break;
 
-      case display::State::Status:
-        d.setTextDatum(top_left);
-        d.setTextSize(1);
-        d.setTextColor(TFT_WHITE, TFT_BLACK);
-        d.drawString("status", 4, 4);
-        d.drawString(("wifi: " + String(connReady ? "ready" : "searching")).c_str(), 4, 24);
-        d.drawString(("batt: " + String(M5.Power.getBatteryLevel()) + "%").c_str(), 4, 40);
-        d.drawString(("up:   " + String(millis() / 1000) + "s").c_str(), 4, 56);
-        if (portalOn) {
-          d.setTextColor(cMis(), TFT_BLACK);
-          d.drawString(("setup AP: ON " + portalSsid).c_str(), 4, 76);
-          d.drawString(("join " + portalIp).c_str(), 4, 90);
-        } else {
-          d.setTextColor(cDim(), TFT_BLACK);
-          d.drawString("setup AP: off", 4, 76);
-        }
-        d.setTextColor(cFaint(), TFT_BLACK);
-        d.drawString("[A] toggle AP", 4, 108);
+      case display::State::Status:      // Status doubles as the Settings page
+        drawSettings();
         break;
 
       default: break;
@@ -257,10 +310,38 @@ void display::setMuted(bool on) {
   if (!paused && st != State::Dark) draw();
 }
 
-void display::setPortal(bool on, const String& ssid, const String& ip) {
-  portalOn = on; portalSsid = ssid; portalIp = ip;
+void display::setPortal(bool on, const String& ssid, const String& pass, const String& ip) {
+  portalOn = on; portalSsid = ssid; portalPass = pass; portalIp = ip;
   if (!paused && st == State::Status) draw();
 }
+
+// ---- Settings navigation ------------------------------------------------------------
+// Nav is frozen while the setup AP is up: the page can't scroll or leave, so the device
+// state can't drift while someone is configuring it over the portal.
+bool display::settingsLocked() { return portalOn; }
+
+void display::settingsScroll() {
+  if (portalOn) return;                               // locked: cursor pinned
+  selCursor = (selCursor + 1) % (int)Setting::COUNT;
+  if (!paused && st == State::Status) draw();
+}
+
+void display::settingsSelect() {
+  // While locked, the only selectable action is turning the portal back off.
+  if (portalOn) { if (cbSetting) cbSetting(Setting::Wifi); return; }
+
+  Setting s = (Setting)selCursor;
+  if (s == Setting::Brightness) {                     // display-local: cycle presets live
+    brightIdx = (brightIdx + 1) % 4;
+    uiBright  = BRIGHT_PRESETS[brightIdx];
+    if (!paused && st != State::Dark) M5.Display.setBrightness(uiBright);
+    draw();
+  } else if (cbSetting) {
+    cbSetting(s);                                     // Wifi/Mute/Power handled in emtext.ino
+  }
+}
+
+void display::onSetting(void (*cb)(Setting)) { cbSetting = cb; }
 
 void display::setPaused(bool on) {
   paused = on;

@@ -8,11 +8,22 @@
 namespace display {
   enum class State { Dark, Glance, History, Status };
 
+  // Settings rows, in scroll order. Status doubles as the Settings page; these are the
+  // selectable rows. Brightness is handled locally (a display property); the rest fire
+  // onSetting() so emtext.ino performs the cross-module effect (portal, cues, power).
+  enum class Setting { Wifi, Brightness, Mute, Power, COUNT };
+
   void  begin();
   void  loop();                       // handles the ~8s glance timeout
   void  setState(State s);
   State state();
   void  setRotation(int rot);
+
+  // Settings navigation (called from emtext.ino only while state()==Status).
+  void  settingsScroll();             // BtnB click: cursor -> next row (no-op while locked)
+  void  settingsSelect();             // BtnA click: activate the highlighted row
+  bool  settingsLocked();             // true while the setup AP is up: nav is frozen
+  void  onSetting(void (*cb)(Setting s));  // cross-module action requested from a row
 
   // Glance data. lowConfidence dims the read (uncertainty must be visible).
   void  setGlance(const String& read, const String& tone,
@@ -21,5 +32,5 @@ namespace display {
   void  setProcessing(bool on);                // heard, still thinking
   void  setPaused(bool on);                    // privacy switch: mic not listening
   void  setMuted(bool on);                     // muted indicator (mic + cues off)
-  void  setPortal(bool on, const String& ssid, const String& ip);   // setup-AP status
+  void  setPortal(bool on, const String& ssid, const String& pass, const String& ip);  // setup-AP status
 }

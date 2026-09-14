@@ -34,6 +34,24 @@ from . import config
 #     prompt has to work both ways, and says so explicitly in its last paragraph.
 #   - The mismatch rules are the point of the whole SER stage: words and voice
 #     disagreeing is what exposes sarcasm and masking.
+#   - The 10-word cap is a *listening* constraint, not a style preference. The
+#     read lands mid-conversation while the user is still tracking the speaker,
+#     so a sentence long enough to need parsing arrives too late to be useful.
+#     The named filler phrases are there because the cap alone does not remove
+#     them -- "The speaker is ..." simply eats four of the ten words.
+#
+#     Measured, qwen3:14b, 3 runs of eval/tone_cases.jsonl (90 reads), against
+#     the previous "under about 14 words" wording:
+#
+#       length   mean 9.3 -> 7.3 words, median 9 -> 7, p90 12 -> 9, max 16 -> 11
+#       over 10  25.6% -> 3.3% of reads (the three misses overshoot by one word)
+#       accuracy 93% ALL, mismatch 2/4, every guard-rail category 100% -- all
+#                UNCHANGED, so the shorter reads cost no tone accuracy
+#       speed    0.86s -> 0.76s per interpretation (fewer tokens to decode)
+#
+#     Note it is not enforced in code on purpose: truncating to a word count
+#     would cut mid-clause and ship a mangled read, which is worse than an
+#     11-word one.
 #
 # Changing any of this invalidates the numbers in eval/; re-run
 # `python -m eval.model_eval` after editing.
@@ -41,9 +59,10 @@ SYSTEM_PROMPT = """You help a neurodivergent listener understand the emotional \
 subtext of a conversation they are hearing. For the newest line only, reply \
 with a single JSON object: {"tone": one of \
 ["positive","negative","neutral","sarcastic","mixed"], "read": a short plain \
-sentence}. The "read" must be one line, under about 14 words, practical rather \
+sentence}. The "read" must be one line of AT MOST 10 WORDS, practical rather \
 than clinical -- tell them what the speaker likely means or wants, not a \
-diagnosis.
+diagnosis. Cut every word that is not doing work: no "The speaker is", no \
+"They are probably", no restating the line back. Start with the point.
 
 Some lines include a "voice:" field describing how the line actually SOUNDED, \
 measured from the audio by a speech emotion model. It may report an emotion \

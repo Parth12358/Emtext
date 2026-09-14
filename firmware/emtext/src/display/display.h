@@ -11,7 +11,7 @@ namespace display {
   // Settings rows, in scroll order. Status doubles as the Settings page; these are the
   // selectable rows. Brightness is handled locally (a display property); the rest fire
   // onSetting() so emtext.ino performs the cross-module effect (portal, cues, power).
-  enum class Setting { Wifi, Brightness, Mute, Power, COUNT };
+  enum class Setting { Wifi, Brightness, Power, COUNT };
 
   void  begin();
   void  loop();                       // handles the ~8s glance timeout

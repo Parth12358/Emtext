@@ -24,17 +24,17 @@ static void onToggleAp() {
 static void onWake() {
   using S = display::State;
   switch (display::state()) {
-    case S::Dark:    display::setState(S::Glance);  break;
-    case S::Glance:  display::setState(S::History); break;
-    case S::Status:  display::settingsSelect();     break;   // BtnA selects the highlighted setting
-    default:         display::setState(S::Glance);  break;
+    case S::Dark: display::setState(S::Glance); break;
+    case S::Glance: display::setState(S::History); break;
+    case S::Status: display::settingsSelect(); break;  // BtnA selects the highlighted setting
+    default: display::setState(S::Glance); break;
   }
 }
-// Mic runs whenever we're not paused (privacy). Mute now silences the *cues* only (a
-// Settings toggle), so it no longer gates the mic.
+// Mic runs whenever we're not paused (privacy).
 static bool g_paused = false;
-static bool g_muted  = false;
-static void applyMic() { audio::setPaused(g_paused); }
+static void applyMic() {
+  audio::setPaused(g_paused);
+}
 
 // BtnA hold: back out of Settings; otherwise save a clip (server-stored -- see AGENT_COMMS T1).
 static void onMute() {
@@ -46,7 +46,10 @@ static void onMute() {
 }
 static void onPause() {
   // In Settings, BtnB scrolls the rows instead of toggling privacy pause.
-  if (display::state() == display::State::Status) { display::settingsScroll(); return; }
+  if (display::state() == display::State::Status) {
+    display::settingsScroll();
+    return;
+  }
   g_paused = !g_paused;
   display::setPaused(g_paused);
   applyMic();
@@ -54,13 +57,13 @@ static void onPause() {
 }
 static void onStatus() {
   using S = display::State;
-  if (display::state() == S::Status) {          // BtnB hold in Settings = back to Glance
+  if (display::state() == S::Status) {  // BtnB hold in Settings = back to Glance
     if (!display::settingsLocked()) display::setState(S::Glance);
     return;
   }
-  display::setState(S::Status);                 // open Settings
+  display::setState(S::Status);  // open Settings
 }
-static void onPowerOff() {                      // interim: PWR -> Dark (two-step off is Stage 8)
+static void onPowerOff() {  // interim: PWR -> Dark (two-step off is Stage 8)
   display::setState(display::State::Dark);
   LOG_WARN("power: -> dark (two-step off TODO)");
 }
@@ -68,26 +71,22 @@ static void onPowerOff() {                      // interim: PWR -> Dark (two-ste
 // Settings rows that reach other modules (Brightness is handled inside display itself).
 static void onSetting(display::Setting s) {
   switch (s) {
-    case display::Setting::Wifi:  onToggleAp(); break;          // launch / stop the setup portal
-    case display::Setting::Mute:                                // toggle the audio cues
-      g_muted = !g_muted;
-      display::setMuted(g_muted);
-      // cues::setMuted(g_muted);   // wire this when Stage 7 (cues) lands
-      LOG_INFO("cues %s", g_muted ? "muted" : "on");
-      break;
+    case display::Setting::Wifi: onToggleAp(); break;  // launch / stop the setup portal
     case display::Setting::Power:
       LOG_WARN("power profile toggle (stub -- Stage 8)");
       break;
     default: break;
   }
 }
-static void onOrient(int rot) { display::setRotation(rot); }
+static void onOrient(int rot) {
+  display::setRotation(rot);
+}
 static void onLift() {
   if (display::state() == display::State::Dark) display::setState(display::State::Glance);
 }
 
 // Frames from the network (dispatched on core 1 by net::loop()).
-static String g_lastTranscript;   // from `utterance`; shown under the read on the glance
+static String g_lastTranscript;  // from `utterance`; shown under the read on the glance
 
 static void onNetFrame(const proto::Frame& f) {
   switch (f.type) {
@@ -118,7 +117,7 @@ void setup() {
   cfg.serial_baudrate = 115200;
   cfg.clear_display = true;
   M5.begin(cfg);
-  
+
   config::load();
   auto board = M5.getBoard();
   bool isStickS3 = (board == m5::board_t::board_M5StickS3);
@@ -127,19 +126,19 @@ void setup() {
   LOG_INFO("boot: board id=%d isStickS3=%d", (int)board, isStickS3);
 
 
-  M5.Display.setRotation(1);                 // landscape; orientation comes from IMU later
+  M5.Display.setRotation(1);  // landscape; orientation comes from IMU later
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setTextColor(isStickS3 ? TFT_GREEN : TFT_RED, TFT_BLACK);
-  M5.Display.setTextDatum(middle_center);    // datum for drawString centering
+  M5.Display.setTextDatum(middle_center);  // datum for drawString centering
   M5.Display.setTextSize(2);
   M5.Display.drawString("emtext",
-                        M5.Display.width()  / 2,
+                        M5.Display.width() / 2,
                         M5.Display.height() / 2);
-  M5.delay(600);   // brief boot splash before the display module takes over
+  M5.delay(600);  // brief boot splash before the display module takes over
 
   // Stage 2: bring up the UX modules and wire their events.
   display::begin();
-  display::onSetting(onSetting);     // Settings-page rows -> cross-module actions
+  display::onSetting(onSetting);  // Settings-page rows -> cross-module actions
   controls::begin();
   controls::onWake(onWake);
   controls::onMute(onMute);
@@ -157,7 +156,9 @@ void setup() {
   net::onFrame(onNetFrame);
 
   // Stage 5.2: gated mic chunks -> network (cross-core handoff).
-  audio::onChunk([](const int16_t* p, size_t n){ net::sendAudio(p, n); });
+  audio::onChunk([](const int16_t* p, size_t n) {
+    net::sendAudio(p, n);
+  });
 
   // Stage 4P: setup AP portal (toggled from the Status screen; serves the config page).
   portal::begin();
@@ -188,7 +189,7 @@ void loop() {
   uint32_t now = millis();
   if (now - last >= 1000) {
     last = now;
-    LOG_DEBUG("hb up=%lus batt=%d%%", now/1000, M5.Power.getBatteryLevel());
+    LOG_DEBUG("hb up=%lus batt=%d%%", now / 1000, M5.Power.getBatteryLevel());
   }
 
   M5.delay(1);

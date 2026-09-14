@@ -189,7 +189,7 @@ namespace {
     d.drawString("[B]next [A]sel", d.width() - 4, 4);
     d.setTextDatum(top_left);
 
-    const char* labels[(int)display::Setting::COUNT] = { "wifi", "bright", "cues", "power" };
+    const char* labels[(int)display::Setting::COUNT] = { "wifi", "bright", "power" };
     for (int i = 0; i < (int)display::Setting::COUNT; i++) {
       int  y   = 24 + i * 16;
       bool sel = (i == selCursor);
@@ -203,7 +203,6 @@ namespace {
           break;
         }
         case display::Setting::Brightness: val = String(brightIdx + 1) + "/4"; break;
-        case display::Setting::Mute:       val = muted ? "muted" : "on";       break;
         case display::Setting::Power:      val = String(M5.Power.getBatteryLevel()) + "%"; break;
         default: break;
       }

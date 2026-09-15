@@ -1,0 +1,101 @@
+/* ============================================================================
+   C-ontext design tokens — the single source of truth for the whole site.
+   Every section consumes these variables; no section hardcodes a raw hex.
+
+   Palette: Teenage Engineering. Warm "paper" off-white, near-black ink, one
+   load-bearing OP-1 orange for every interactive/chrome accent, flat fills,
+   1px hairline structure, technical mono labels. No glows, minimal shadow —
+   the look is lab equipment, not a dashboard.
+
+   The five tone colors stay load-bearing brand — they mean the same thing on
+   the site as in the app (green positive, red negative, grey neutral, violet
+   sarcastic, amber mixed) — but they're flattened to read cleanly as flat
+   marks on a light ground, like the coloured keys on a synth.
+   ========================================================================== */
+:root {
+  /* --- Paper & panels: warm off-white ground, white panels lift off it --- */
+  --ink:        #eceae3;   /* page ground (warm paper) */
+  --ink-2:      #e2e0d7;   /* recessed ground: footer, wells */
+  --surface:    #ffffff;   /* card / panel face */
+  --surface-2:  #f7f6f1;
+  --surface-3:  #edece5;
+  --edge:       #d3d0c5;   /* hairline border */
+  --edge-soft:  #e0ded4;
+
+  /* --- Ink --- */
+  --text:       #17150f;   /* near-black */
+  --text-dim:   #45423a;
+  --muted:      #78756a;
+  --faint:      #a5a196;
+
+  /* --- Tone palette: flat, readable on paper. Do not repurpose for chrome. --- */
+  --positive:   #1f8f4d;
+  --negative:   #e0301e;
+  --neutral:    #6f6c61;
+  --sarcastic:  #7a45c9;
+  --mixed:      #b26a00;
+
+  /* soft tints for backgrounds/borders of tone-tagged elements */
+  --positive-dim:  color-mix(in oklab, var(--positive) 14%, transparent);
+  --negative-dim:  color-mix(in oklab, var(--negative) 14%, transparent);
+  --neutral-dim:   color-mix(in oklab, var(--neutral) 14%, transparent);
+  --sarcastic-dim: color-mix(in oklab, var(--sarcastic) 14%, transparent);
+  --mixed-dim:     color-mix(in oklab, var(--mixed) 14%, transparent);
+
+  /* --- Chrome accent: the OP-1 orange. One accent, everywhere. Distinct from
+         all five tone colors. Text on it is black, the TE way. --- */
+  --accent:      #ff4d00;
+  --accent-hi:   #ff6a2b;
+  --accent-dim:  color-mix(in oklab, var(--accent) 16%, transparent);
+  --on-accent:   #17150f;
+
+  /* the "mismatch" signature — the two poles of the words-vs-voice rule.
+     Kept flat-ish for the TE look; used sparingly. */
+  --grad-mismatch: linear-gradient(100deg, var(--positive) 0%, var(--sarcastic) 100%);
+
+  /* --- Typography --- */
+  --font-display: 'Fraunces Variable', 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* fluid type scale */
+  --step--1: clamp(0.80rem, 0.77rem + 0.14vw, 0.88rem);
+  --step-0:  clamp(0.95rem, 0.91rem + 0.20vw, 1.06rem);
+  --step-1:  clamp(1.13rem, 1.05rem + 0.38vw, 1.35rem);
+  --step-2:  clamp(1.40rem, 1.24rem + 0.78vw, 1.95rem);
+  --step-3:  clamp(1.85rem, 1.55rem + 1.45vw, 2.95rem);
+  --step-4:  clamp(2.45rem, 1.90rem + 2.70vw, 4.40rem);
+  --step-5:  clamp(3.10rem, 2.20rem + 4.40vw, 6.00rem);
+
+  /* --- Spacing (8px base) --- */
+  --sp-1: 0.5rem;
+  --sp-2: 0.75rem;
+  --sp-3: 1rem;
+  --sp-4: 1.5rem;
+  --sp-5: 2rem;
+  --sp-6: 3rem;
+  --sp-7: 4.5rem;
+  --sp-8: 7rem;
+
+  /* --- Radii: TE hardware is gently rounded, not pill-soft --- */
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* --- Elevation: light, mostly hairline. No heavy dark shadow on paper. --- */
+  --shadow-1: 0 1px 2px rgba(30,26,16,.05), 0 1px 1px rgba(30,26,16,.04);
+  --shadow-2: 0 6px 22px -10px rgba(30,26,16,.18);
+  --shadow-glow: 0 0 0 1px var(--edge), 0 14px 40px -22px rgba(30,26,16,.30);
+
+  /* --- Layout --- */
+  --maxw: 1120px;
+  --maxw-narrow: 760px;
+  --gutter: clamp(1.1rem, 4vw, 3rem);
+
+  /* --- Motion --- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur: 0.5s;
+}

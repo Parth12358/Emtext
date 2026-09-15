@@ -1,0 +1,33 @@
+.footer {
+  border-top: 1px solid var(--edge-soft);
+  padding-block: clamp(3rem, 6vw, 5rem);
+  background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--ink-2) 80%, transparent));
+}
+.footer-cta {
+  display: grid;
+  gap: 1.5rem;
+  padding: clamp(1.8rem, 4vw, 3rem);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(90% 120% at 100% 0%, color-mix(in oklab, var(--sarcastic) 10%, transparent), transparent 55%),
+    radial-gradient(90% 120% at 0% 100%, color-mix(in oklab, var(--positive) 9%, transparent), transparent 55%),
+    var(--surface);
+  text-align: center;
+  place-items: center;
+}
+.footer-cta h2 { font-size: var(--step-4); max-width: 16ch; }
+.footer-cta p { color: var(--text-dim); max-width: 52ch; font-size: var(--step-1); }
+.footer-cta .actions { display: flex; flex-wrap: wrap; gap: .8rem; justify-content: center; margin-top: .5rem; }
+
+.footer-meta {
+  margin-top: clamp(2.5rem, 5vw, 3.5rem);
+  display: flex; flex-wrap: wrap; gap: 1rem 2rem;
+  align-items: center; justify-content: space-between;
+  color: var(--muted); font-size: var(--step--1);
+}
+.footer-meta .brand-name { font-family: var(--font-mono); color: var(--text-dim); }
+.footer-legend { display: flex; flex-wrap: wrap; gap: .9rem; }
+.footer-legend span { display: inline-flex; align-items: center; gap: .4rem; font-family: var(--font-mono); }
+.footer-legend span::before { content:''; width: .55rem; height: .55rem; border-radius: 50%; background: var(--tone, var(--muted)); }
+.footer-note { color: var(--faint); font-size: var(--step--1); max-width: 60ch; margin-top: 1.4rem; line-height: 1.55; }

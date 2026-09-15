@@ -1,0 +1,249 @@
+/* ============================================================================
+   pipeline — "how it works" as a VERTICAL timeline.
+   Reads top-to-bottom at every width — never scrolls horizontally. Step 03 is
+   a concurrent pair (Transcribe + Read-the-voice) shown as two cards side by
+   side. Pure CSS; no chart library, no overflow scroller.
+   ========================================================================== */
+
+.pipeline-head { max-width: 62ch; }
+.pipeline-title { max-width: 24ch; }
+
+/* ---------- the timeline ---------- */
+.pipeline-flow {
+  list-style: none;
+  margin: clamp(2.2rem, 5vw, 3.2rem) 0 0;
+  padding: 0;
+  max-width: 760px;
+}
+
+.pipeline-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: clamp(.9rem, 3vw, 1.4rem);
+  align-items: start;
+  padding-bottom: clamp(1.1rem, 2.6vw, 1.7rem);
+}
+/* the spine: a line from each marker down to the next */
+.pipeline-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 21px;
+  transform: translateX(-50%);
+  top: 42px;
+  bottom: -1px;
+  width: 2px;
+  background: color-mix(in oklab, var(--accent) 28%, var(--edge));
+}
+
+.pipeline-marker {
+  position: relative;
+  z-index: 1;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-1);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-dim);
+  letter-spacing: .02em;
+}
+
+.pipeline-step-main { min-width: 0; padding-top: .35rem; }
+
+.pipeline-step-head {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  flex-wrap: wrap;
+}
+.pipeline-name {
+  font-family: var(--font-sans);
+  font-size: var(--step-1);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0;
+}
+.pipeline-name--sm { font-size: var(--step-0); }
+.pipeline-desc {
+  font-size: var(--step-0);
+  line-height: 1.5;
+  color: var(--muted);
+  margin: .5rem 0 0;
+  max-width: 54ch;
+}
+
+.pipeline-icon {
+  flex: none;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--accent-hi);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.pipeline-icon svg { width: 19px; height: 19px; }
+.pipeline-icon--sm { width: 26px; height: 26px; }
+.pipeline-icon--sm svg { width: 16px; height: 16px; }
+
+/* device labels — CPU / GPU / client made visually distinct so the hardware
+   split reads at a glance. GPU is accented because the GPU is the LLM's alone.
+   `client` device chip in the head is pushed to the right of the row. */
+.pipeline-step-head .pipeline-device { margin-left: auto; }
+.pipeline-device {
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  line-height: 1;
+  padding: .28rem .5rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--edge);
+  white-space: nowrap;
+}
+.pipeline-device[data-device="client"] { color: var(--muted); border-color: var(--edge-soft); background: transparent; }
+.pipeline-device[data-device="cpu"] { color: var(--text-dim); border-color: var(--edge); background: var(--surface-3); }
+.pipeline-device[data-device="gpu"] {
+  color: var(--accent-hi);
+  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  background: var(--accent-dim);
+}
+
+.pipeline-meta { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
+.pipeline-model, .pipeline-cost {
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  line-height: 1;
+  padding: .3rem .48rem;
+  border-radius: var(--r-sm);
+}
+.pipeline-model { color: var(--text-dim); background: var(--surface-3); border: 1px solid var(--edge); }
+.pipeline-cost { color: var(--text-dim); background: transparent; border: 1px solid var(--edge-soft); }
+
+/* ---------- the concurrent step (03) ---------- */
+.pipeline-tag {
+  font-family: var(--font-mono);
+  font-size: .68rem;
+  line-height: 1;
+  padding: .3rem .5rem;
+  border-radius: var(--r-sm);
+  color: var(--accent-hi);
+  border: 1px dashed color-mix(in oklab, var(--accent) 48%, transparent);
+  white-space: nowrap;
+  flex: none;
+}
+.pipeline-concurrent-tag {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  margin-bottom: .9rem;
+}
+.pipeline-concurrent-note {
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.pipeline-concurrent-note b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.pipeline-pair {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .7rem;
+  /* a bracket down the left tying the two concurrent cards together */
+  padding-left: .9rem;
+  border-left: 2px solid color-mix(in oklab, var(--accent) 28%, var(--edge));
+}
+@media (min-width: 560px) {
+  .pipeline-pair { grid-template-columns: 1fr 1fr; }
+}
+
+.pipeline-card {
+  padding: .9rem 1rem 1rem;
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--edge));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--accent) 5%, transparent), transparent 55%),
+    linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.pipeline-card-head { display: flex; align-items: center; gap: .55rem; }
+.pipeline-card .pipeline-desc { margin-top: .45rem; }
+.pipeline-card .pipeline-meta { margin-top: .7rem; }
+
+/* ---------- notes / callouts ---------- */
+.pipeline-notes {
+  margin-top: clamp(2.2rem, 4vw, 3rem);
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.pipeline-note { padding: 1.15rem 1.25rem 1.3rem; }
+.pipeline-note-title {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0 0 .5rem;
+}
+.pipeline-note-body {
+  font-size: var(--step-0);
+  line-height: 1.55;
+  color: var(--text-dim);
+  margin: 0;
+}
+.pipeline-note-body .pipeline-device { vertical-align: baseline; }
+
+.pipeline-expr {
+  font-family: var(--font-mono);
+  font-size: .9em;
+  color: var(--accent-hi);
+  white-space: nowrap;
+}
+.pipeline-note-math {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  margin: .85rem 0 0;
+}
+.pipeline-note-math .pipeline-cost {
+  color: var(--positive);
+  border-color: color-mix(in oklab, var(--positive) 45%, transparent);
+  background: var(--positive-dim);
+}
+.pipeline-note-math .pipeline-sum {
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  line-height: 1;
+  padding: .3rem .48rem;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  border: 1px solid var(--edge-soft);
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+}
+.pipeline-not { font-family: var(--font-mono); font-size: .72rem; color: var(--faint); }
+
+.pipeline-frames { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .85rem; }
+.pipeline-frame {
+  font-family: var(--font-mono);
+  font-size: .74rem;
+  line-height: 1;
+  padding: .32rem .5rem;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  background: var(--surface-3);
+  border: 1px solid var(--edge);
+}
+
+@media (min-width: 860px) {
+  .pipeline-notes { grid-template-columns: repeat(3, 1fr); gap: 1.15rem; }
+}

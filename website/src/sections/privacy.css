@@ -1,0 +1,97 @@
+/* ── privacy: local-first trust section ─────────────────────────────────── */
+#privacy { scroll-margin-top: 80px; }
+
+.privacy-head { max-width: 62ch; }
+.privacy-title { letter-spacing: -0.02em; }
+
+/* feature grid: 1 col mobile → 2 col desktop */
+.privacy-grid {
+  margin-top: clamp(2.2rem, 5vw, 3.2rem);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 720px) {
+  .privacy-grid { grid-template-columns: 1fr 1fr; gap: 1.15rem; }
+}
+
+/* builds on the shared .card panel */
+.privacy-card {
+  padding: clamp(1.3rem, 2.4vw, 1.7rem);
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+  position: relative;
+  transition: border-color .35s var(--ease), box-shadow .35s var(--ease), transform .35s var(--ease-out);
+}
+.privacy-card:hover {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--edge));
+  box-shadow: var(--shadow-2);
+  transform: translateY(-2px);
+}
+
+.privacy-icon {
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: var(--r-md);
+  color: var(--accent-hi);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
+.privacy-card-title {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--text);
+  margin: 0;
+}
+.privacy-card-body {
+  color: var(--text-dim);
+  font-size: var(--step-0);
+  line-height: 1.58;
+  max-width: 48ch;
+  margin: 0;
+}
+
+/* ── "what runs where" summary line ─────────────────────────────────────── */
+.privacy-where {
+  margin-top: clamp(1.6rem, 3.5vw, 2.4rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .7rem 1.1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--edge-soft);
+  border-radius: var(--r-lg);
+  background: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+}
+.privacy-where-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .5rem;
+}
+.privacy-where-k {
+  color: var(--accent-hi);
+  font-weight: 500;
+  letter-spacing: .01em;
+}
+.privacy-where-k--none {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--negative) 70%, transparent);
+  text-decoration-thickness: 1px;
+}
+.privacy-where-v { color: var(--muted); }
+.privacy-where-dot {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--edge);
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .privacy-card, .privacy-card:hover { transition: none; transform: none; }
+}

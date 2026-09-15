@@ -1,0 +1,398 @@
+/* ============================================================
+   pendant — the hardware half: a wearable device + build track
+   ============================================================ */
+
+.pendant {
+  scroll-margin-top: 80px;
+}
+
+.pendant-head {
+  max-width: 62ch;
+  margin-bottom: clamp(2.2rem, 5vw, 3.4rem);
+}
+.pendant-title { margin-top: 1rem; }
+.pendant-lead { margin-top: 1.2rem; }
+
+/* ---------- layout ---------- */
+.pendant-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: clamp(2.2rem, 5vw, 3.6rem);
+  align-items: start;
+}
+@media (min-width: 900px) {
+  .pendant-grid { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+}
+
+/* ============================================================
+   the device mockup
+   ============================================================ */
+.pendant-device-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  position: sticky;
+  top: 90px;
+}
+@media (max-width: 899px) {
+  .pendant-device-col { position: static; }
+}
+
+/* the 3D pendant (same module as the hero) */
+.pendant-device3d {
+  position: relative;
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 5 / 6;
+  min-height: 320px;
+  background:
+    radial-gradient(52% 42% at 50% 58%, color-mix(in oklab, var(--accent) 14%, transparent), transparent 70%);
+}
+.pendant-device3d canvas { touch-action: pan-y; }
+
+.pendant-device {
+  position: relative;
+  width: min(240px, 72vw);
+  padding-top: 22px; /* room for the lanyard loop */
+}
+
+/* the pendant lanyard loop up top — this is a thing you wear */
+.pendant-loop {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 34px;
+  border: 4px solid var(--surface-3);
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--edge-soft);
+}
+.pendant-loop::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -12px;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 16px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  border: 1px solid var(--edge-soft);
+}
+
+.pendant-body {
+  position: relative;
+  z-index: 1;
+  border-radius: 26px;
+  padding: 16px 15px 18px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in oklab, var(--accent) 7%, transparent), transparent 60%),
+    linear-gradient(160deg, var(--surface-2) 0%, var(--ink-2) 100%);
+  border: 1px solid var(--edge);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 color-mix(in oklab, #fff 6%, transparent),
+    inset 0 0 0 1px color-mix(in oklab, #000 24%, transparent);
+}
+
+/* the little screen */
+.pendant-screen {
+  --tone: var(--sarcastic);
+  position: relative;
+  border-radius: 12px;
+  padding: 11px 12px 13px;
+  min-height: 150px;
+  background:
+    radial-gradient(140% 120% at 50% 0%, color-mix(in oklab, var(--tone) 12%, transparent), transparent 62%),
+    linear-gradient(180deg, #060810 0%, #04060c 100%);
+  border: 1px solid color-mix(in oklab, var(--tone) 22%, var(--edge));
+  box-shadow:
+    inset 0 0 22px color-mix(in oklab, #000 70%, transparent),
+    0 0 0 3px color-mix(in oklab, #000 40%, transparent);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+/* faint scanline sheen — the "it's a screen" cue */
+.pendant-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0 3px,
+    color-mix(in oklab, #fff 3%, transparent) 3px 4px
+  );
+  opacity: .5;
+  pointer-events: none;
+}
+
+.pendant-screen-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pendant-brand {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.pendant-signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; }
+.pendant-signal i {
+  width: 2px;
+  border-radius: 1px;
+  background: color-mix(in oklab, var(--tone) 70%, var(--text-dim));
+}
+.pendant-signal i:nth-child(2) { height: 4px; }
+.pendant-signal i:nth-child(3) { height: 7px; }
+.pendant-signal i:nth-child(4) { height: 10px; }
+.pendant-live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--positive);
+  margin-right: 3px;
+  box-shadow: 0 0 6px color-mix(in oklab, var(--positive) 80%, transparent);
+  animation: pendantBlink 2.4s var(--ease) infinite;
+}
+
+.pendant-transcript {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 2px 0 0;
+}
+
+.pendant-read {
+  margin-top: auto;
+  border-left: 2px solid var(--tone);
+  padding: 3px 0 3px 9px;
+}
+.pendant-read-tone {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--tone);
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--tone) 18%, transparent);
+  border: 1px solid color-mix(in oklab, var(--tone) 40%, transparent);
+}
+.pendant-read-line {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--text-dim);
+}
+
+/* physical bits below the screen */
+.pendant-hw {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 6px 2px;
+}
+.pendant-mic {
+  display: grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  color: var(--muted);
+  background: color-mix(in oklab, #000 30%, transparent);
+  border: 1px solid var(--edge-soft);
+}
+.pendant-btn {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--surface-3), var(--ink-2));
+  border: 1px solid var(--edge);
+  box-shadow: inset 0 -2px 4px color-mix(in oklab, #000 45%, transparent);
+}
+
+.pendant-device-cap {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--muted);
+  text-align: center;
+  max-width: 30ch;
+}
+
+/* ============================================================
+   the build track
+   ============================================================ */
+.pendant-track-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.pendant-track-title {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  letter-spacing: -0.01em;
+}
+.pendant-track-count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.pendant-track-count b { color: var(--text); font-weight: 600; }
+
+.pendant-track-bar {
+  margin: .9rem 0 1.4rem;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.pendant-track-fill {
+  display: block;
+  height: 100%;
+  width: var(--pendant-fill, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+}
+
+.pendant-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pendant-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: start;
+  gap: .9rem;
+  padding: .7rem 0;
+}
+/* connecting spine between stage markers */
+.pendant-stage::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 1.9rem;
+  bottom: -0.1rem;
+  width: 2px;
+  background: var(--edge-soft);
+}
+.pendant-stage:last-child::before { display: none; }
+
+.pendant-stage-mark {
+  position: relative;
+  z-index: 1;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.pendant-stage.is-done .pendant-stage-mark {
+  background: color-mix(in oklab, var(--positive) 20%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--positive) 55%, transparent);
+  color: var(--positive);
+}
+.pendant-stage.is-todo .pendant-stage-mark {
+  background: transparent;
+  border: 1px dashed var(--edge);
+  color: var(--muted);
+}
+.pendant-stage-num { line-height: 1; }
+
+.pendant-stage-body { min-width: 0; }
+.pendant-stage-name {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  font-size: var(--step-0);
+  color: var(--text);
+  font-weight: 500;
+}
+.pendant-stage.is-todo .pendant-stage-name { color: var(--text-dim); }
+.pendant-stage-note {
+  display: block;
+  margin-top: .2rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pendant-stage-flag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  color: var(--accent-hi);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 38%, transparent);
+}
+
+.pendant-stage-state {
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  white-space: nowrap;
+}
+.pendant-stage.is-done .pendant-stage-state { color: color-mix(in oklab, var(--positive) 80%, var(--text-dim)); }
+.pendant-stage.is-todo .pendant-stage-state { color: var(--faint); }
+
+/* the milestone gets a subtle accent card treatment */
+.pendant-stage.is-milestone {
+  padding-left: .9rem;
+  padding-right: .9rem;
+  margin: .35rem 0;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
+}
+.pendant-stage.is-milestone::before { left: 1.775rem; }
+
+/* ---------- the shared-contract closer ---------- */
+.pendant-contract {
+  margin-top: clamp(2rem, 5vw, 3rem);
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--edge-soft);
+  max-width: 74ch;
+  color: var(--text-dim);
+  font-size: var(--step-0);
+  line-height: 1.6;
+}
+.pendant-code {
+  font-family: var(--font-mono);
+  font-size: .88em;
+  color: var(--accent-hi);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 26%, transparent);
+  border-radius: var(--r-sm);
+  padding: .05em .4em;
+}
+
+/* ============================================================
+   motion
+   ============================================================ */
+@keyframes pendantBlink {
+  0%, 100% { opacity: 1; }
+  55% { opacity: .25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pendant-live-dot { animation: none; }
+}

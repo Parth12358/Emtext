@@ -11,6 +11,7 @@ namespace {
 
   const int      BAR_W = 7;      // tone edge-bar width, px
   const uint8_t  BRIGHT_PAUSED = 60;
+  const int      STRIP = 12;     // thickness of the top status bar AND the button-indicator bars
 
   // User-adjustable screen brightness (the Settings "bright" row cycles these). Replaces
   // the old fixed BRIGHT_GLANCE constant so all lit screens follow the chosen preset.
@@ -21,9 +22,9 @@ namespace {
   int            selCursor = 0;                       // highlighted Settings row
   void (*cbSetting)(display::Setting) = nullptr;      // cross-module action from a row
 
-  String gRead = "(read)";
-  String gTone = "neutral";
-  String gTranscript = "(transcript)";
+  String gRead = "";            // no text until a real read arrives
+  String gTone = "positive";    // default heart is RED (positive) on start
+  String gTranscript = "";
   bool   gLowConf = false;
   bool   connReady = false;
   int    connState = 0;                           // 0 = searching/off, 1 = ready, 2 = degraded
@@ -199,6 +200,17 @@ namespace {
     d.fillTriangle(x + 1, y + 3, x + 4, y + 3, x,     y + 8, c);   // lower wedge
   }
 
+  // Small horizontal battery icon with a proportional fill -- legible in the narrow
+  // landscape strip where the stacked "NN%" digits were not. ~8x6 px at (x, y).
+  void drawBattIcon(int x, int y, int lvl) {
+    auto& d = M5.Display;
+    uint16_t c = cDim();
+    d.drawRect(x, y, 7, 6, c);                       // body outline
+    d.fillRect(x + 7, y + 2, 1, 2, c);              // + terminal nub
+    int fw = ((7 - 2) * lvl) / 100;                  // inner fill width (0..5)
+    if (fw > 0) d.fillRect(x + 1, y + 1, fw, 4, c);
+  }
+
   // Draw a short string as a vertical stack of characters -- for the narrow landscape
   // strip, where horizontal text won't fit. ~10px per character.
   void drawVText(int cx, int y0, const String& s, uint16_t fg, uint16_t bg) {
@@ -220,37 +232,37 @@ namespace {
     int lvl = M5.Power.getBatteryLevel();
     if (lvl < 0) lvl = 0; else if (lvl > 100) lvl = 100;
     bool charging = (M5.Power.isCharging() == m5::Power_Class::is_charging);
+    int cy = STRIP / 2;
     if (H >= W) {                               // portrait: strip along the top
-      d.fillRect(0, 0, W, 10, bg);
-      drawConnGlyph(6, 5);                                    // connectivity glyph, left
+      d.fillRect(0, 0, W, STRIP, bg);
+      drawConnGlyph(6, cy);                                   // connectivity glyph, left
       d.setTextSize(1);
       d.setTextColor(cDim(), bg);
       if (pingMs >= 0) {                                      // ping, left of centre
         d.setTextDatum(middle_left);
-        d.drawString((String(pingMs) + "ms").c_str(), 13, 5);
+        d.drawString((String(pingMs) + "ms").c_str(), 14, cy);
       }
       int ax = W / 2 - 14;                                    // dev activity cluster, centre
-      if (actListen) gListen(ax,      5, TFT_WHITE);
-      if (actSend)   gUp    (ax + 10, 5, TFT_WHITE);
-      if (actRecv)   gDown  (ax + 20, 5, TFT_WHITE);
-      if (actClip)   gClip  (ax + 30, 5, TFT_WHITE);
+      if (actListen) gListen(ax,      cy, TFT_WHITE);
+      if (actSend)   gUp    (ax + 10, cy, TFT_WHITE);
+      if (actRecv)   gDown  (ax + 20, cy, TFT_WHITE);
+      if (actClip)   gClip  (ax + 30, cy, TFT_WHITE);
       String bstr = String(lvl) + "%";
       d.setTextDatum(middle_right);                           // battery %, right
-      d.drawString(bstr.c_str(), W - 2, 5);
-      if (charging) drawBolt(W - 2 - d.textWidth(bstr.c_str()) - 7, 1);   // bolt just left of it
+      d.drawString(bstr.c_str(), W - 2, cy);
+      if (charging) drawBolt(W - 2 - d.textWidth(bstr.c_str()) - 7, cy - 4);   // bolt left of it
     } else {                                    // landscape: strip down the left (text stacked)
-      d.fillRect(0, 0, 10, H, bg);
-      if (actListen) gListen(3, 4,  TFT_WHITE);              // dev activity, 2x2 grid at top
-      if (actSend)   gUp    (7, 4,  TFT_WHITE);
-      if (actRecv)   gDown  (3, 12, TFT_WHITE);
-      if (actClip)   gClip  (7, 12, TFT_WHITE);
+      d.fillRect(0, 0, STRIP, H, bg);
+      int gx = STRIP / 2;
+      if (actListen) gListen(gx - 2, 4,  TFT_WHITE);         // dev activity, 2x2 grid at top
+      if (actSend)   gUp    (gx + 2, 4,  TFT_WHITE);
+      if (actRecv)   gDown  (gx - 2, 12, TFT_WHITE);
+      if (actClip)   gClip  (gx + 2, 12, TFT_WHITE);
       int y = 20;
-      if (charging) { drawBolt(3, y); y += 11; }             // charging bolt
-      String bstr = String(lvl) + "%";
-      drawVText(5, y, bstr, cDim(), bg);                     // battery %, stacked
-      y += bstr.length() * 10 + 6;
-      if (pingMs >= 0) drawVText(5, y, String(pingMs), cDim(), bg);   // ping (number), stacked
-      drawConnGlyph(5, H - 6);                               // connectivity glyph at the bottom
+      drawBattIcon(gx - 4, y, lvl); y += 9;                  // battery as an icon (legible)
+      if (charging) { drawBolt(gx - 2, y); y += 11; }        // charging bolt below it
+      if (pingMs >= 0) drawVText(gx, y, String(pingMs), cDim(), bg);   // ping (number), stacked
+      drawConnGlyph(gx, H - 6);                              // connectivity glyph at the bottom
     }
   }
 
@@ -258,18 +270,18 @@ namespace {
   // Each sits on its button's physical edge and rotates with the device.
   void drawIndicators(int W, int H) {
     auto& d = M5.Display;
-    uint16_t rest = d.color565(13, 64, 95);     // #0D405F  resting
+    uint16_t rest = d.color565(2, 8, 46);       // resting: darker, bluer navy
     uint16_t la = bA   ? d.color565(156, 0, 3)  : rest;   // A   #9C0003 red
     uint16_t lb = bB   ? TFT_WHITE              : rest;   // B   white
     uint16_t lp = bPwr ? d.color565(43, 165, 3) : rest;   // PWR #2BA503 green
     if (H >= W) {                               // portrait: "U" along the bottom
-      d.fillRect(0, H - 35, 10, 35, lp);        // PWR  left bar
-      d.fillRect(W - 10, H - 35, 10, 35, lb);   // B    right bar
-      d.fillRect(10, H - 10, W - 20, 10, la);   // A    bottom bar
+      d.fillRect(0, H - 35, STRIP, 35, lp);                    // PWR  left bar
+      d.fillRect(W - STRIP, H - 35, STRIP, 35, lb);            // B    right bar
+      d.fillRect(STRIP, H - STRIP, W - 2 * STRIP, STRIP, la);  // A    bottom bar
     } else {                                    // landscape: "]" on the right
-      d.fillRect(W - 10, 10, 10, H - 20, la);   // A    right edge
-      d.fillRect(W - 35, 0, 35, 10, lb);        // B    top-right
-      d.fillRect(W - 35, H - 10, 35, 10, lp);   // PWR  bottom-right
+      d.fillRect(W - STRIP, STRIP, STRIP, H - 2 * STRIP, la);  // A    right edge
+      d.fillRect(W - 35, 0, 35, STRIP, lb);                    // B    top-right
+      d.fillRect(W - 35, H - STRIP, 35, STRIP, lp);            // PWR  bottom-right
     }
   }
 

@@ -165,8 +165,7 @@ void setup() {
   // Stage 4P: setup AP portal (toggled from the Status screen; serves the config page).
   portal::begin();
 
-  // seed fake data so glance/history/status show something (real reads land in Stage 6)
-  display::setGlance("hey, nice work", "positive", "hey nice work");
+  // start blank -- real reads populate the glance once the conversation begins
   display::setConnection("searching");
 }
 

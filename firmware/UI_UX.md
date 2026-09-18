@@ -49,8 +49,8 @@ chrome overlays (info bar, clock, button-press shadows).
 
 | Overlay | Now | Target |
 |---|---|---|
-| **Top bar** (connectivity + ping · battery) | ✅ `drawTopBar` — connectivity by **shape** (`drawConnGlyph`: filled disc = ready, hollow ring = searching, ring+dot = degraded — colour-blind safe, colour is only a second cue), **live ping** (median RTT in ms, off the 15 s keepalive pong — no extra traffic), and **battery as a number** (`NN%`, right side). Top strip in portrait (horizontal text); left strip in landscape with the battery %, ping, and charging bolt **stacked vertically** (`drawVText`) so they fit the 10 px strip. Charging shows a drawn **lightning bolt** (`drawBolt`, shape not colour). | — |
-| **Press indicators** (A/B/PWR) | ✅ `drawIndicators` — three edge segments, rest `#0D405F`, light on press (A red / B white / PWR green), on the physical-button edge, orientation-aware | — |
+| **Top bar** (connectivity + ping · battery) | ✅ `drawTopBar` — connectivity by **shape** (`drawConnGlyph`: filled disc = ready, hollow ring = searching, ring+dot = degraded — colour-blind safe, colour is only a second cue), **live ping** (median RTT in ms, off the 15 s keepalive pong — no extra traffic), and **battery as a number** (`NN%`, right side). Top strip in portrait (battery as `NN%` text); left strip in landscape where battery is a small **icon** (`drawBattIcon`, proportional fill — the stacked digits were illegible) with ping stacked below and the charging **lightning bolt** (`drawBolt`, shape not colour). | — |
+| **Press indicators** (A/B/PWR) | ✅ `drawIndicators` — three edge segments, rest a **very dark blue**, light on press (A red / B white / PWR green), on the physical-button edge, orientation-aware. Bar thickness = `STRIP` (12 px), shared with the top status bar so they match. | — |
 | **Clock** | 🔲 | small tasteful face, on the side/out of the way; larger than the summary text, **smaller** than the semantic read |
 | **Processing "…"** | ✅ | shown while a read is pending (`status: thinking`) |
 

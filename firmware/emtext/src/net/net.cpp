@@ -28,6 +28,36 @@ namespace {
   volatile bool  wantPortal = false;     // desired setup-AP state (set from core 1)
   bool           apOn = false;           // actual AP state (task-owned, core 0)
 
+  // Round-trip latency, measured off the existing keepalive pong -- no extra traffic.
+  // We echo millis() in the ping "t"; the server returns it verbatim in the pong, so
+  // RTT = now - t. Kept as a rolling MEDIAN of the last few samples (robust to a single
+  // slow round-trip). Written on core 0, read on core 1 via pingMs() -- a single aligned
+  // int, safe to read racily. -1 until we have a sample.
+  const int    PING_SAMPLES = 5;
+  uint16_t     pingBuf[PING_SAMPLES];
+  int          pingCount = 0, pingHead = 0;
+  volatile int pingMedianMs = -1;
+  void pushPing(uint32_t rtt) {
+    if (rtt > 60000) return;                             // ignore absurd (clock) samples
+    pingBuf[pingHead] = (uint16_t)(rtt > 65535 ? 65535 : rtt);
+    pingHead = (pingHead + 1) % PING_SAMPLES;
+    if (pingCount < PING_SAMPLES) pingCount++;
+    uint16_t tmp[PING_SAMPLES];
+    for (int i = 0; i < pingCount; i++) tmp[i] = pingBuf[i];
+    for (int i = 1; i < pingCount; i++) {                // insertion sort (tiny window)
+      uint16_t k = tmp[i]; int j = i - 1;
+      while (j >= 0 && tmp[j] > k) { tmp[j + 1] = tmp[j]; j--; }
+      tmp[j + 1] = k;
+    }
+    pingMedianMs = tmp[pingCount / 2];
+    LOG_DEBUG("net: ping %ums (median %dms, n=%d)", (unsigned)rtt, pingMedianMs, pingCount);
+  }
+  void resetPing() { pingCount = 0; pingHead = 0; pingMedianMs = -1; }
+
+  // Dev activity: millis() of the last audio sent / last frame received. Read on core 1
+  // to flash TX/RX indicators on the status bar. Single aligned ints -> race-safe read.
+  volatile uint32_t txAt = 0, rxAt = 0;
+
   // Cross-core audio handoff (5.3): a drop-oldest byte ring in PSRAM. core 1 (sendAudio)
   // writes, core 0 (task) drains -> sendBIN. Sized for a ~3 s outage so a WiFi blip loses
   // no audio (requirement Section 2). Mutex-guarded (both cores touch head/tail).
@@ -170,15 +200,21 @@ namespace {
         size_t n = transport::poll(buf, sizeof(buf));
         if (n > 0) {
           lastRx = millis();
+          rxAt   = millis();               // dev RX indicator
           if (gotReady && st == net::State::Degraded) setState(net::State::Ready);   // recovered
           proto::Frame f;
           proto::parse(buf, f);
-          if (f.type == proto::Type::Ready) {
-            gotReady = true;
-            setState(net::State::Ready);
-            resetBackoff();
+          if (f.type == proto::Type::Pong) {
+            pushPing((uint32_t)(millis() - (uint32_t)f.t));   // RTT sample -> median
+          } else {
+            if (f.type == proto::Type::Ready) {
+              gotReady = true;
+              setState(net::State::Ready);
+              resetBackoff();
+              lastPing = millis() - PING_MS + 1500;           // first RTT sample ~1.5s after ready
+            }
+            xQueueSend(rxq, &f, 0);                           // pong is internal; never queued
           }
-          xQueueSend(rxq, &f, 0);
         }
 
         // 5.4: client keepalive ping (server echoes pong -> keeps a quiet link fresh).
@@ -210,11 +246,13 @@ namespace {
             xSemaphoreGive(ringMx);
             if (!take) break;
             transport::sendBin(txbuf, take);
+            txAt = millis();                // dev TX indicator
           }
         }
         vTaskDelay(pdMS_TO_TICKS(2));
       }
       transport::close();
+      resetPing();              // stale RTT must not linger on the status bar
       forceReconnect = false;   // consumed
 
       // Auth-reject inference: the AHC lib can't read the 1008 close code, so a
@@ -266,6 +304,9 @@ void net::loop() {
 
 net::State net::state() { return st; }
 const char* net::stateName() { return NAMES[(int)st]; }
+int net::pingMs() { return pingMedianMs; }   // median RTT (ms), -1 until measured
+uint32_t net::lastTxMs() { return txAt; }    // millis() of last audio sent (0 = never)
+uint32_t net::lastRxMs() { return rxAt; }    // millis() of last frame received (0 = never)
 void net::onFrame(void (*cb)(const proto::Frame&)) { cbFrame = cb; }
 
 // Called on core 1 (from audio::onChunk). Copies the chunk into the TX queue,

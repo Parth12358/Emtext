@@ -144,8 +144,9 @@ The governing rule: **return the user's attention to the person, don't capture i
 
 - **Tone is the Undertale "DETERMINATION" heart** (`drawHeart`, a 16×16 pixel sprite) rendered as
   the hero at screen centre, filled in the tone's **Undertale soul colour**: positive = red,
-  negative = blue, sarcastic = purple, mixed = yellow, neutral = dim gray. The read is a small dim
-  caption below it, word-wrapped to ≤2 lines.
+  negative = blue, sarcastic = purple, mixed = yellow, neutral = dim gray. The read sits beside/below
+  it in a **bold white font** (`FreeSansBold9pt7b`), **capped at 5 words** and word-wrapped so all 5
+  always fit (`wrapN`, up to 5 lines).
 - **One shape for every tone — the emotion is the colour** (pure colour-only, like Undertale's
   souls, by design). Tradeoff, accepted intentionally: colour is the *sole* cue, so it is not
   colour-blind / low-backlight redundant the way the old curve mark was.
@@ -157,8 +158,8 @@ The governing rule: **return the user's attention to the person, don't capture i
 
 ## Controls & mic gating (in emtext.ino)
 
-- BtnA short → wake / cycle glance↔history. BtnA long → **save a clip** (server-stored; see
-  AGENT_COMMS T1). BtnB short → **pause** (privacy screen). BtnB long → status. BtnPWR long →
+- BtnA short → wake / cycle glance↔history. BtnA long → **save a clip** (server-stored; needs
+  server support). BtnB short → **pause** (privacy screen). BtnB long → status. BtnPWR long →
   power-off (stub until Stage 8). Lift → wake. (No mute — audio output is removed.)
 - **The mic runs only when not paused.** `emtext.ino` holds `g_paused` and calls
   `audio::setPaused(g_paused)` — the privacy pause is the only thing that cuts the mic.

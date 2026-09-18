@@ -34,12 +34,16 @@ from . import config
 #     prompt has to work both ways, and says so explicitly in its last paragraph.
 #   - The mismatch rules are the point of the whole SER stage: words and voice
 #     disagreeing is what exposes sarcasm and masking.
-#   - The 10-word cap is a *listening* constraint, not a style preference. The
+#   - The 5-word cap is a *listening* constraint, not a style preference. The
 #     read lands mid-conversation while the user is still tracking the speaker,
-#     so a sentence long enough to need parsing arrives too late to be useful.
-#     The named filler phrases are there because the cap alone does not remove
-#     them -- "The speaker is ..." simply eats four of the ten words.
+#     so anything long enough to need parsing arrives too late to be useful --
+#     and the device glance now caps the read at 5 words too, so a longer read
+#     is just truncated on screen. The "caveman" phrasing (content words only,
+#     no filler or grammar words) is what keeps 5 words actually meaningful.
 #
+#     STALE -- the numbers below are for the OLD 10-word wording and no longer
+#     describe this prompt (now a 5-word caveman cap); re-run
+#     `python -m eval.model_eval` to re-measure.
 #     Measured, qwen3:14b, 3 runs of eval/tone_cases.jsonl (90 reads), against
 #     the previous "under about 14 words" wording:
 #
@@ -59,10 +63,13 @@ SYSTEM_PROMPT = """You help a neurodivergent listener understand the emotional \
 subtext of a conversation they are hearing. For the newest line only, reply \
 with a single JSON object: {"tone": one of \
 ["positive","negative","neutral","sarcastic","mixed"], "read": a short plain \
-sentence}. The "read" must be one line of AT MOST 10 WORDS, practical rather \
-than clinical -- tell them what the speaker likely means or wants, not a \
-diagnosis. Cut every word that is not doing work: no "The speaker is", no \
-"They are probably", no restating the line back. Start with the point.
+sentence}. The "read" must be AT MOST 5 WORDS, practical rather than clinical -- tell \
+them what the speaker likely means or wants, not a diagnosis. Use terse, \
+telegraphic "caveman" phrasing: keep only content words, drop every filler and \
+grammar word -- no articles ("a"/"the"), no "is"/"are"/"probably", no "The \
+speaker is" or "They are", no restating the line back. Bare keywords only, e.g. \
+"masking hurt", "friendly teasing", "wants reassurance", "genuinely pleased". \
+Start with the point.
 
 Some lines include a "voice:" field describing how the line actually SOUNDED, \
 measured from the audio by a speech emotion model. It may report an emotion \

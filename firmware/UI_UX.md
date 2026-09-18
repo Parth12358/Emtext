@@ -49,12 +49,14 @@ chrome overlays (info bar, clock, button-press shadows).
 
 | Overlay | Now | Target |
 |---|---|---|
-| **Top bar** (connectivity + ping · battery) | ✅ `drawTopBar` — dark strip = connectivity/ping (+ a green/amber dot), magenta = battery. Top in portrait, left strip in landscape | richer connectivity/ping + battery-level fill |
+| **Top bar** (connectivity + ping · battery) | ✅ `drawTopBar` — connectivity by **shape** (`drawConnGlyph`: filled disc = ready, hollow ring = searching, ring+dot = degraded — colour-blind safe, colour is only a second cue), **live ping** (median RTT in ms, off the 15 s keepalive pong — no extra traffic), and **battery as a number** (`NN%`, right side). Top strip in portrait (horizontal text); left strip in landscape with the battery %, ping, and charging bolt **stacked vertically** (`drawVText`) so they fit the 10 px strip. Charging shows a drawn **lightning bolt** (`drawBolt`, shape not colour). | — |
 | **Press indicators** (A/B/PWR) | ✅ `drawIndicators` — three edge segments, rest `#0D405F`, light on press (A red / B white / PWR green), on the physical-button edge, orientation-aware | — |
 | **Clock** | 🔲 | small tasteful face, on the side/out of the way; larger than the summary text, **smaller** than the semantic read |
 | **Processing "…"** | ✅ | shown while a read is pending (`status: thinking`) |
 
 Both the top bar and the press indicators render on **every lit screen except Dark** (Paused stays clean). Screen content (titles, read, footer) was nudged inward to leave room for them.
+
+**Dev activity glyphs** (on the top bar, distinct shapes — colour-blind safe): **dot** = listening (`audio::voiced()`), **▲** = sending audio, **▼** = receiving a frame, **■** = clip fired. Sending/receiving flash from `net::lastTxMs()`/`lastRxMs()` (a ~250 ms window); clip from a ~500 ms window. A centred cluster in portrait; a 2×2 grid at the top of the strip in landscape. Debug aid, not end-user UI.
 
 ---
 
@@ -292,7 +294,8 @@ Built-UI gaps (each names where it lives):
       Surface it in More Info or drop it.
 - [ ] **More Info rows overflow** (`display.cpp` History case) — not width-clipped; reuse
       `capWords`/`wrap2`.
-- [ ] **Degraded looks like searching** (`display.cpp:drawConnDot`) — give Degraded its own dot.
+- [x] **Degraded distinct** ✅ — connectivity is now shape-based (`drawConnGlyph`: filled/ring/ring+dot),
+      so Degraded reads differently from Searching — and it's colour-blind safe (the user is colour-blind).
 - [ ] **No "mic live" affordance while Dark** (compliance).
 - [ ] **Settings/More Info never auto-dim** (`display.cpp:loop`) — Settings now has explicit back
       (BtnB/BtnA hold) + PWR→Dark, but neither auto-dims on idle. Add an idle timeout.

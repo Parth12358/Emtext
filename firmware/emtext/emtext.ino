@@ -36,13 +36,15 @@ static void applyMic() {
   audio::setPaused(g_paused);
 }
 
-// BtnA hold: back out of Settings; otherwise save a clip (server-stored -- see AGENT_COMMS T1).
+// BtnA hold: back out of Settings; otherwise save a clip (server-stored; needs server support).
+static uint32_t g_clipAt = 0;   // millis() of the last clip action (drives the dev clip glyph)
 static void onHoldA() {
   if (display::state() == display::State::Status) {
     if (!display::settingsLocked()) display::setState(display::State::Glance);
     return;
   }
-  LOG_INFO("clip: save last read (TODO -- needs server, AGENT_COMMS T1)");
+  g_clipAt = millis();
+  LOG_INFO("clip: save last read (TODO -- needs server support)");
 }
 static void onPause() {
   // In Settings, BtnB scrolls the rows instead of toggling privacy pause.
@@ -174,16 +176,24 @@ void loop() {
   config::handleSerial();
   controls::loop();
   display::setButtons(controls::heldA(), controls::heldB(), controls::heldPwr());  // press indicators
+  display::setPing(net::pingMs());                                                 // status-bar ping
+  uint32_t nowMs = millis();                                                       // dev activity glyphs
+  display::setActivity(audio::voiced(),                                            // listening
+                       nowMs - net::lastTxMs() < 250,                              // sending
+                       nowMs - net::lastRxMs() < 250,                              // receiving
+                       nowMs - g_clipAt < 500);                                    // clip
   display::loop();
   audio::loop();
   net::loop();
   portal::loop();
 
-  // reflect the network state on the display's connection dot
+  // reflect the network state on the display's connectivity glyph (shape, not colour)
   static net::State lastNet = net::State::Off;
   if (net::state() != lastNet) {
     lastNet = net::state();
-    display::setConnection(lastNet == net::State::Ready ? "ready" : "searching");
+    const char* lbl = (lastNet == net::State::Ready)    ? "ready"
+                    : (lastNet == net::State::Degraded) ? "degraded" : "searching";
+    display::setConnection(lbl);
   }
 
   static uint32_t last = 0;

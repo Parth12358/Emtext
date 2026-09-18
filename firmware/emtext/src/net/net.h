@@ -13,6 +13,9 @@ namespace net {
   void        loop();      // core-1: drain the RX queue, dispatch onFrame
   State       state();     // atomic-ish read, safe from core 1
   const char* stateName();
+  int         pingMs();    // median round-trip latency (ms), -1 until measured
+  uint32_t    lastTxMs();  // millis() of last audio sent      (dev TX indicator)
+  uint32_t    lastRxMs();  // millis() of last frame received  (dev RX indicator)
   void        onFrame(void (*cb)(const proto::Frame&));   // dispatched on core 1
   void        sendAudio(const int16_t* pcm, size_t n);    // core 1 -> TX queue -> core 0
   void        reconnect();                                // drop STA + reconnect (after a config change)

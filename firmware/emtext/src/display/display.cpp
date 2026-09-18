@@ -26,10 +26,13 @@ namespace {
   String gTranscript = "(transcript)";
   bool   gLowConf = false;
   bool   connReady = false;
+  int    connState = 0;                           // 0 = searching/off, 1 = ready, 2 = degraded
   bool   processing = false;
   bool   paused = false;
   bool   portalOn = false;
   bool   bA = false, bB = false, bPwr = false;   // button-held -> press indicators
+  int    pingMs = -1;                            // median RTT (ms) from net; -1 = unknown
+  bool   actListen = false, actSend = false, actRecv = false, actClip = false;   // dev activity
   String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
@@ -71,13 +74,13 @@ namespace {
     return s;
   }
 
-  // Wrap into <=2 lines at the current text size; if text is left over, the last line
-  // is truncated with an ASCII "..." (default font has no real ellipsis glyph).
-  int wrap2(const String& s, int areaW, String out[2], bool* clipped) {
+  // Greedy word-wrap into up to `maxLines` lines at the current text size. No ellipsis:
+  // callers cap the word count first and size the area so the words fit.
+  int wrapN(const String& s, int areaW, int maxLines, String out[]) {
     auto& d = M5.Display;
-    out[0] = ""; out[1] = ""; *clipped = false;
+    for (int k = 0; k < maxLines; k++) out[k] = "";
     int line = 0, i = 0;
-    while (i < (int)s.length() && line < 2) {
+    while (i < (int)s.length() && line < maxLines) {
       int sp = s.indexOf(' ', i);
       String word = (sp < 0) ? s.substring(i) : s.substring(i, sp);
       String trial = out[line].length() ? out[line] + " " + word : word;
@@ -88,15 +91,8 @@ namespace {
         line++;
       }
     }
-    int used = out[1].length() ? 2 : (out[0].length() ? 1 : 0);
-    if (i < (int)s.length()) {                      // overflow -> clip last line with "..."
-      *clipped = true;
-      int last = used ? used - 1 : 0;
-      while (out[last].length() && d.textWidth((out[last] + "...").c_str()) > areaW)
-        out[last] = out[last].substring(0, out[last].length() - 1);
-      out[last] += "...";
-      if (!used) used = 1;
-    }
+    int used = 0;
+    for (int k = 0; k < maxLines; k++) if (out[k].length()) used = k + 1;
     return used;
   }
 
@@ -130,27 +126,31 @@ namespace {
     uint16_t col = b.show ? b.color : cDim();
     const int cell = 6;
 
-    String text = capWords(gRead, 6);
-    d.setTextColor(gLowConf ? cFaint() : cDim(), TFT_BLACK);
+    String text = capWords(gRead, 5);               // at most 5 words -- and they must fit
+    d.setFont(&fonts::FreeSansBold9pt7b);           // bold + bigger: the words are the message
     d.setTextSize(1);
-    String lines[2]; bool clip;
-    int lh = d.fontHeight();
+    d.setTextColor(gLowConf ? cFaint() : TFT_WHITE, TFT_BLACK);   // white = bold/high-contrast
+    String lines[5];
+    int lh = d.fontHeight() + 2;
 
     if (H >= W) {
       // PORTRAIT: heart high under the top bar, read lower-centre (matches the Figma)
       drawHeart(W / 2, 69, cell, col);
-      int n = wrap2(text, W - 24, lines, &clip);
+      int n = wrapN(text, W - 6, 5, lines);          // near-full width, up to 5 lines
       d.setTextDatum(top_center);
-      int y = 150;
-      for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), W / 2, y); y += lh; }
+      int y0 = 172 - n * lh / 2;                     // block centred in the lower area
+      for (int k = 0; k < n; k++) d.drawString(lines[k].c_str(), W / 2, y0 + k * lh);
     } else {
       // LANDSCAPE: heart on the left, read on the right (matches the Figma)
       drawHeart(75, H / 2, cell, col);
-      int n = wrap2(text, 96, lines, &clip);          // right column, ~x132..228
-      d.setTextDatum(middle_center);
-      int y0 = H / 2 - (n - 1) * lh / 2;
-      for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), 180, y0 + k * lh); }
+      int n = wrapN(text, 100, 5, lines);            // right column, up to 5 lines
+      d.setTextDatum(top_center);
+      int y0 = H / 2 - n * lh / 2;
+      for (int k = 0; k < n; k++) d.drawString(lines[k].c_str(), 180, y0 + k * lh);
     }
+
+    d.setFont(&fonts::Font0);                        // restore the default font for chrome/other screens
+    d.setTextSize(1);
 
     if (processing) {                               // heard, still thinking (static)
       d.setTextColor(cMis(), TFT_BLACK);
@@ -177,19 +177,80 @@ namespace {
   // ---- persistent chrome overlays (on every lit screen; not Dark / Paused) ----
   // Top bar: connectivity + ping (dark strip) and battery (magenta). Horizontal along
   // the top in portrait, vertical down the left in landscape -- it rides the same edge.
+  // Connectivity, encoded by SHAPE (not colour -- the user is colour-blind): filled disc =
+  // ready, hollow ring = searching/off, ring-with-a-dot = degraded. Colour is a second cue.
+  void drawConnGlyph(int cx, int cy) {
+    auto& d = M5.Display;
+    uint16_t c = connReady ? cPos() : cMis();
+    if (connState == 1) {                       // ready: solid disc
+      d.fillCircle(cx, cy, 3, c);
+    } else {                                    // searching / degraded: hollow ring
+      d.drawCircle(cx, cy, 3, c);
+      if (connState == 2) d.fillCircle(cx, cy, 1, c);   // degraded: + a centre dot
+    }
+  }
+
+  // Small lightning bolt = charging. A drawn glyph (shape, not colour -- the user is
+  // colour-blind); ~5x9 px in a box at (x, y).
+  void drawBolt(int x, int y) {
+    auto& d = M5.Display;
+    uint16_t c = d.color565(255, 216, 0);                          // yellow; the bolt shape is the cue
+    d.fillTriangle(x + 4, y,     x,     y + 5, x + 3, y + 5, c);   // upper wedge
+    d.fillTriangle(x + 1, y + 3, x + 4, y + 3, x,     y + 8, c);   // lower wedge
+  }
+
+  // Draw a short string as a vertical stack of characters -- for the narrow landscape
+  // strip, where horizontal text won't fit. ~10px per character.
+  void drawVText(int cx, int y0, const String& s, uint16_t fg, uint16_t bg) {
+    auto& d = M5.Display;
+    d.setTextDatum(top_center); d.setTextSize(1); d.setTextColor(fg, bg);
+    for (int i = 0; i < (int)s.length(); i++) { char c[2] = { s[i], 0 }; d.drawString(c, cx, y0 + i * 10); }
+  }
+
+  // Tiny dev activity glyphs -- distinct SHAPES (colour-blind safe): dot = listening,
+  // up-triangle = sending, down-triangle = receiving, square = clip.
+  void gListen(int cx, int cy, uint16_t c) { M5.Display.fillCircle(cx, cy, 2, c); }
+  void gUp(int cx, int cy, uint16_t c)     { M5.Display.fillTriangle(cx, cy - 2, cx - 2, cy + 2, cx + 2, cy + 2, c); }
+  void gDown(int cx, int cy, uint16_t c)   { M5.Display.fillTriangle(cx, cy + 2, cx - 2, cy - 2, cx + 2, cy - 2, c); }
+  void gClip(int cx, int cy, uint16_t c)   { M5.Display.fillRect(cx - 2, cy - 2, 4, 4, c); }
+
   void drawTopBar(int W, int H) {
     auto& d = M5.Display;
-    uint16_t bar  = d.color565(12, 22, 28);     // #0C161C  connectivity + ping
-    uint16_t batt = d.color565(255, 91, 222);   // #FF5BDE  battery
-    uint16_t conn = connReady ? cPos() : cMis();
+    uint16_t bg = d.color565(12, 22, 28);       // #0C161C  strip (connectivity + ping + battery)
+    int lvl = M5.Power.getBatteryLevel();
+    if (lvl < 0) lvl = 0; else if (lvl > 100) lvl = 100;
+    bool charging = (M5.Power.isCharging() == m5::Power_Class::is_charging);
     if (H >= W) {                               // portrait: strip along the top
-      d.fillRect(0, 0, W, 10, bar);
-      d.fillRect(W - 27, 0, 27, 10, batt);
-      d.fillCircle(6, 5, 3, conn);
-    } else {                                    // landscape: strip down the left
-      d.fillRect(0, 0, 10, H, bar);
-      d.fillRect(0, 0, 10, 27, batt);
-      d.fillCircle(5, H - 6, 3, conn);
+      d.fillRect(0, 0, W, 10, bg);
+      drawConnGlyph(6, 5);                                    // connectivity glyph, left
+      d.setTextSize(1);
+      d.setTextColor(cDim(), bg);
+      if (pingMs >= 0) {                                      // ping, left of centre
+        d.setTextDatum(middle_left);
+        d.drawString((String(pingMs) + "ms").c_str(), 13, 5);
+      }
+      int ax = W / 2 - 14;                                    // dev activity cluster, centre
+      if (actListen) gListen(ax,      5, TFT_WHITE);
+      if (actSend)   gUp    (ax + 10, 5, TFT_WHITE);
+      if (actRecv)   gDown  (ax + 20, 5, TFT_WHITE);
+      if (actClip)   gClip  (ax + 30, 5, TFT_WHITE);
+      String bstr = String(lvl) + "%";
+      d.setTextDatum(middle_right);                           // battery %, right
+      d.drawString(bstr.c_str(), W - 2, 5);
+      if (charging) drawBolt(W - 2 - d.textWidth(bstr.c_str()) - 7, 1);   // bolt just left of it
+    } else {                                    // landscape: strip down the left (text stacked)
+      d.fillRect(0, 0, 10, H, bg);
+      if (actListen) gListen(3, 4,  TFT_WHITE);              // dev activity, 2x2 grid at top
+      if (actSend)   gUp    (7, 4,  TFT_WHITE);
+      if (actRecv)   gDown  (3, 12, TFT_WHITE);
+      if (actClip)   gClip  (7, 12, TFT_WHITE);
+      int y = 20;
+      if (charging) { drawBolt(3, y); y += 11; }             // charging bolt
+      String bstr = String(lvl) + "%";
+      drawVText(5, y, bstr, cDim(), bg);                     // battery %, stacked
+      y += bstr.length() * 10 + 6;
+      if (pingMs >= 0) drawVText(5, y, String(pingMs), cDim(), bg);   // ping (number), stacked
+      drawConnGlyph(5, H - 6);                               // connectivity glyph at the bottom
     }
   }
 
@@ -326,6 +387,13 @@ void display::setState(State s) {
 void display::loop() {
   if (!paused && st == State::Glance && millis() - glanceSince >= GLANCE_MS)
     setState(State::Dark);
+
+  // Keep the top bar live (battery %, charging bolt, ping) without a full redraw/flicker.
+  static uint32_t lastBar = 0;
+  if (!paused && st != State::Dark && millis() - lastBar >= 5000) {
+    lastBar = millis();
+    drawTopBar(M5.Display.width(), M5.Display.height());
+  }
 }
 
 void display::setRotation(int rot) {
@@ -346,7 +414,9 @@ void display::setGlance(const String& read, const String& tone,
 
 void display::setConnection(const String& label) {
   connReady = (label == "ready");
-  if (!paused && st != State::Dark) draw();
+  connState = (label == "ready") ? 1 : (label == "degraded") ? 2 : 0;
+  if (!paused && st != State::Dark)
+    drawTopBar(M5.Display.width(), M5.Display.height());   // repaint the bar only (no flicker)
 }
 
 void display::setProcessing(bool on) {
@@ -362,6 +432,20 @@ void display::setButtons(bool a, bool b, bool pwr) {
   // whole screen on every press/release; this does not.
   if (!paused && st != State::Dark)
     drawIndicators(M5.Display.width(), M5.Display.height());
+}
+
+void display::setPing(int ms) {
+  if (ms == pingMs) return;                        // updates ~every 15s; only repaint on change
+  pingMs = ms;
+  if (!paused && st != State::Dark)
+    drawTopBar(M5.Display.width(), M5.Display.height());   // repaint the bar only (no flicker)
+}
+
+void display::setActivity(bool listening, bool sending, bool receiving, bool clip) {
+  if (listening == actListen && sending == actSend && receiving == actRecv && clip == actClip) return;
+  actListen = listening; actSend = sending; actRecv = receiving; actClip = clip;
+  if (!paused && st != State::Dark)
+    drawTopBar(M5.Display.width(), M5.Display.height());   // repaint the bar only (no flicker)
 }
 
 void display::setPortal(bool on, const String& ssid, const String& pass, const String& ip) {

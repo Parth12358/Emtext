@@ -55,20 +55,19 @@ is a microphone and a display.
 ## 4. Power
 
 - Boot shall proceed through visible stages: network connection, server
-  connection, ready. Failure at each stage shall be distinguishable on screen
-  and by tone.
+  connection, ready. Failure at each stage shall be distinguishable on screen.
+  (The device has no speaker; failures are shown visually only — see §6.)
 - Power off shall require a deliberate two-step action and shall close the
   connection cleanly before sleeping.
 - The device shall power off automatically after a configurable idle period
-  with no speech-energy audio, following an audible warning and an on-screen
-  grace period that any button cancels.
+  with no speech-energy audio, following an on-screen grace period that any
+  button cancels. (No audible warning — the device has no speaker; see §6.)
 - Idle detection shall incorporate motion: stationary and silent shall permit
   power off; in motion and silent shall extend the timeout.
 - The device shall wake from deep sleep on button press.
 - Processor clock, radio sleep behaviour, backlight state and silence gating
   shall be configured to minimise average current draw.
 - The device shall report battery level and shall signal low battery once.
-- Speaker output shall be limited to 75% volume while on battery.
 - Target runtime: at least 2.5 hours of continuous operation with the display
   dark by default.
 
@@ -93,17 +92,20 @@ is a microphone and a display.
 - The interface shall contain no scrolling text and no continuous animation.
 - Interpretation text shall not exceed eight words.
 
-## 6. Audio output
+## 6. Audio output — REMOVED (out of scope)
 
-- Tone cues shall not exceed 150 ms in duration.
-- Distinct cues shall be defined for negative tone and for words–voice
-  mismatch. No cue shall sound for neutral or positive.
-- Tone output shall be mutable by a single action.
+The device has **no speaker output**. All emotional signalling is **visual** (the
+glance tone edge bar, §5): there are no tone cues, no alert/boot/low-battery
+tones, and no audible idle warning. Muting is therefore not applicable. See §9.
+
+*(Superseded: this section previously required ≤150 ms cues for negative and
+words–voice mismatch, mutable by a single action.)*
 
 ## 7. Controls
 
-- Button A: short press wakes the display or advances history; long press
-  toggles mute.
+- Button A: short press wakes the display or advances history. (The long-press
+  mute action is removed with audio output, §6; the gesture is free for other
+  use, e.g. saving a clip.)
 - Button B: short press pauses and resumes streaming, with a visible change of
   display state; long press opens the status screen.
 - A dedicated long press shall initiate power off.
@@ -111,8 +113,8 @@ is a microphone and a display.
 ## 8. Configuration
 
 - All tunable values shall reside in persistent configuration: network list,
-  server address, token, chunk size, energy floor, idle timeout, tone mapping
-  and timeouts.
+  server address, token, chunk size, energy floor, idle timeout, and timeouts.
+  (Tone-cue mapping is gone with audio output, §6.)
 - No tunable value shall be embedded in program logic.
 - Serial logging shall support severity levels.
 - Credentials and tokens shall be excluded from version control.
@@ -124,6 +126,8 @@ is a microphone and a display.
 - Certificate pinning.
 - Network roaming beyond the fallback list.
 - On-device machine learning.
+- On-device audio output (tone cues, alert/boot/low-battery tones, audible
+  warnings) — the pendant has no speaker; all signalling is visual.
 
 ## 10. Acceptance criteria
 

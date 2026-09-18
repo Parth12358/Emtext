@@ -42,18 +42,19 @@ chrome overlays (info bar, clock, button-press shadows).
 | **Dark** | `State::Dark` | ✅ | resting/idle; screen black; default state |
 | **Glance** | `State::Glance` | ✅ | the live read: tone symbol + LLM context + chrome |
 | **More Info** | `State::History` | ✅ (as history) | longer LLM context / summary of recent reads |
-| **Settings** | `State::Status` | ✅ scrollable page | rows: wifi/bright/cues/power + portal-lock panel |
+| **Settings** | `State::Status` | ✅ scrollable page | rows: wifi/bright/power + portal-lock panel |
 | **Paused** (overlay) | `g_paused` flag | ✅ | privacy screen; mic hard-off |
 
 **Chrome overlays** (target — ride on top of the live screens):
 
 | Overlay | Now | Target |
 |---|---|---|
-| **Info bar** (battery + connectivity) | ⚠️ partial (conn dot only) | ✅ battery level + connectivity indicator, compact |
+| **Top bar** (connectivity + ping · battery) | ✅ `drawTopBar` — dark strip = connectivity/ping (+ a green/amber dot), magenta = battery. Top in portrait, left strip in landscape | richer connectivity/ping + battery-level fill |
+| **Press indicators** (A/B/PWR) | ✅ `drawIndicators` — three edge segments, rest `#0D405F`, light on press (A red / B white / PWR green), on the physical-button edge, orientation-aware | — |
 | **Clock** | 🔲 | small tasteful face, on the side/out of the way; larger than the summary text, **smaller** than the semantic read |
-| **Mute glyph** | ✅ | mic-slash glyph when cues are muted; mute is now toggled from the Settings `cues` row (not BtnA-hold) |
 | **Processing "…"** | ✅ | shown while a read is pending (`status: thinking`) |
-| **Button-press shadows** | 🔲 | iOS-style on-screen shadow at BtnB / PWR to show where the button is and that it was pressed |
+
+Both the top bar and the press indicators render on **every lit screen except Dark** (Paused stays clean). Screen content (titles, read, footer) was nudged inward to leave room for them.
 
 ---
 
@@ -77,7 +78,8 @@ are dead; only BtnA (turn portal off) or PWR (→Dark) get you out.
 
 **Timings & thresholds (Now):** Glance auto-dims to Dark after **8 s** (`GLANCE_MS`, reset on
 each read). Click vs hold = M5Unified `wasClicked()`/`wasHold()` (~500 ms). IMU ~**20 Hz**;
-orientation fires on quadrant change. Lift = accel > **1.35 g** then a **1.5 s** cooldown
+orientation is **debounced** (`ORIENT_STABLE_MS` = **500 ms**) — a new quadrant must hold steady
+that long before it flips, so it can't flicker near the 45° boundary. Lift = accel > **1.35 g** then a **1.5 s** cooldown
 (`LIFT_G`, `LIFT_COOLDOWN_MS`, tune on hardware).
 
 ---
@@ -101,7 +103,7 @@ orientation fires on quadrant change. Lift = accel > **1.35 g** then a **1.5 s**
   - **Lift gesture** → Glance.
   - **BtnB click** → Paused (works even from Dark).
   - **BtnB hold** → Settings.
-  - **BtnA hold** → 🔲 **record a clip to save** (new; replaces today's mute action).
+  - **BtnA hold** → 🔲 **record a clip to save** (saves the current moment to the server, §9.7).
 - **Transitions out:** Glance (BtnA/lift), Settings (BtnB-hold), Paused (BtnB click),
   clip capture (BtnA hold, 🔲).
 - ⚠️ **Read while Dark doesn't wake the screen** — reads accumulate silently (open question §10).
@@ -110,7 +112,8 @@ orientation fires on quadrant change. Lift = accel > **1.35 g** then a **1.5 s**
 
 ### 4.3 Glance — the hero screen
 **On-screen info (target):**
-- **Emotional tone** as a symbol (the hero). ✅ built as tone-colored curve (`drawMark`).
+- **Emotional tone** as a symbol (the hero). ✅ built as the Undertale heart (`drawHeart`),
+  colored by tone with Undertale soul colours (§6).
 - **Context from the LLM** (the read). ✅ built as a small caption.
 - **Connectivity** to server + wifi. ✅ conn dot; 🔲 richer info bar.
 - **Battery level.** 🔲 (via info bar).
@@ -144,7 +147,7 @@ orientation fires on quadrant change. Lift = accel > **1.35 g** then a **1.5 s**
 - ⚠️ **Does not auto-dim** — only Glance times out.
 
 ### 4.5 Settings — `State::Status` ✅ (scrollable settings page — built, pending hardware verify)
-A scrollable page (`display.cpp:drawSettings()`), 4 rows with a `>` cursor, a `[B]next [A]sel`
+A scrollable page (`display.cpp:drawSettings()`), 3 rows with a `>` cursor, a `[B]next [A]sel`
 hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:**
 - **BtnB click** → scroll cursor to next row (wraps).
 - **BtnA click** → select/activate the highlighted row.
@@ -156,8 +159,9 @@ hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:*
 |---|---|---|
 | **wifi** (`Wifi`) | joined SSID (trunc.) | launch/stop the setup **portal** |
 | **bright** (`Brightness`) | `n/4` | cycle 4 brightness presets (`40/90/150/220`), applied live to all lit screens |
-| **cues** (`Mute`) | `on` / `muted` | toggle cue mute (drives the mute glyph; wires to `cues::setMuted` when Stage 7 lands) |
 | **power** (`Power`) | battery `%` | ⚠️ stub — logs only (real power profiles = Stage 8) |
+
+*(The **cues**/mute row is removed — the device has no audio output, so there is nothing to mute.)*
 
 Dropped from the page per the plan: **URL/host** and **token** (secret) aren't shown; **ping**
 isn't surfaced yet (net doesn't measure RTT — future). Uptime/battery live in the footer aside.
@@ -220,20 +224,24 @@ Reconfigure Wi-Fi/host/token from a phone — no cable, no app. Module notes in 
 
 ---
 
-## 6. Tone → visual mapping ✅ (under revision)
+## 6. Tone → visual mapping ✅
 
-Current build; the exact symbols are being reworked (the emotion-mark-vs-alternative decision is
-open, §10).
+The mark is the **Undertale "DETERMINATION" heart** (`display::drawHeart`, a 16×16 pixel sprite),
+rendered as the hero at glance centre. **One shape for every tone — the emotion is the colour**
+(Undertale soul colours, pure colour-only by design).
 
-| Tone | Mark (now) | Color (`color565`) | History tick |
+| Tone | Mark | Colour (`color565`) — Undertale soul | History tick |
 |---|---|---|---|
-| positive | smile (upward arc) | green `(90,170,90)` | green |
-| negative | frown (downward arc) | red `(200,80,70)` | red |
-| sarcastic / mixed | wave | amber `(220,160,40)` | amber |
-| neutral | flat dim line | dim `(150,150,150)` | *none* |
+| positive | heart | red `(255,40,40)` — Determination | red |
+| negative | heart | blue `(60,130,255)` — Integrity | blue |
+| sarcastic | heart | purple `(180,70,230)` — Perseverance | purple |
+| mixed | heart | yellow `(255,210,40)` — Justice | yellow |
+| neutral | heart | dim gray `(120,120,120)` | *none* |
 
-Low-confidence reads render the caption in a fainter gray. Neutral = flat + no tick (quiet is
-the message). Cue mapping (🔲 Stage 7) will pair negative + mismatch with a short tone.
+Low-confidence reads render the caption in a fainter gray. Neutral = dim gray heart + no tick
+(quiet is the message). This visual mapping is the **only** channel for the emotional signal —
+the device has no speaker (audio cues removed). Note: since every tone is the same heart, **colour
+is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind redundant).
 
 ---
 
@@ -293,10 +301,12 @@ Built-UI gaps (each names where it lives):
 
 New target work (from this plan):
 
-- [x] **Settings page** ✅ built — Status is now a scrollable page (wifi/bright/cues/power) with a
+- [x] **Settings page** ✅ built — Status is now a scrollable page (wifi/bright/power) with a
       portal-lock credentials panel. Pending hardware verify.
-- [x] **Mute → Settings toggle** ✅ built — moved to the `cues` row; BtnA-hold freed for clips.
-      Still to wire `cues::setMuted()` when Stage 7 lands (glyph works today).
+- [x] **Mute removed** — with audio output cut there is nothing to mute; the Settings `cues` row
+      and the mute glyph are dropped from the plan. BtnA-hold stays free for clips. The dormant
+      `display::setMuted` / mute-glyph code (`display.cpp:307`, never triggered) can be deleted in
+      a cleanup pass.
 - [ ] **Rename + rework** History → **More Info** (detail/summary). Still a 5-row list in code.
 - [ ] **Clips** — BtnA-hold flags the last utterance to the server for later review (§9.7):
       additive `save` frame + on-screen confirm; server-side file storage + review page.
@@ -306,7 +316,8 @@ New target work (from this plan):
 - [ ] **Button-press shadows** for BtnB / PWR.
 - [ ] **Quick Setup at boot** + boot-stage progress.
 - [x] **Portal:** ✅ lock nav while up · ✅ show hotspot password. QR fallback still 🔲.
-- [ ] **Emotion-mark keep-vs-revise** — the tone symbol design is still open.
+- [x] **Emotion mark decided** ✅ — the **Undertale "DETERMINATION" heart** (`drawHeart`), colored
+      by Undertale soul colours (pure colour-only). Replaced the old curve mark (`drawMark`).
 
 ---
 
@@ -316,11 +327,11 @@ New target work (from this plan):
 Replace the fixed splash with network→server→ready progress (+ per-stage failure), and a path
 into the setup portal from boot.
 
-### 9.2 Audio cues (Stage 7, `cues` module)
-Short speaker tones **≤150 ms**: distinct cue for **negative** and for **words–voice mismatch**
-(sarcastic/mixed); **silent** for neutral/positive. Cap volume to **75%** on battery. Mic and
-speaker share I2S, so a cue borrows the bus (suspend mic → play → resume). Mute is a **Settings
-toggle** (§4.5), not a gesture.
+### 9.2 Audio cues — ❌ REMOVED
+The device has **no speaker output**. The emotional signal is conveyed **visually only** (the
+glance tone edge bar, §6). There are no tone cues, no alert/boot/low-battery tones, no audible
+idle warning, and no mute control. *(Superseded: ≤150 ms cues for negative + words–voice
+mismatch, with a 75% battery volume cap and a Settings mute toggle.)*
 
 ### 9.7 Clips — server-stored, reviewed later 🔲
 BtnA-hold (from Dark/Glance) **saves the current moment to the server** so it can be reviewed
@@ -349,11 +360,11 @@ Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket c
 sleep. (PWR-hold currently intended → Dark as an interim.)
 
 ### 9.4 Idle / motion auto-off (Stage 8)
-Auto power-off after no-speech, **extended by motion** (IMU); audible warning + on-screen grace
-cancellable by any button; deep sleep + wake-on-button.
+Auto power-off after no-speech, **extended by motion** (IMU); on-screen grace cancellable by any
+button (no audible warning — audio output removed); deep sleep + wake-on-button.
 
 ### 9.5 Low battery (Stage 8)
-Signal low battery **once**, distinct screen and/or tone.
+Signal low battery **once**, with a distinct on-screen indication (no tone — audio output removed).
 
 ### 9.6 Degraded / outage visibility (Stage 9)
 Interruption visible on screen throughout a drop + recovery, not just a silent amber dot.
@@ -363,16 +374,20 @@ Interruption visible on screen throughout a drop + recovery, not just a silent a
 ## 10. Decisions & open questions
 
 **Decided:**
+- ✅ **On-device audio output removed** — the pendant has no speaker: no tone cues, no
+   alert/boot/low-battery tones, no audible idle warning, and no mute. The emotional signal is
+   **visual only** (the glance tone edge bar, §6). The `cues` module (Stage 7) is dropped; the
+   Settings mute row and mute glyph go with it. BtnA-hold stays free for clips.
 - ✅ **Clips are stored on the server, reviewed later** (not kept on-device). See §9.7 for the
    flow and wire-protocol addition.
-- ✅ **Mute is a Settings toggle** (§4.5), not a gesture — freeing BtnA-hold for clips.
 
 **Still open:**
 1. **Clip payload:** flag just the last utterance's **id** (server keeps the audio + transcript +
    read it already has) vs. also saving audio. Recommended: **flag by id** — cheapest, no
    re-sending audio, and the server already holds everything (§9.7).
 2. **Read-while-Dark:** wake on every read, only non-neutral, or cue-only?
-3. **Tone symbol:** keep the mark-as-hero curve, or revise the symbol set?
+3. ~~**Tone symbol:** keep the mark-as-hero curve, or revise the symbol set?~~ **DECIDED** — the
+   Undertale heart, coloured by Undertale soul colours, pure colour-only (§6).
 4. **Transcript:** show it in More Info, or drop it?
 5. **Settings back/idle:** explicit back (BtnB-hold/BtnA-hold→Glance, PWR→Dark) plus an idle
    timeout?

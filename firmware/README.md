@@ -22,7 +22,7 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 4P Wi-Fi provisioning portal | `portal` (SoftAP + captive page) | ✅ toggle + auto-pop |
 | 5 wire protocol end-to-end | `net` + `proto` + `audio` | ✅ stream + outage + degraded |
 | 6 glance rendering (real reads) | `display` | ✅ reads + history on glance |
-| 7 audio cues | `cues` | ⬜ |
+| ~~7 audio cues~~ | ~~`cues`~~ | ❌ removed — no on-device audio output (visual-only) |
 | 8 power management | `power` | ⬜ |
 | 9 acceptance + compliance | — | ⬜ |
 
@@ -42,12 +42,12 @@ per resource: only `net` touches the radio, only `audio` the mic, only `display`
 
 ```
                         emtext.ino  (orchestrator: constructs + wires callbacks)
-        ┌───────────────┬───────────────┼───────────────┬──────────────┐
-     audio             net            display          cues          power
-        │           ┌───┴───┐            │               │              │
-        │        transport  │            │               │              │
-        └───────────┴───────┴──── proto ─┴───────────────┴──────────────┘
-                     config  •  logx           (foundation — no deps upward)
+        ┌───────────────┬───────────────┼──────────────┐
+     audio             net            display          power
+        │           ┌───┴───┐            │               │
+        │        transport  │            │               │
+        └───────────┴───────┴──── proto ─┴───────────────┘
+                     config  •  logx      (foundation — no deps upward)
 ```
 
 Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except header-only `logx`).
@@ -126,8 +126,9 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   `setProcessing()`, `setPaused()`, `setMuted()`. Now fed **real `read` frames** (Stage 6) —
   `setGlance` renders them and records a 5-deep history ring. See **Glance UX** below.
   Deps: `M5.Display`, config.
-- **`cues`** ⬜ — speaker cues + mute. `begin()`, `onRead(Read)`, `setMuted(bool)`, `loop()`.
-  Deps: `M5.Speaker`, `M5.Power`, proto, config.
+- **`cues`** ❌ **removed** — the device has no speaker output, so there is no audio-cue module.
+  The emotional signal is conveyed **visually only** (the glance tone edge bar). No tone cues,
+  no alert/boot/low-battery tones, no audible idle warning, no mute.
 - **`power`** ⬜ — PMIC: boot stages, idle/motion auto-off, two-step off, sleep/wake, battery.
   `begin()`, `loop()`, `noteActivity()`, `batteryLevel()`, callbacks `onWarnIdle/onGrace/onOff`.
   Deps: `M5.Power`, config.
@@ -141,23 +142,26 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
 
 The governing rule: **return the user's attention to the person, don't capture it.** So:
 
-- **Tone is a left edge bar, never a word and never the text colour** — read text stays white
-  (high contrast). Word-wrapped to ≤2 lines, shrinking size 2→1 to fit.
-- **Neutral shows no bar** — absence is the calm default.
-- **Mismatch (`sarcastic`/`mixed`) is amber *and* dashed** — hue is never the only cue (red
-  vs amber are confusable at low backlight, so the bar style differs too).
-- **Desaturated `color565` palette** — muted red/green/amber read as observation, not alarm.
+- **Tone is the Undertale "DETERMINATION" heart** (`drawHeart`, a 16×16 pixel sprite) rendered as
+  the hero at screen centre, filled in the tone's **Undertale soul colour**: positive = red,
+  negative = blue, sarcastic = purple, mixed = yellow, neutral = dim gray. The read is a small dim
+  caption below it, word-wrapped to ≤2 lines.
+- **One shape for every tone — the emotion is the colour** (pure colour-only, like Undertale's
+  souls, by design). Tradeoff, accepted intentionally: colour is the *sole* cue, so it is not
+  colour-blind / low-backlight redundant the way the old curve mark was.
+- **Neutral is a dim gray heart** and shows **no History tick** — quiet is the calm default.
 - **Low confidence dims the read** (`setGlance(..., true)`), ready for a confidence source.
-- **PAUSED** is a dim, unmistakable privacy screen (`||` glyph); **muted** shows a corner glyph.
+- **PAUSED** is a dim, unmistakable privacy screen (`||` glyph). (There is no mute glyph —
+  audio output is removed; the dormant `display::setMuted` hook is unused, see UI/UX gaps.)
 - Instant redraws only — no scrolling, no animation. Connection dot cornered; processing = `...`.
 
 ## Controls & mic gating (in emtext.ino)
 
-- BtnA short → wake / cycle glance↔history. BtnA long → **mute**. BtnB short → **pause**
-  (privacy screen). BtnB long → status. BtnPWR long → power-off (stub until Stage 8). Lift → wake.
-- **The mic runs only when neither paused nor muted.** `emtext.ino` holds `g_paused`/`g_muted`
-  and calls `audio::setPaused(g_paused || g_muted)` — so pause and mute both cut the mic, and
-  un-muting never silently reopens the mic while paused (a privacy fail-safe).
+- BtnA short → wake / cycle glance↔history. BtnA long → **save a clip** (server-stored; see
+  AGENT_COMMS T1). BtnB short → **pause** (privacy screen). BtnB long → status. BtnPWR long →
+  power-off (stub until Stage 8). Lift → wake. (No mute — audio output is removed.)
+- **The mic runs only when not paused.** `emtext.ino` holds `g_paused` and calls
+  `audio::setPaused(g_paused)` — the privacy pause is the only thing that cuts the mic.
 
 ## Wiring (target — lives only in emtext.ino)
 
@@ -165,11 +169,11 @@ The governing rule: **return the user's attention to the person, don't capture i
 // current (Stages 2–3)
 controls::onOrient(display::setRotation);      // IMU auto-rotate
 controls::onLift([]{ /* wake to glance */ });  // lift-to-wake
-controls::onPause / onMute -> display::setPaused/setMuted + audio::setPaused(paused||muted)
+controls::onPause -> display::setPaused + audio::setPaused(paused)   // privacy pause cuts the mic
 
 // Stage 5 repoints audio at the network, audio itself unchanged:
 audio::onChunk([](const int16_t* p, size_t n){ net::sendAudio(p, n); });   // audio → net
-net::onFrame ([](const proto::Frame& f){ display::setGlance(...); cues::onRead(f); });
+net::onFrame ([](const proto::Frame& f){ display::setGlance(...); });       // read → glance (visual only)
 ```
 
 `net` and `display` never reference each other. `audio` emits chunks rather than calling
@@ -189,7 +193,7 @@ firmware/emtext/
    ├─ controls/  controls.h  controls.cpp
    ├─ display/   display.h   display.cpp
    ├─ audio/     audio.h     audio.cpp
-   ├─ proto/  transport/  net/  cues/  power/     (planned)
+   ├─ proto/  transport/  net/  power/     (power planned; cues removed — no audio output)
 ```
 
 Conventions:
@@ -228,7 +232,8 @@ Conventions:
 - **The 2–3 s outage buffer moved from `audio` to `net`.** "Drop oldest when the network is
   out" is a network-state decision; `audio` doesn't know about the network. `audio` just
   captures, gates, and emits; `net` owns the send queue that absorbs an outage (Stage 5).
-- **Mute cuts the mic**, not just the cues — so mute and pause both gate the mic.
+- **Audio output removed** — the pendant has no speaker, so there are no tone cues and no mute;
+  the emotional signal is visual only. Privacy **pause** is the only thing that gates the mic.
 - **⚠️ TLS is insecure on the active (Links2004) backend** — a known regression from 4d. Cert
   validation works under AHC but `beginSslWithCA` fails under Links2004, so it runs `beginSSL`
   (encrypted, unvalidated) for now. Fine for dev on a trusted network; **must be fixed before
@@ -252,7 +257,7 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
   out, rotate flips, pause shows the privacy screen.
 - **3 — mic + energy gate** ✅ `M5.Mic` 16 kHz, DC-corrected AC RMS + peak/clip, gate at
   `energyFloor` + 500 ms hangover, `AUDIO_ENERGY_SERIAL` meter. Verify: RMS rises on speech,
-  gate holds ~500 ms, mute/pause stop the mic.
+  gate holds ~500 ms, pause stops the mic.
 - **4 — connectivity** ✅ `net` + `transport`. **4a ✅** WiFi (fallback list + scan diagnostic) +
   NTP + logged core-0 state machine; **4b ✅** TLS + `GET /health` (`200`, `body-ok=1`); **4c ✅**
   `transport` WebSocket to `/stream` + token auth → `ready` (dot green), backoff/reconnect +
@@ -271,9 +276,10 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
   tone edge bar, transcript, `...` processing indicator), a real 5-deep history ring, timeout
   refresh while conversing. Content updates without auto-waking (lift/press to view). **Verified
   on hardware.**
-- **7 — audio cues** ⬜ `cues`: ≤150 ms tones, negative + mismatch only, silent for
-  neutral/positive; mute already gates the mic + shows the glyph. 75% volume cap on battery.
-- **8 — power management** ⬜ `power`: visible boot stages, idle+motion auto-off, two-step off,
+- **7 — audio cues** ❌ **removed** — the device has no speaker output; the emotional signal is
+  conveyed visually only (the glance tone edge bar). No `cues` module, no tones, no mute.
+- **8 — power management** ⬜ `power`: visible boot stages (**on-screen only — no failure
+  tones**), idle+motion auto-off (**on-screen grace, no audible warning**), two-step off,
   deep sleep + button wake, battery; tune lift-to-wake to orientation-gated.
 - **9 — acceptance + compliance** ⬜ outage recovery visible on screen, capture externally
   visible, no third-party retention, 2.5 h runtime (else press-to-listen default).

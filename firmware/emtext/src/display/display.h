@@ -10,7 +10,7 @@ namespace display {
 
   // Settings rows, in scroll order. Status doubles as the Settings page; these are the
   // selectable rows. Brightness is handled locally (a display property); the rest fire
-  // onSetting() so emtext.ino performs the cross-module effect (portal, cues, power).
+  // onSetting() so emtext.ino performs the cross-module effect (portal, power).
   enum class Setting { Wifi, Brightness, Power, COUNT };
 
   void  begin();
@@ -30,7 +30,7 @@ namespace display {
                   const String& transcript, bool lowConfidence = false);
   void  setConnection(const String& label);   // "ready" -> green dot, else amber
   void  setProcessing(bool on);                // heard, still thinking
+  void  setButtons(bool a, bool b, bool pwr);  // button-held -> light the press indicators
   void  setPaused(bool on);                    // privacy switch: mic not listening
-  void  setMuted(bool on);                     // muted indicator (mic + cues off)
   void  setPortal(bool on, const String& ssid, const String& pass, const String& ip);  // setup-AP status
 }

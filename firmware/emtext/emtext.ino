@@ -37,7 +37,7 @@ static void applyMic() {
 }
 
 // BtnA hold: back out of Settings; otherwise save a clip (server-stored -- see AGENT_COMMS T1).
-static void onMute() {
+static void onHoldA() {
   if (display::state() == display::State::Status) {
     if (!display::settingsLocked()) display::setState(display::State::Glance);
     return;
@@ -141,7 +141,7 @@ void setup() {
   display::onSetting(onSetting);  // Settings-page rows -> cross-module actions
   controls::begin();
   controls::onWake(onWake);
-  controls::onMute(onMute);
+  controls::onHoldA(onHoldA);
   controls::onPause(onPause);
   controls::onStatus(onStatus);
   controls::onPowerOff(onPowerOff);
@@ -173,6 +173,7 @@ void loop() {
   M5.update();
   config::handleSerial();
   controls::loop();
+  display::setButtons(controls::heldA(), controls::heldB(), controls::heldPwr());  // press indicators
   display::loop();
   audio::loop();
   net::loop();

@@ -28,8 +28,8 @@ namespace {
   bool   connReady = false;
   bool   processing = false;
   bool   paused = false;
-  bool   muted = false;
   bool   portalOn = false;
+  bool   bA = false, bB = false, bPwr = false;   // button-held -> press indicators
   String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
@@ -37,20 +37,23 @@ namespace {
   Hist hist[5];
   int  histCount = 0, histNext = 0;
 
-  // Desaturated palette (color565). Saturated TFT_* reads as an alarm; muted
-  // tones read as observation, per the UX notes.
-  uint16_t cPos()  { return M5.Display.color565( 90, 170,  90); }  // green
-  uint16_t cNeg()  { return M5.Display.color565(200,  80,  70); }  // red, muted
-  uint16_t cMis()  { return M5.Display.color565(220, 160,  40); }  // amber
+  // UI-chrome accent colors (color565). Tone/emotion colors are NOT here -- those are
+  // the Undertale soul colors in toneBar(); these are just for dots, cursor and text.
+  uint16_t cPos()  { return M5.Display.color565( 90, 170,  90); }  // green (UI accent: ready dot, cursor)
+  uint16_t cMis()  { return M5.Display.color565(220, 160,  40); }  // amber (UI accent: processing, portal)
   uint16_t cDim()  { return M5.Display.color565(150, 150, 150); }
   uint16_t cFaint(){ return M5.Display.color565( 90,  90,  90); }
 
   struct Bar { uint16_t color; bool dashed; bool show; };
+  // Undertale soul colors carry the tone on the heart mark (pure color-only, per design).
+  // `show` also gates the History tick: neutral shows no tick (absence is the signal).
   Bar toneBar(const String& t) {
-    if (t == "positive") return { cPos(), false, true };
-    if (t == "negative") return { cNeg(), false, true };
-    if (t == "sarcastic" || t == "mixed") return { cMis(), true, true };  // mismatch
-    return { 0, false, false };  // neutral: absence is the signal
+    auto& d = M5.Display;
+    if (t == "positive")  return { d.color565(255,   0,  40), false, true };  // red    -- Determination
+    if (t == "negative")  return { d.color565(  0, 120, 255), false, true };  // blue   -- Integrity
+    if (t == "sarcastic") return { d.color565(190,  30, 255), false, true };  // purple -- Perseverance
+    if (t == "mixed")     return { d.color565(255, 216,   0), false, true };  // yellow -- Justice
+    return { d.color565(120, 120, 120), false, false };  // neutral: dim gray (quiet), no tick
   }
 
   // Keep only the first `maxWords` words; append "..." if there were more.
@@ -97,20 +100,23 @@ namespace {
     return used;
   }
 
-  // Emotion mark: the hero of the glance. A tone-colored curve drawn as overlapping
-  // dots -- upward arc = positive, downward = negative, flat = neutral, wave = mismatch.
-  void drawMark(const String& tone, int cx, int cy, int w, int amp, int rad, uint16_t col) {
+  // Emotion mark: the hero of the glance. The Undertale "DETERMINATION" soul -- a 16x16
+  // pixel heart (extracted from the reference sprite; every edge is a multiple of the
+  // native cell, so this is the true grid). ONE shape for every tone: the emotion is
+  // carried by COLOR (Undertale soul colors), per the UX design. Each row is a 16-bit
+  // mask, MSB = column 0.
+  const uint16_t HEART16[16] = {
+    0x300C, 0x7C3E, 0xFE7F, 0xFE7F, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
+    0xFFFF, 0xFFFF, 0x3FFC, 0x3FFC, 0x0FF0, 0x0FF0, 0x03C0, 0x03C0,
+  };
+  void drawHeart(int cx, int cy, int cell, uint16_t col) {
     auto& d = M5.Display;
-    const int N = 22;
-    for (int i = 0; i <= N; i++) {
-      float t = -1.0f + 2.0f * i / N;                       // -1 .. 1
-      float x = cx + t * (w * 0.5f);
-      float y;
-      if      (tone == "positive")                y = cy + amp * (1 - t * t);   // smile
-      else if (tone == "negative")                y = cy - amp * (1 - t * t);   // frown
-      else if (tone == "sarcastic" || tone == "mixed") y = cy - amp * sinf(t * PI); // wave
-      else                                        y = cy;                       // neutral: flat
-      d.fillCircle((int)x, (int)y, rad, col);
+    int ox = cx - 8 * cell, oy = cy - 8 * cell;            // 16 cells wide/tall, centered
+    for (int r = 0; r < 16; r++) {
+      uint16_t bits = HEART16[r];
+      for (int c = 0; c < 16; c++)
+        if (bits & (0x8000 >> c))                          // MSB = column 0
+          d.fillRect(ox + c * cell, oy + r * cell, cell, cell, col);
     }
   }
 
@@ -118,25 +124,38 @@ namespace {
     auto& d = M5.Display;
     int W = d.width(), H = d.height();
 
-    // emotion mark = the hero (tone color; neutral is a calm dim flat line)
+    // emotion mark = the hero: the Undertale heart, colored by tone (neutral = dim gray).
+    // Fixed ~96px sprite (16 x 6px cells) to match the Figma, positioned per orientation.
     Bar b = toneBar(gTone);
     uint16_t col = b.show ? b.color : cDim();
-    drawMark(gTone, W / 2, (int)(H * 0.40f), (int)(W * 0.55f), (int)(H * 0.13f), 4, col);
+    const int cell = 6;
 
-    // the read is a small supporting caption -- not the headline
     String text = capWords(gRead, 6);
     d.setTextColor(gLowConf ? cFaint() : cDim(), TFT_BLACK);
-    d.setTextDatum(top_center);
     d.setTextSize(1);
-    String lines[2]; bool clip; int n = wrap2(text, W - 12, lines, &clip);
+    String lines[2]; bool clip;
     int lh = d.fontHeight();
-    int y = H - 4 - n * lh;
-    for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), W / 2, y); y += lh; }
+
+    if (H >= W) {
+      // PORTRAIT: heart high under the top bar, read lower-centre (matches the Figma)
+      drawHeart(W / 2, 69, cell, col);
+      int n = wrap2(text, W - 24, lines, &clip);
+      d.setTextDatum(top_center);
+      int y = 150;
+      for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), W / 2, y); y += lh; }
+    } else {
+      // LANDSCAPE: heart on the left, read on the right (matches the Figma)
+      drawHeart(75, H / 2, cell, col);
+      int n = wrap2(text, 96, lines, &clip);          // right column, ~x132..228
+      d.setTextDatum(middle_center);
+      int y0 = H / 2 - (n - 1) * lh / 2;
+      for (int k = 0; k < n; k++) { d.drawString(lines[k].c_str(), 180, y0 + k * lh); }
+    }
 
     if (processing) {                               // heard, still thinking (static)
       d.setTextColor(cMis(), TFT_BLACK);
       d.setTextDatum(top_left);
-      d.drawString("...", 4, 2);
+      d.drawString("...", 14, 13);                  // clear of the top bar / left strip
     }
   }
 
@@ -155,9 +174,42 @@ namespace {
     d.drawString("paused", cx, d.height() - 6);
   }
 
-  void drawConnDot() {
+  // ---- persistent chrome overlays (on every lit screen; not Dark / Paused) ----
+  // Top bar: connectivity + ping (dark strip) and battery (magenta). Horizontal along
+  // the top in portrait, vertical down the left in landscape -- it rides the same edge.
+  void drawTopBar(int W, int H) {
     auto& d = M5.Display;
-    d.fillCircle(d.width() - 7, 7, 3, connReady ? cPos() : cMis());
+    uint16_t bar  = d.color565(12, 22, 28);     // #0C161C  connectivity + ping
+    uint16_t batt = d.color565(255, 91, 222);   // #FF5BDE  battery
+    uint16_t conn = connReady ? cPos() : cMis();
+    if (H >= W) {                               // portrait: strip along the top
+      d.fillRect(0, 0, W, 10, bar);
+      d.fillRect(W - 27, 0, 27, 10, batt);
+      d.fillCircle(6, 5, 3, conn);
+    } else {                                    // landscape: strip down the left
+      d.fillRect(0, 0, 10, H, bar);
+      d.fillRect(0, 0, 10, 27, batt);
+      d.fillCircle(5, H - 6, 3, conn);
+    }
+  }
+
+  // Button-press indicators: rest blue, light in the button's colour while held.
+  // Each sits on its button's physical edge and rotates with the device.
+  void drawIndicators(int W, int H) {
+    auto& d = M5.Display;
+    uint16_t rest = d.color565(13, 64, 95);     // #0D405F  resting
+    uint16_t la = bA   ? d.color565(156, 0, 3)  : rest;   // A   #9C0003 red
+    uint16_t lb = bB   ? TFT_WHITE              : rest;   // B   white
+    uint16_t lp = bPwr ? d.color565(43, 165, 3) : rest;   // PWR #2BA503 green
+    if (H >= W) {                               // portrait: "U" along the bottom
+      d.fillRect(0, H - 35, 10, 35, lp);        // PWR  left bar
+      d.fillRect(W - 10, H - 35, 10, 35, lb);   // B    right bar
+      d.fillRect(10, H - 10, W - 20, 10, la);   // A    bottom bar
+    } else {                                    // landscape: "]" on the right
+      d.fillRect(W - 10, 10, 10, H - 20, la);   // A    right edge
+      d.fillRect(W - 35, 0, 35, 10, lb);        // B    top-right
+      d.fillRect(W - 35, H - 10, 35, 10, lp);   // PWR  bottom-right
+    }
   }
 
   // The Status screen doubles as a scrollable Settings page. BtnB scrolls, BtnA selects
@@ -171,30 +223,30 @@ namespace {
 
     if (portalOn) {                                   // locked credentials view
       d.setTextColor(cMis(), TFT_BLACK);
-      d.drawString("SETUP PORTAL ON", 4, 4);
+      d.drawString("SETUP PORTAL ON", 14, 14);
       d.setTextColor(TFT_WHITE, TFT_BLACK);
-      d.drawString(("join: " + portalSsid).c_str(), 4, 26);
-      d.drawString(("pass: " + portalPass).c_str(), 4, 42);
-      d.drawString(("at:   " + portalIp).c_str(),   4, 58);
+      d.drawString(("join: " + portalSsid).c_str(), 14, 30);
+      d.drawString(("pass: " + portalPass).c_str(), 14, 46);
+      d.drawString(("at:   " + portalIp).c_str(),   14, 62);
       d.setTextColor(cFaint(), TFT_BLACK);
-      d.drawString("[A] turn off", 4, 84);
-      d.drawString("nav locked in setup", 4, 100);
+      d.drawString("[A] turn off", 14, 88);
+      d.drawString("nav locked in setup", 14, 104);
       return;
     }
 
     d.setTextColor(TFT_WHITE, TFT_BLACK);
-    d.drawString("settings", 4, 4);
+    d.drawString("settings", 14, 14);
     d.setTextColor(cFaint(), TFT_BLACK);
     d.setTextDatum(top_right);
-    d.drawString("[B]next [A]sel", d.width() - 4, 4);
+    d.drawString("[B]next [A]sel", d.width() - 4, 14);
     d.setTextDatum(top_left);
 
     const char* labels[(int)display::Setting::COUNT] = { "wifi", "bright", "power" };
     for (int i = 0; i < (int)display::Setting::COUNT; i++) {
-      int  y   = 24 + i * 16;
+      int  y   = 30 + i * 16;
       bool sel = (i == selCursor);
       d.setTextColor(sel ? cPos() : cFaint(), TFT_BLACK);
-      d.drawString(sel ? ">" : " ", 2, y);            // cursor
+      d.drawString(sel ? ">" : " ", 14, y);           // cursor
       String val;
       switch ((display::Setting)i) {
         case display::Setting::Wifi: {                // show the joined ssid, truncated
@@ -207,7 +259,7 @@ namespace {
         default: break;
       }
       d.setTextColor(sel ? TFT_WHITE : cDim(), TFT_BLACK);
-      d.drawString((String(labels[i]) + "  " + val).c_str(), 14, y);
+      d.drawString((String(labels[i]) + "  " + val).c_str(), 24, y);
     }
 
     // aside: live status, deliberately faint and out of the way (never the hero)
@@ -216,7 +268,7 @@ namespace {
     String foot = String(connReady ? "ready" : "search") + " | up " +
                   String(millis() / 1000) + "s | " +
                   String(M5.Power.getBatteryLevel()) + "%";
-    d.drawString(foot.c_str(), 4, d.height() - 3);
+    d.drawString(foot.c_str(), 14, d.height() - 16);    // clear of the bottom indicator bar
   }
 
   void draw() {
@@ -225,12 +277,6 @@ namespace {
     d.fillScreen(TFT_BLACK);
     if (st == display::State::Dark) { d.setBrightness(0); return; }
     d.setBrightness(uiBright);
-    drawConnDot();
-    if (muted) {                      // muted: mute glyph, bottom-left
-      int cx = 12, cy = d.height() - 10, r = 5;
-      d.drawCircle(cx, cy, r, cMis());
-      d.drawLine(cx - 4, cy + 4, cx + 4, cy - 4, cMis());
-    }
 
     switch (st) {
       case display::State::Glance:
@@ -241,16 +287,16 @@ namespace {
         d.setTextDatum(top_left);
         d.setTextSize(1);
         d.setTextColor(cDim(), TFT_BLACK);
-        d.drawString("history", 4, 4);
-        if (histCount == 0) { d.drawString("(nothing yet)", 10, 22); break; }
+        d.drawString("history", 14, 14);            // below the top bar
+        if (histCount == 0) { d.drawString("(nothing yet)", 14, 32); break; }
         for (int i = 0; i < histCount; i++) {       // most-recent first
           int idx = (histNext - 1 - i + 10) % 5;
-          int y = 22 + i * 16;
+          int y = 32 + i * 16;
           Bar tb = toneBar(hist[idx].tone);
-          if (tb.show) d.fillRect(2, y + 2, 4, 8, tb.color);
+          if (tb.show) d.fillRect(14, y + 2, 4, 8, tb.color);
           d.setTextColor(cDim(), TFT_BLACK);
           String label = (i == 0) ? "now  " : (String(i) + " ago ");
-          d.drawString((label + hist[idx].read).c_str(), 10, y);
+          d.drawString((label + hist[idx].read).c_str(), 22, y);
         }
         break;
 
@@ -260,6 +306,10 @@ namespace {
 
       default: break;
     }
+
+    // persistent chrome -- drawn last so it overlays the screen content
+    drawTopBar(d.width(), d.height());
+    drawIndicators(d.width(), d.height());
   }
 }
 
@@ -304,9 +354,14 @@ void display::setProcessing(bool on) {
   if (!paused && st == State::Glance) draw();
 }
 
-void display::setMuted(bool on) {
-  muted = on;
-  if (!paused && st != State::Dark) draw();
+void display::setButtons(bool a, bool b, bool pwr) {
+  if (a == bA && b == bB && pwr == bPwr) return;   // only repaint when it changes
+  bA = a; bB = b; bPwr = pwr;
+  // Repaint ONLY the indicator segments -- they are opaque rects on the screen edges, so
+  // there is no need to fillScreen + redraw everything. A full draw() here flickers the
+  // whole screen on every press/release; this does not.
+  if (!paused && st != State::Dark)
+    drawIndicators(M5.Display.width(), M5.Display.height());
 }
 
 void display::setPortal(bool on, const String& ssid, const String& pass, const String& ip) {
@@ -336,7 +391,7 @@ void display::settingsSelect() {
     if (!paused && st != State::Dark) M5.Display.setBrightness(uiBright);
     draw();
   } else if (cbSetting) {
-    cbSetting(s);                                     // Wifi/Mute/Power handled in emtext.ino
+    cbSetting(s);                                     // Wifi/Power handled in emtext.ino
   }
 }
 

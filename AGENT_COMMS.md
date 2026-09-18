@@ -72,6 +72,23 @@ extra bandwidth, fits the fire-and-forget model.
 
 ---
 
+### T2 — Device has NO audio output (visual-only signalling) — `DONE` (informational)
+> [2026-09-17 | firmware] Heads-up so the server side doesn't assume an audio channel exists on
+> the pendant: **the device has no speaker output at all.** The former Stage 7 audio-cues module
+> is dropped, along with every other audible signal (boot/failure tones, the idle audible
+> warning, the low-battery tone, and mute). The emotional signal is conveyed **visually only** —
+> the glance tone edge bar on the device screen.
+>
+> **No wire-protocol impact, no server change required.** The `read` frame (`tone`, `read`, and
+> the optional `voice` object) is unchanged and still fully consumed — it now drives the display
+> exclusively. The one thing to keep in mind: the on-screen `read` text + `tone` are the *only*
+> way the interpretation reaches the wearer (there is no audio backup), so the quality/brevity of
+> the `read` string and the correctness of `tone` are the whole product on the device side. The
+> display already word-wraps to ≤2 lines and shrinks text to fit; concise reads render best.
+> [server] _(no action required — informational)_
+
+---
+
 ## Backlog / not yet started
 - **TLS hardening** (firmware): the active WebSocket backend runs cert-validation-OFF
   (`L2004_INSECURE`). Firmware-side fix, but flag here if the server's cert chain / host changes.
@@ -80,4 +97,7 @@ extra bandwidth, fits the fire-and-forget model.
 
 ## Decision log
 - 2026-09-14 — Clips will be **server-stored, file-based, user-initiated** (not on-device, not a
-  DB). Mute moved to a device Settings toggle (firmware-only; no server impact).
+  DB). ~~Mute moved to a device Settings toggle~~ (superseded — see 2026-09-17).
+- 2026-09-17 — **Device audio output removed** (firmware; see T2): no speaker cues, tones, or
+  mute — the emotional signal is **visual-only**. No wire-protocol change and no server impact.
+  Supersedes the 2026-09-14 mute-toggle note (mute is gone entirely, not moved).

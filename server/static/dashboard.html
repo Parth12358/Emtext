@@ -623,8 +623,12 @@ async function loadClips() {
       const rd = document.createElement("div"); rd.className = "rd";
       rd.textContent = c.read || "";
       const mt = document.createElement("div"); mt.className = "mt";
-      const bits = [fmtWhen(c.saved_at), `${c.duration_s ?? "?"}s`, `#${c.uid}`];
+      // A hold-to-record clip spans several utterances; say so, since the
+      // joined transcript alone would read as one long sentence.
+      const span = (c.count || 1) > 1 ? `#${c.from}–${c.to} (${c.count} utterances)` : `#${c.uid}`;
+      const bits = [fmtWhen(c.saved_at), `${c.duration_s ?? "?"}s`, span];
       if (c.voice && c.voice.emotion) bits.push(`voice ${c.voice.emotion}`);
+      if (c.speaker) bits.push(c.speaker === "user" ? "YOUR OWN VOICE" : `spk ${c.speaker}`);
       if (!c.has_audio) bits.push("AUDIO MISSING");
       mt.textContent = bits.join("  ·  ");
       body.append(txt, rd, mt);

@@ -114,8 +114,8 @@ same wire protocol**.
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
 - `server/clips.py` — "save this moment" (`clips.md`). `Recent` is a per-connection
   ring of the last few utterances keyed by the wire `id` (bounded by count AND
-  age, dropped with the connection); `save()` writes one `wav` + `json` sidecar
-  under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
+  age, dropped with the connection); `save()` takes the entries in a `[from,to]`
+  range and writes them as ONE `wav` + `json` sidecar under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
   `Recent`/`save`, `dashboard.py` calls the list/lookup/delete helpers. Never
   raises: a failed save is `{"type":"saved","ok":false,"error":...}` on the wire.
 - `server/static/index.html` — single-file browser client. **No build step, no external
@@ -138,7 +138,9 @@ same wire protocol**.
   a voice is enrolled -- and a `user` utterance gets **no `read` frame at all**, so a
   client must never block waiting for one.
   The only client->server TEXT frames after auth are `{"type":"ping"}` and
-  `{"type":"save","id":n}` (answered by `saved`); anything else is ignored, never fatal.
+  `{"type":"save","from":a,"to":b}` (an inclusive id range bundled into one clip,
+  answered by `saved`; the older `{"id":n}` form still works as `from == to`);
+  anything else is ignored, never fatal.
 - **Interpreter prompt**'s `voice sounded like: X` slot is now filled by `ser.py`.
   The prompt must keep explaining the words-vs-voice **mismatch** rule (positive
   words + low valence = sarcasm/masking; negative words + high valence = teasing;

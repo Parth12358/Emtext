@@ -384,14 +384,20 @@ async def _process_utterance(
     await _send(ws, message)
 
 
-async def _save_clip(ws: WebSocket, entry: dict, cid: int) -> None:
-    """Persist one retained utterance and confirm to the device.
+def _wire_int(v) -> int | None:
+    """An int off the wire, or None. `bool` is an int in Python; not here."""
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+async def _save_clip(ws: WebSocket, entries: list[dict], cid: int) -> None:
+    """Persist a run of retained utterances as one clip and confirm to the device.
 
     `clips.save` is blocking file I/O and never raises, so the only job here is
     to keep it off the event loop and turn its result into a `saved` frame.
+    `cid` is the range's `to`, echoed as the reply's `id`.
     """
     loop = asyncio.get_running_loop()
-    clip_id, error = await loop.run_in_executor(None, clips.save, entry)
+    clip_id, error = await loop.run_in_executor(None, clips.save, entries)
     if error is None:
         metrics.record_event("clip_saved")
         await _send(ws, {"type": "saved", "id": cid, "ok": True, "clip": clip_id})
@@ -530,21 +536,34 @@ async def stream(ws: WebSocket) -> None:
                         # compute round-trip time without a synchronised clock.
                         await _send(ws, {"type": "pong", "t": msg.get("t")})
                     elif kind == "save":
-                        # {"type":"save","id":n} -- the pendant's long-press
-                        # (clips.md). Reply with `saved` either way; a failure
-                        # is ok:false, never a closed socket. The disk write
-                        # goes to the executor as its own task so this loop
-                        # gets straight back to audio.
-                        cid = msg.get("id")
-                        entry = (recent.get(cid)
-                                 if isinstance(cid, int) and not isinstance(cid, bool)
-                                 else None)
-                        if entry is None:
-                            metrics.record_event("clip_failed")
-                            await _send(ws, {"type": "saved", "id": cid,
-                                             "ok": False, "error": "unknown id"})
+                        # {"type":"save","from":a,"to":b} -- the pendant's
+                        # hold-to-record (clips.md): every utterance heard
+                        # while the button was held, bundled into ONE clip.
+                        # The older {"id":n} form is accepted as from == to,
+                        # which is what the browser client's "save" link is.
+                        # Reply with `saved` either way; a failure is
+                        # ok:false, never a closed socket. The disk write goes
+                        # to the executor as its own task so this loop gets
+                        # straight back to audio.
+                        if "from" in msg or "to" in msg:
+                            lo, hi = _wire_int(msg.get("from")), _wire_int(msg.get("to"))
                         else:
-                            task = asyncio.create_task(_save_clip(ws, entry, cid))
+                            lo = hi = _wire_int(msg.get("id"))
+                        if lo is None or hi is None or hi < lo:
+                            metrics.record_event("clip_failed")
+                            await _send(ws, {"type": "saved", "id": hi,
+                                             "ok": False, "error": "unknown id"})
+                            continue
+                        entries = recent.get_range(lo, hi)
+                        if not entries:
+                            # Nothing from that span is still retained: a
+                            # stale id after a reconnect, or a hold that ended
+                            # before the pipeline produced anything.
+                            metrics.record_event("clip_failed")
+                            await _send(ws, {"type": "saved", "id": hi,
+                                             "ok": False, "error": "no audio"})
+                        else:
+                            task = asyncio.create_task(_save_clip(ws, entries, hi))
                             pending.add(task)
                             task.add_done_callback(pending.discard)
                             task.add_done_callback(_log_task_error)

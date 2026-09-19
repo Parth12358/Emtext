@@ -95,6 +95,19 @@ class Recent:
         self._prune()
         return self._entries.get(uid)
 
+    def get_range(self, lo: int, hi: int) -> list[dict[str, Any]]:
+        """Every retained entry with `lo <= uid <= hi`, in id order.
+
+        Walks the ring (at most CLIP_RETENTION_N entries) rather than the
+        range: a client-supplied `to` of a billion must cost nothing. Ids not
+        in the ring are simply absent from the result, per clips.md.
+        """
+        self._prune()
+        return sorted(
+            (e for uid, e in self._entries.items() if lo <= uid <= hi),
+            key=lambda e: e["uid"],
+        )
+
     def _prune(self) -> None:
         cutoff = time.time() - config.CLIP_RETENTION_S
         while self._entries:
@@ -120,16 +133,46 @@ def _count_clips() -> int:
     return sum(1 for p in d.glob("*.json") if _CLIP_ID.match(p.stem))
 
 
-def save(entry: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Write one retained utterance to disk. Returns `(clip_id, error)`.
+def _speaker_meta(who: Any) -> dict[str, Any] | None:
+    """Label + score only, as plain JSON types.
 
-    Exactly one of the two is None. **Blocking** -- call from an executor.
-    Never raises: every failure becomes an error string for the `saved` frame.
+    `speaker.identify` returns diagnostics too (`cos_user`, `windows`), some
+    of them numpy scalars that `json.dumps` refuses. The sidecar needs just
+    what the wire carries.
+    """
+    if not isinstance(who, dict) or not who.get("label"):
+        return None
+    score = who.get("score")
+    try:
+        score = round(float(score), 3) if score is not None else None
+    except (TypeError, ValueError):
+        score = None
+    return {"label": str(who["label"]), "score": score}
+
+
+def _bundle_speaker(labels: list[str]) -> str | None:
+    """One label for the whole clip: unanimous, or "mixed" if the turn changed."""
+    if not labels:
+        return None
+    return labels[0] if all(l == labels[0] for l in labels) else "mixed"
+
+
+def save(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Write a run of retained utterances to disk as ONE clip.
+
+    Returns `(clip_id, error)`; exactly one is None. `entries` come from
+    `Recent.get_range` and are already in id order -- their audio is
+    concatenated in that order, and the sidecar keeps both the per-utterance
+    detail and a joined transcript/read for the listing. A single utterance
+    is just a run of one.
+
+    **Blocking** -- call from an executor. Never raises: every failure becomes
+    an error string for the `saved` frame.
     """
     if not config.CLIPS_ENABLED:
         return None, "clips disabled"
-    pcm: bytes = entry.get("pcm") or b""
-    if not pcm:
+    parts = [e for e in entries if e.get("pcm")]
+    if not parts:
         return None, "no audio"
 
     try:
@@ -138,11 +181,13 @@ def save(entry: dict[str, Any]) -> tuple[str | None, str | None]:
         if _count_clips() >= config.CLIPS_MAX_FILES:
             return None, "clip store full"
 
+        pcm = b"".join(e["pcm"] for e in parts)
+        first, last = parts[0], parts[-1]
         stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())
         # Two saves in the same second from two connections would otherwise
         # collide on `<stamp>_<uid>`; four hex chars is enough to make that
         # a non-event without inflating the filename.
-        clip_id = f"{stamp}_{int(entry['uid'])}_{secrets.token_hex(2)}"
+        clip_id = f"{stamp}_{int(first['uid'])}_{secrets.token_hex(2)}"
         wav_path = d / f"{clip_id}.wav"
         json_path = d / f"{clip_id}.json"
 
@@ -152,20 +197,39 @@ def save(entry: dict[str, Any]) -> tuple[str | None, str | None]:
             w.setframerate(config.SAMPLE_RATE)
             w.writeframes(pcm)
 
-        meta = {
-            "id": clip_id,
-            "uid": entry["uid"],
-            "saved_at": time.time(),
-            "heard_at": entry.get("t"),
-            "duration_s": round(len(pcm) / 2 / config.SAMPLE_RATE, 3),
-            "transcript": entry.get("transcript"),
-            "tone": entry.get("tone"),
-            "read": entry.get("read"),
-            "voice": entry.get("voice"),
+        utterances = [{
+            "uid": e["uid"],
+            "heard_at": e.get("t"),
+            "duration_s": round(len(e["pcm"]) / 2 / config.SAMPLE_RATE, 3),
+            "transcript": e.get("transcript"),
+            "tone": e.get("tone"),
+            "read": e.get("read"),
+            "voice": e.get("voice"),
             # Speaker-id result (user / other / mixed) if it was known. A saved
             # "user" clip is the listener's own voice, which is worth seeing
             # when reviewing -- and before deciding to keep it.
-            "speaker": entry.get("speaker"),
+            "speaker": _speaker_meta(e.get("speaker")),
+        } for e in parts]
+        tones = [u["tone"] for u in utterances if u["tone"]]
+        meta = {
+            "id": clip_id,
+            # `uid` stays as the first id so older sidecars and the dashboard
+            # keep one shape; `from`/`to`/`count` describe the span.
+            "uid": first["uid"],
+            "from": first["uid"],
+            "to": last["uid"],
+            "count": len(parts),
+            "saved_at": time.time(),
+            "heard_at": first.get("t"),
+            "duration_s": round(len(pcm) / 2 / config.SAMPLE_RATE, 3),
+            # Joined views for the listing; the per-utterance truth is below.
+            "transcript": " ".join(u["transcript"] for u in utterances if u["transcript"]) or None,
+            "read": " / ".join(u["read"] for u in utterances if u["read"]) or None,
+            "tone": tones[-1] if tones else None,      # the most recent read's tone
+            "voice": last.get("voice"),
+            "speaker": _bundle_speaker(
+                [u["speaker"]["label"] for u in utterances if u["speaker"]]),
+            "utterances": utterances,
         }
         # Sidecar last, so a crash mid-write leaves an orphan wav (ignored by
         # the listing) rather than a listed clip with no audio.

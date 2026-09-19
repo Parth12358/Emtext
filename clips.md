@@ -7,12 +7,11 @@ shows the confirmation; the **server** retains, bundles, stores, and serves clip
 
 - **Firmware (device):** ✅ **built** — Button A is hold-to-record; on release it sends the
   `{from,to}` id range, shows a rec/saved/empty confirmation, and handles the `saved` reply.
-- **Server:** ⚠️ **built for the old single-`id` form** — needs a small update to the **range**
-  contract below (accept `{from,to}` and bundle the utterances into one clip). See
-  "Server implementation status".
-- **Testable today:** the **browser** path (`index.html`'s "save" link) uses single-`id`, so it
-  works against the current server. **Device** clips won't save end-to-end until the server takes
-  the range.
+- **Server:** ✅ **built for the range contract** — accepts `{from,to}`, bundles every retained
+  utterance in the span into one clip, and still accepts the old single-`id` form as `from == to`.
+  See "Server implementation status".
+- **Testable today:** both paths. The **browser** "save" link sends a one-utterance range; the
+  **device** hold-to-record sends the real span. Verified over the wire with a two-utterance range.
 
 ## What it is
 
@@ -95,21 +94,23 @@ flagged clip.
 
 ## Server implementation status
 
-Built and working **for the single-`id` form**. To move to the **range** contract, the change is
-small and localized — the retention ring, storage, review page, config knobs, and reply shape all
-carry over:
+Built and working for the **range** contract:
 
-- `server/clips.py` — `Recent` + `save()` take a **range** instead of one id; `save()` concatenates
-  the ring entries in `[from, to]` (id order) into one wav + sidecar. *(needs update)*
-- `server/main.py` — parse `{from,to}` on the `save` frame (was `id`) and pass the range to
-  `clips.save`. *(needs update)*
+- `server/clips.py` — `Recent.get_range(from, to)` walks the ring (never the range, so a huge `to`
+  costs nothing) and returns the retained entries in id order; `save(entries)` concatenates their
+  audio into one wav and writes a sidecar with the joined `transcript` / `read`, the last read's
+  `tone`, a bundle `speaker` (unanimous label or `mixed`), `from` / `to` / `count`, and a
+  per-utterance `utterances` list holding the individual detail.
+- `server/main.py` — parses `{from,to}`; a frame carrying `id` instead is treated as `from == to`.
+  Non-integer, inverted (`to < from`) → `unknown id`; a span with nothing retained → `no audio`.
+  The reply's `id` is the range's `to`.
 - `server/dashboard.py` — `GET /api/clips`, `GET /api/clips/{id}/audio`, `DELETE /api/clips/{id}`,
-  token-gated. *(unchanged)*
-- `server/static/dashboard.html` — "Saved clips" card (list/play/delete). *(unchanged)*
-- `server/static/index.html` — "save" link on each read for hardware-free testing. *(update to send
-  a range if you want it to exercise the new path; single-`id` still fine for a 1-utterance clip.)*
+  token-gated.
+- `server/static/dashboard.html` — "Saved clips" card (list/play/delete); multi-utterance clips
+  show their span and count, and a `user` clip is flagged as the listener's own voice.
+- `server/static/index.html` — "save" link on each read sends `{from: id, to: id}`.
 - `server/config.py` — `CLIPS_ENABLED`, `CLIPS_DIR`, `CLIP_RETENTION_N`, `CLIP_RETENTION_S`,
-  `CLIPS_MAX_FILES`. *(unchanged)*
+  `CLIPS_MAX_FILES`.
 
 ### `saved` reply — error strings
 `unknown id` (not in the ring / not an integer — also covers stale-after-reconnect), `no audio`,

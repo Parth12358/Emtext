@@ -287,11 +287,13 @@ function handleMessage(msg) {
 }
 
 // ----- clips ----------------------------------------------------------------
-// The device sends exactly this frame on a long-press; the test client sends
-// it from a link so the whole save path can be exercised without hardware.
+// The device sends this frame when the hold ends, with the id range it heard
+// while held; the test client sends a one-utterance range from a link so the
+// whole save path can be exercised without hardware. The reply's `id` is the
+// range's `to`, which for a single entry is the id we sent.
 function requestSave(id, link) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({type: "save", id}));
+  ws.send(JSON.stringify({type: "save", from: id, to: id}));
   link.textContent = "saving…";
 }
 

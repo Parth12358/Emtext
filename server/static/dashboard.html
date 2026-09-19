@@ -169,6 +169,8 @@
     <div id="tones"><div class="empty">no utterances yet</div></div>
     <h2 style="margin-top:16px">Voice emotion</h2>
     <div id="emotions"><div class="empty">no utterances yet</div></div>
+    <h2 style="margin-top:16px">Who spoke</h2>
+    <div id="speakers"><div class="empty">no utterances yet</div></div>
   </div>
 
   <div class="card wide">
@@ -435,6 +437,7 @@ function render(d) {
   const tb = el("lat").querySelector("tbody");
   tb.innerHTML = "";
   for (const [key, label] of [["whisper", "whisper"], ["ser", "ser"],
+                              ["speaker", "speaker id"],
                               ["cpu_stage", "cpu stage (gathered)"],
                               ["llm", "llm"], ["total", "total"]]) {
     const s = p.latency[key] || {};
@@ -450,6 +453,12 @@ function render(d) {
     ["whisper", `${c.whisper_model} (${c.whisper_device}/${c.whisper_compute})`],
     ["ser", c.ser_available ? `${(c.ser_model || "").split("/").pop()} (${c.ser_backend})` : "disabled",
       c.ser_available ? "" : "warn"],
+    // "loaded but not enrolled" is the state that silently interprets the
+    // listener's own lines, so it is flagged, not just reported.
+    ["speaker id", !c.speaker_available ? "unavailable"
+      : c.speaker_ready ? `enrolled (${c.speaker_enrolled} sentences)`
+      : `NOT ENROLLED (${c.speaker_enrolled}/${c.speaker_min_enroll}) — /enroll.html`,
+      !c.speaker_available ? "warn" : c.speaker_ready ? "ok" : "warn"],
     ["SPEECH_RMS", String(c.speech_rms)],
     ["END_SILENCE_MS", String(c.end_silence_ms)],
     ["auth", c.auth_enabled ? "enabled" : "OPEN — do not tunnel",
@@ -462,6 +471,7 @@ function render(d) {
   dist(el("tones"), p.tones, {positive: "--positive", negative: "--negative",
     neutral: "--neutral", sarcastic: "--sarcastic", mixed: "--mixed"});
   dist(el("emotions"), p.emotions, {});
+  dist(el("speakers"), p.speakers, {user: "--neutral", other: "--positive", mixed: "--mixed"});
 
   // --- recent ---
   const r = el("recent");
@@ -474,6 +484,7 @@ function render(d) {
       d2.className = "utt t-" + (u.tone || "neutral");
       const bits = [`${u.total_s}s total`, `w ${u.whisper_s}s`, `s ${u.ser_s}s`, `llm ${u.llm_s}s`];
       if (u.voice && u.voice.emotion) bits.push(`voice ${u.voice.emotion}`);
+      if (u.speaker) bits.push(`spk ${u.speaker}`);
       if (u.offline) bits.push("LLM OFFLINE");
       d2.innerHTML =
         `<div class="txt"></div><div class="rd"></div><div class="mt">${esc(bits.join("  ·  "))}</div>`;

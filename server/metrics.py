@@ -49,9 +49,13 @@ _latencies: dict[str, deque[float]] = {
     "cpu_stage": deque(maxlen=_WINDOW),
     "llm": deque(maxlen=_WINDOW),
     "total": deque(maxlen=_WINDOW),
+    "speaker": deque(maxlen=_WINDOW),
 }
 _tones: Counter[str] = Counter()
 _emotions: Counter[str] = Counter()
+# Speaker-id labels (user / other / mixed / unknown). "user" lines never reach
+# record_utterance -- they get no read -- so they are counted here instead.
+_speakers: Counter[str] = Counter()
 _recent: deque[dict] = deque(maxlen=40)
 _connections_active = 0
 
@@ -158,6 +162,7 @@ def record_utterance(
     llm_s: float,
     voice: dict | None,
     offline: bool,
+    speaker: str | None = None,
 ) -> None:
     """One completed utterance, start to finish."""
     with _lock:
@@ -179,6 +184,7 @@ def record_utterance(
             "tone": tone,
             "read": read,
             "voice": voice,
+            "speaker": speaker,
             "whisper_s": round(whisper_s, 3),
             "ser_s": round(ser_s, 3),
             "cpu_stage_s": round(cpu_stage_s, 3),
@@ -186,6 +192,13 @@ def record_utterance(
             "total_s": round(cpu_stage_s + llm_s, 3),
             "offline": offline,
         })
+
+
+def record_speaker(label: str | None, seconds: float) -> None:
+    """One speaker-id decision. `label` None means the stage had nothing to say."""
+    with _lock:
+        _speakers[label or "unknown"] += 1
+        _latencies["speaker"].append(seconds)
 
 
 def record_event(name: str, n: int = 1) -> None:
@@ -221,6 +234,7 @@ def pipeline_stats() -> dict:
             "latency": {k: _summary(v) for k, v in _latencies.items()},
             "tones": dict(_tones),
             "emotions": dict(_emotions),
+            "speakers": dict(_speakers),
             "recent": list(_recent),
         }
 

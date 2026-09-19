@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>emtext — enrol your voice</title>
+<style>
+  /* Self-contained, no CDNs, same palette as index.html. */
+  :root {
+    --bg: #14161a; --panel: #1d2027; --edge: #2b2f38;
+    --text: #e7e9ee; --muted: #9aa1ad;
+    --positive: #4caf7d; --negative: #e56a6a; --accent: #3a7afe;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); line-height: 1.5;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 18px 22px; border-bottom: 1px solid var(--edge); display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; }
+  header a { color: var(--muted); font-size: 13px; margin-left: auto; }
+  main { max-width: 720px; margin: 0 auto; padding: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+  h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  p { margin: 0 0 10px; }
+  .why { font-size: 14px; color: var(--muted); }
+  ol.prompts { margin: 0; padding-left: 22px; }
+  ol.prompts li { margin: 8px 0; }
+  ol.prompts .how { color: var(--muted); font-size: 13px; }
+  ol.prompts b { font-weight: 600; font-size: 16px; }
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button.on { background: var(--negative); }
+  button.quiet { background: transparent; border: 1px solid var(--edge); color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  .meter { width: 120px; height: 8px; background: var(--edge); border-radius: 4px; overflow: hidden; }
+  .meter > div { height: 100%; width: 0%; background: var(--accent); transition: width .06s linear; }
+  .stat { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .result { margin-top: 12px; font-size: 14px; }
+  .result.ok { color: var(--positive); }
+  .result.bad { color: var(--negative); }
+  .state { font-size: 14px; }
+  .state b { font-weight: 600; }
+  .warn { color: #e0b56a; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  code { font-size: 12px; background: #23262e; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Enrol your voice</h1>
+    <div class="sub">so emtext stops interpreting <i>you</i></div>
+  </div>
+  <a href="/">← back to the app</a>
+</header>
+
+<main>
+  <div class="card">
+    <p class="why">
+      emtext hears a microphone, not a person. Without a voiceprint it cannot tell
+      your lines from anyone else's, so it interprets <b>your own words</b> and
+      explains your feelings back to you. Once enrolled, your lines are still
+      transcribed (they are what the other person is replying to) but never read.
+    </p>
+    <div class="state" id="state">checking…</div>
+  </div>
+
+  <div class="card">
+    <h2>Read these aloud</h2>
+    <p class="why">
+      Say each line the way the note suggests, and <b>pause about a second between
+      lines</b> — that silence is how the server splits them. The moods matter: a
+      profile built only from calm speech stops recognising you exactly when you are
+      upset, which is when this app is needed.
+    </p>
+    <ol class="prompts">
+      <li><b>I'm going to make some tea, do you want one?</b><br><span class="how">calm, ordinary</span></li>
+      <li><b>Oh that's brilliant, I didn't think it would work.</b><br><span class="how">genuinely pleased</span></li>
+      <li><b>I've told you three times already, it's on the table.</b><br><span class="how">annoyed, a bit sharp</span></li>
+      <li><b>Yeah. No, I'm fine. Just a long day.</b><br><span class="how">tired, quiet, flat</span></li>
+      <li><b>Wait, seriously? When did that happen?</b><br><span class="how">surprised</span></li>
+      <li><b>Yeah, sure.</b> &nbsp; <b>No, not really.</b> &nbsp; <b>Okay.</b><br><span class="how">three quick short replies, a pause between each</span></li>
+      <li><b>You're unbelievable, you know that?</b><br><span class="how">warm, laughing</span></li>
+      <li><b>Great. Just perfect.</b><br><span class="how">deadpan, no energy at all</span></li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Record</h2>
+    <div class="controls">
+      <button id="rec" disabled>Record</button>
+      <div class="meter"><div id="level"></div></div>
+      <span class="stat" id="dur">0.0 s</span>
+      <button id="send" disabled>Send to server</button>
+    </div>
+    <div class="result" id="result"></div>
+    <p class="note">
+      What is stored: one 192-number embedding per sentence, at
+      <code id="path">models/speaker_user.json</code> on the server. The audio itself is
+      discarded as soon as it has been embedded. You can add more recordings later
+      (they accumulate), and forget everything with the button below.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Forget</h2>
+    <div class="controls">
+      <button id="forget" class="quiet" disabled>Forget my voice</button>
+      <span class="stat">deletes the profile file; every line is interpreted again until you re-enrol</span>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// ----- token: same handling as index.html -------------------------------------
+const _params = new URLSearchParams(location.search);
+const _KEY = "emtext_token";
+const _read = () => { try { return sessionStorage.getItem(_KEY) || ""; } catch { return ""; } };
+const TOKEN = _params.get("token") || _read();
+if (_params.get("token")) {
+  try { sessionStorage.setItem(_KEY, TOKEN); } catch {}
+  if (window.history?.replaceState) {
+    _params.delete("token");
+    const rest = _params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  }
+}
+const el = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const o = Object.assign({headers: {}}, opts || {});
+  o.headers = Object.assign({}, o.headers);
+  if (TOKEN) o.headers["X-Auth-Token"] = TOKEN;   // header, never the URL
+  const res = await fetch(path, o);
+  let body = null;
+  try { body = await res.json(); } catch {}
+  if (!res.ok) throw new Error((body && body.detail) || `${res.status} ${res.statusText}`);
+  return body;
+}
+
+// ----- profile state -------------------------------------------------------------
+function showState(s) {
+  el("path").textContent = s.path || "models/speaker_user.json";
+  el("forget").disabled = !s.enrolled;
+  const st = el("state");
+  if (!s.enabled) {
+    st.innerHTML = `<span class="warn">Speaker id is disabled on the server (SPEAKER_ENABLED=0).</span>`;
+    el("rec").disabled = true;
+    return;
+  }
+  if (!s.available) {
+    st.innerHTML = `<span class="warn">Speaker id model failed to load — check the server log.</span>`;
+    el("rec").disabled = true;
+    return;
+  }
+  if (s.ready) {
+    st.innerHTML = `<b>Enrolled:</b> ${s.enrolled} sentences. Your lines are being kept out of the interpreter. Adding more recordings, in other moods and rooms, makes it more reliable.`;
+  } else {
+    st.innerHTML = `<span class="warn"><b>Not enrolled</b> (${s.enrolled} of ${s.min_enroll} sentences needed).</span> Until then every line — including yours — is interpreted.`;
+  }
+  el("rec").disabled = false;
+}
+
+async function refresh() {
+  try { showState(await api("/api/speaker")); }
+  catch (e) { el("state").innerHTML = `<span class="warn">cannot reach the server: ${e.message}</span>`; }
+}
+
+// ----- capture: getUserMedia -> AudioWorklet -> 16 kHz int16 --------------------
+// Same worklet and resampler as index.html, except the samples are accumulated
+// into a buffer rather than streamed. The server segments the recording with
+// the same Segmenter the stream uses, so it needs exactly the same audio shape.
+const WORKLET_SRC = `
+  class CaptureProcessor extends AudioWorkletProcessor {
+    process(inputs) {
+      const ch = inputs[0][0];
+      if (ch) this.port.postMessage(ch.slice(0));
+      return true;
+    }
+  }
+  registerProcessor('capture', CaptureProcessor);
+`;
+const TARGET_RATE = 16000;
+let audioCtx = null, mediaStream = null, workletNode = null;
+let inputRate = 48000, carry = new Float32Array(0), readPos = 0;
+let chunks = [];          // Int16Array blocks at 16 kHz
+let samples = 0;
+let recording = false;
+
+function resample(chunk) {
+  let sum = 0;
+  for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
+  el("level").style.width = Math.min(100, Math.sqrt(sum / chunk.length) * 350) + "%";
+
+  const buf = new Float32Array(carry.length + chunk.length);
+  buf.set(carry, 0); buf.set(chunk, carry.length);
+  const step = inputRate / TARGET_RATE;
+  const out = [];
+  let pos = readPos;
+  while (Math.floor(pos) + 1 < buf.length) {
+    const i = Math.floor(pos), frac = pos - i;
+    let s = buf[i] * (1 - frac) + buf[i + 1] * frac;
+    if (s > 1) s = 1; else if (s < -1) s = -1;
+    out.push(s < 0 ? s * 32768 : s * 32767);
+    pos += step;
+  }
+  const consumed = Math.floor(pos);
+  carry = buf.slice(consumed); readPos = pos - consumed;
+  if (out.length) {
+    const pcm = new Int16Array(out.length);
+    for (let k = 0; k < out.length; k++) pcm[k] = out[k];
+    chunks.push(pcm); samples += pcm.length;
+    el("dur").textContent = (samples / TARGET_RATE).toFixed(1) + " s";
+  }
+}
+
+async function start() {
+  audioCtx = new AudioContext();
+  inputRate = audioCtx.sampleRate;
+  carry = new Float32Array(0); readPos = 0; chunks = []; samples = 0;
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], {type: "text/javascript"}));
+  await audioCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true},
+  });
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  workletNode = new AudioWorkletNode(audioCtx, "capture");
+  workletNode.port.onmessage = (e) => { if (recording) resample(e.data); };
+  source.connect(workletNode);
+  workletNode.connect(audioCtx.destination);
+}
+
+async function stop() {
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+  if (audioCtx) { await audioCtx.close(); audioCtx = null; }
+  el("level").style.width = "0%";
+}
+
+// Build a canonical 16 kHz mono 16-bit PCM WAV: 44-byte header + samples.
+function toWav() {
+  const data = new Int16Array(samples);
+  let off = 0;
+  for (const c of chunks) { data.set(c, off); off += c.length; }
+  const header = new ArrayBuffer(44);
+  const v = new DataView(header);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + data.byteLength, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, TARGET_RATE, true); v.setUint32(28, TARGET_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, data.byteLength, true);
+  return new Blob([header, data.buffer], {type: "audio/wav"});
+}
+
+function result(msg, cls) {
+  const r = el("result"); r.textContent = msg; r.className = "result " + (cls || "");
+}
+
+el("rec").addEventListener("click", async () => {
+  const btn = el("rec");
+  if (!recording) {
+    try {
+      result("");
+      await start();
+      recording = true;
+      btn.textContent = "Stop"; btn.classList.add("on");
+      el("send").disabled = true;
+    } catch (err) { result("mic error: " + err.message, "bad"); }
+  } else {
+    recording = false;
+    await stop();
+    btn.textContent = "Record again"; btn.classList.remove("on");
+    el("send").disabled = samples < TARGET_RATE;   // under a second is nothing
+  }
+});
+
+el("send").addEventListener("click", async () => {
+  el("send").disabled = true;
+  result("sending…");
+  try {
+    const s = await api("/api/enroll", {method: "POST", body: toWav(),
+                                        headers: {"Content-Type": "audio/wav"}});
+    result(`${s.found} sentences found, ${s.added} added — ${s.enrolled} enrolled in total.`, "ok");
+    showState(s);
+  } catch (err) {
+    result("enrol failed: " + err.message, "bad");
+    el("send").disabled = false;
+  }
+});
+
+el("forget").addEventListener("click", async () => {
+  if (!confirm("Delete your voiceprint from the server? Every line will be interpreted again until you re-enrol.")) return;
+  try { showState(await api("/api/speaker", {method: "DELETE"})); result("profile deleted", "ok"); }
+  catch (err) { result("could not delete: " + err.message, "bad"); }
+});
+
+refresh();
+</script>
+</body>
+</html>

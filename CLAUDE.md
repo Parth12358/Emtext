@@ -55,6 +55,10 @@ same wire protocol**.
   garbled transcripts -- filter them out of TONE accuracy. Do NOT loudness-normalise
   to work around it: loudness is an emotional cue and flattening it corrupts SER.
   Full write-up, including what was ruled out, is in `TODO.md`.
+- `python -m eval.spk_eval` scores speaker id against RAVDESS (same clips, silence-
+  trimmed at RMS 150): `--eer`, `--pairs`, `--label`, and `--real me.wav conv.wav` for
+  the day a real two-person recording exists -- every RAVDESS number is studio audio
+  and therefore a ceiling. Embeddings are cached in `eval/results/_cache_spk.jsonl`.
 - `python -m eval.ser_eval` scores SER against RAVDESS in `data/ravdess/`
   (gitignored, 1440 clips). It is the ONLY test using real emotional audio --
   everything else uses flat SAPI speech, which cannot measure SER accuracy.
@@ -88,9 +92,25 @@ same wire protocol**.
   `ser.available()` — swapping the model must not touch any other file. Must
   **never** raise: a load or inference failure returns None and the pipeline runs
   as if SER didn't exist. Blocking CPU call, ~3.3s flat per utterance.
+- `server/speaker.py` — speaker identification: is this utterance the **listener's own
+  voice**? CAM++ embeddings via funasr (needs `kaldi-native-fbank`), CPU, loaded once,
+  **never raises**; the rest of the codebase knows only `available()`, `identify()`,
+  `profile` (the user's enrolled voiceprint, embeddings-only JSON under `models/`) and
+  `Session` (the per-connection online partner centroid). It **labels, never cuts**:
+  the label comes from the fraction of 1 s windows matching the user (`user` / `other` /
+  `mixed` / `unknown`); splitting a glued utterance was measured and rejected (TODO.md).
+  A `user` line is transcribed into the interpreter's context but **gets no read** --
+  explaining the listener's own feelings back to them is the one output this product
+  must not produce. Enrolment is `/enroll.html` -> `POST /api/enroll`; forget with
+  `DELETE /api/speaker`. Score it with `python -m eval.spk_eval` (RAVDESS; ~94% on
+  actor pairs, ~2% partner-as-user). Enrol across moods: calm-only enrolment loses the
+  user precisely when they are upset.
 - `server/interpreter.py` — thin Ollama wrapper + rolling context window. Must **degrade
   gracefully**: if Ollama is unreachable or returns bad JSON, still emit the transcript
-  with read `(interpreter offline)`, never raise.
+  with read `(interpreter offline)`, never raise. Context entries are `(who, line)`;
+  speaker labels are rendered in `_build_prompt` **only when a label exists**, so with
+  no profile enrolled the prompt is byte-identical to the measured one and
+  `SYSTEM_PROMPT` is untouched. `remember()` adds a line without interpreting it.
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
 - `server/clips.py` — "save this moment" (`clips.md`). `Recent` is a per-connection
   ring of the last few utterances keyed by the wire `id` (bounded by count AND
@@ -113,7 +133,10 @@ same wire protocol**.
 - **Hardware split:** Whisper and SER stay on **CPU**; the Intel Arc B580 GPU is
   reserved for the **LLM**. Don't move either to GPU.
 - **Protocol additions are additive only.** The `voice` object on the `read` frame is
-  optional and omitted when SER has nothing; clients must be able to ignore it.
+  optional and omitted when SER has nothing; clients must be able to ignore it. Likewise
+  the `speaker` object (`{"label","score"}`) on `utterance` and `read`, present only once
+  a voice is enrolled -- and a `user` utterance gets **no `read` frame at all**, so a
+  client must never block waiting for one.
   The only client->server TEXT frames after auth are `{"type":"ping"}` and
   `{"type":"save","id":n}` (answered by `saved`); anything else is ignored, never fatal.
 - **Interpreter prompt**'s `voice sounded like: X` slot is now filled by `ser.py`.

@@ -32,7 +32,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clips, config, dashboard, metrics, ser
+from . import clips, config, dashboard, metrics, ser, speaker
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -133,6 +133,23 @@ async def _startup() -> None:
         )
     else:
         log.info("speech emotion recognition disabled (SER_ENABLED=0)")
+
+    # Same for speaker id. "loaded but nothing enrolled" is the state a fresh
+    # install sits in, and it silently means every line is interpreted --
+    # including the user's own -- so name it.
+    if speaker.available():
+        if speaker.profile.ready():
+            log.info("speaker id enabled (%d enrolled utterances)", speaker.profile.count)
+        else:
+            log.warning(
+                "speaker id loaded but only %d/%d utterances enrolled -- the listener's "
+                "own lines WILL be interpreted until they enrol at /enroll.html",
+                speaker.profile.count, config.SPEAKER_MIN_ENROLL,
+            )
+    elif config.SPEAKER_ENABLED:
+        log.warning("speaker id unavailable -- every line will be interpreted")
+    else:
+        log.info("speaker id disabled (SPEAKER_ENABLED=0)")
 
     # Auth is off by default, which is correct for localhost and dangerous the
     # moment the server is reachable from anywhere else. A quick-tunnel hostname
@@ -243,10 +260,22 @@ def _log_task_error(task: asyncio.Task) -> None:
         metrics.record_event("utterance_errors")
 
 
+def _speaker_field(who: dict | None) -> dict | None:
+    """The optional `speaker` object for the wire, or None to omit it.
+
+    Only label and score go out: `cos_user` and `windows` are diagnostics for
+    the dashboard, not part of the client contract.
+    """
+    if not who:
+        return None
+    return {"label": who.get("label"), "score": who.get("score")}
+
+
 async def _process_utterance(
     ws: WebSocket,
     interpreter: Interpreter,
     recent: clips.Recent,
+    session: speaker.Session,
     uid: int,
     audio,
 ) -> None:
@@ -258,26 +287,28 @@ async def _process_utterance(
     """
     loop = asyncio.get_running_loop()
 
-    # Whisper (what was said) and SER (how it sounded) are both blocking CPU
-    # work, and both read the same immutable audio buffer without touching each
-    # other's state. So we run them as two executor jobs and gather them: the
-    # voice analysis overlaps with transcription instead of following it, and
-    # the utterance costs about max(whisper, ser) rather than their sum.
+    # Whisper (what was said), SER (how it sounded) and speaker id (whose voice
+    # it was) are all blocking CPU work over the same immutable audio buffer,
+    # none touching another's state. So they run as three executor jobs and are
+    # gathered: the utterance costs about max(whisper, ser, speaker) rather
+    # than their sum, and speaker id (~20 ms) is effectively free.
     #
-    # SER is the optional half. `ser.analyze` returns None when the model is
-    # disabled or failed to load, and its own errors are swallowed internally,
-    # so this gather cannot fail because of it.
+    # SER and speaker id are the optional parts. Both return None when their
+    # model is disabled, failed to load, or (for speaker id) nobody has
+    # enrolled yet, and both swallow their own errors, so this gather cannot
+    # fail because of them.
     # Each stage times ITSELF rather than being timed around .result(): timing
     # the gather would fold queue wait into whichever finished second, and make
     # SER look free simply because Whisper was awaited first.
-    def _timed(fn, arg):
+    def _timed(fn, *args):
         start = time.perf_counter()
-        return fn(arg), time.perf_counter() - start
+        return fn(*args), time.perf_counter() - start
 
     cpu_t0 = time.perf_counter()
-    (transcript, whisper_s), (voice, ser_s) = await asyncio.gather(
+    (transcript, whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
         loop.run_in_executor(None, _timed, transcribe, audio),
         loop.run_in_executor(None, _timed, ser.analyze, audio),
+        loop.run_in_executor(None, _timed, speaker.identify, audio, session),
     )
     cpu_stage_s = time.perf_counter() - cpu_t0
 
@@ -287,12 +318,33 @@ async def _process_utterance(
         metrics.record_event("empty_transcript")
         return
 
-    recent.update(uid, transcript=transcript)
-    await _send(ws, {"type": "utterance", "id": uid, "transcript": transcript})
+    label = who.get("label") if who else None
+    spk_field = _speaker_field(who)
+    recent.update(uid, transcript=transcript, speaker=who)
+    utt_msg: dict = {"type": "utterance", "id": uid, "transcript": transcript}
+    if spk_field:
+        # Optional, additive: a client that predates speaker id ignores it.
+        utt_msg["speaker"] = spk_field
+    await _send(ws, utt_msg)
+
+    if label == "user":
+        # The listener's own line. It is transcribed because it is what the
+        # other person is about to reply to -- but it gets NO read, and its
+        # voice result is dropped rather than sent: explaining the user's own
+        # feelings back to them is the one output this product must not
+        # produce, and RESEARCH.md §1.5 says the acoustic channel is exactly
+        # where a model misreads an autistic speaker. No `read` frame follows,
+        # so the client must not wait for one on a `user` utterance.
+        interpreter.remember(transcript, who="user")
+        metrics.record_speaker(label, spk_s)
+        metrics.record_event("user_line")
+        return
+
+    metrics.record_speaker(label, spk_s)
     await _send(ws, {"type": "status", "state": "thinking"})
 
     llm_t0 = time.perf_counter()
-    result = await interpreter.interpret(transcript, voice)
+    result = await interpreter.interpret(transcript, voice, who=label)
     llm_s = time.perf_counter() - llm_t0
 
     metrics.record_utterance(
@@ -305,6 +357,7 @@ async def _process_utterance(
         llm_s=llm_s,
         voice=voice,
         offline=result.get("read") == "(interpreter offline)",
+        speaker=label,
     )
 
     # Keep the retention ring current so a `save` that names this id gets the
@@ -317,6 +370,8 @@ async def _process_utterance(
         "tone": result["tone"],
         "read": result["read"],
     }
+    if spk_field:
+        message["speaker"] = spk_field
     if voice:
         # Optional field, added only when we actually have data: clients that
         # predate SER (and firmware that never implements it) just ignore an
@@ -398,6 +453,10 @@ async def stream(ws: WebSocket) -> None:
     assert _http is not None
     segmenter = Segmenter()
     interpreter = Interpreter(_http)
+    # Who the OTHER voice in this conversation is, learned online from lines
+    # that were not the user. A property of the conversation, so per connection
+    # and never persisted (speaker.py).
+    session = speaker.Session()
     # Recent utterances by id, so a `save` frame can name one (clips.md). Per
     # connection because ids are per connection: a save after a reconnect
     # refers to an id this ring has never seen, and correctly fails.
@@ -555,7 +614,7 @@ async def stream(ws: WebSocket) -> None:
                     })
                 segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
-                    _process_utterance(ws, interpreter, recent, uid, audio)
+                    _process_utterance(ws, interpreter, recent, session, uid, audio)
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
@@ -590,7 +649,7 @@ async def stream(ws: WebSocket) -> None:
             try:
                 recent.add(uid, tail)
                 await asyncio.wait_for(
-                    _process_utterance(ws, interpreter, recent, uid, tail),
+                    _process_utterance(ws, interpreter, recent, session, uid, tail),
                     timeout=config.WS_FLUSH_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):

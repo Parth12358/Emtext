@@ -160,6 +160,12 @@ def _describe_voice(voice: dict | None) -> str | None:
 
 TONES = ("positive", "negative", "neutral", "sarcastic", "mixed")
 
+# How speaker-id labels appear in the context list. "mixed" (an utterance that
+# holds a turn change) is deliberately left untagged: tagging it "speaker:"
+# would assert something the model cannot rely on, and untagged is how every
+# line looked before speaker id existed. "unknown" likewise.
+SPEAKER_TAGS = {"user": "listener:", "other": "speaker:"}
+
 # Ollama accepts a JSON *schema* here, not just the string "json", and the
 # difference matters. Bare {"format": "json"} only requires that the output be
 # valid JSON -- and `{}` is valid JSON, so a model is free to emit two tokens
@@ -287,32 +293,68 @@ class Interpreter:
         self._client = client
         # Bounded deque = the rolling window: appends past `maxlen` silently
         # drop the oldest line, which is exactly the behaviour we want.
-        self._context: deque[str] = deque(maxlen=config.CONTEXT_LINES)
+        #
+        # Each entry is (who, line). `who` is one of the SPEAKER_TAGS keys or
+        # None when speaker id had nothing to say -- and with every entry None
+        # the prompt is byte-identical to the pre-speaker-id prompt, which is
+        # what keeps eval/model_eval's numbers valid.
+        self._context: deque[tuple[str | None, str]] = deque(maxlen=config.CONTEXT_LINES)
 
-    def _build_prompt(self, newest: str, voice_hint: str | None = None) -> str:
+    def remember(self, transcript: str, who: str | None = None) -> None:
+        """Add a line to the rolling context WITHOUT interpreting it.
+
+        This is how the listener's own lines get in: they are never read (the
+        whole point of speaker id is not to explain the user's feelings back to
+        them), but they are exactly what the other person is replying to, so
+        the model needs them as context.
+        """
+        self._context.append((who, transcript))
+
+    def _build_prompt(self, newest: str, voice_hint: str | None = None,
+                      who: str | None = None) -> str:
         """Assemble recent context + the newest line into one prompt string.
 
         `voice_hint` is the acoustic slot, filled from ser.analyze() when speech
         emotion recognition is available and omitted entirely when it is not.
+
+        `who` is the speaker-id label of the newest line. Speaker labels are
+        rendered here, not in SYSTEM_PROMPT, and only when at least one line
+        actually carries one: without a profile enrolled the prompt must stay
+        byte-for-byte what was measured.
         """
         parts: list[str] = []
         earlier = list(self._context)
+        labelled = who in SPEAKER_TAGS or any(w in SPEAKER_TAGS for w, _ in earlier)
+        if labelled:
+            parts.append(
+                'Lines marked "listener:" were said by the person you are helping; '
+                'they are context only. Interpret only the other speaker.'
+            )
+            if who == "mixed":
+                parts.append("The newest line may contain both voices.")
+            parts.append("")
         if earlier:
             parts.append("Earlier lines (context only):")
-            parts.extend(f"- {_fence(line)}" for line in earlier)
+            for w, line in earlier:
+                tag = SPEAKER_TAGS.get(w) if labelled else None
+                parts.append(f"- {tag} {_fence(line)}" if tag else f"- {_fence(line)}")
             parts.append("")
         if voice_hint:
             parts.append(f"voice sounded like: {voice_hint}")
         parts.append(f'Newest line, interpret only this one: "{_fence(newest)}"')
         return "\n".join(parts)
 
-    async def interpret(self, transcript: str, voice: dict | None = None) -> dict:
+    async def interpret(self, transcript: str, voice: dict | None = None,
+                        who: str | None = None) -> dict:
         """Return {"tone": ..., "read": ...} for `transcript`.
 
         `voice` is an optional ser.analyze() result describing how the line
         sounded. When present it is rendered into the prompt's "voice sounded
         like" slot so the model can play words and voice off each other; when
         absent the prompt is exactly what it was before SER existed.
+
+        `who` is the optional speaker-id label ("other" / "mixed"); "user" lines
+        never reach this method -- main.py routes them to remember() instead.
 
         Note we pass emotion/valence/arousal but not dominance: dominance is
         useful for separating emotion classes inside the model, but it adds
@@ -321,11 +363,11 @@ class Interpreter:
         Always returns a dict; on any failure it returns a safe neutral-ish
         fallback so the caller can send *something* to the user.
         """
-        prompt = self._build_prompt(transcript, _describe_voice(voice))
+        prompt = self._build_prompt(transcript, _describe_voice(voice), who)
 
         # Record the line into context AFTER building the prompt, so a line is
         # never fed as its own "earlier context".
-        self._context.append(transcript)
+        self._context.append((who, transcript))
 
         payload = {
             "model": config.OLLAMA_MODEL,

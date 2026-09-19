@@ -50,7 +50,11 @@ async def run(path: str, url: str, token: str, realtime: bool) -> int:
                 msg = json.loads(raw)
                 kind = msg.get("type")
                 if kind == "utterance":
-                    print(f"\n[{msg['id']}] {msg['transcript']}")
+                    # "speaker" is optional: present once a voice is enrolled.
+                    # A "user" utterance gets no read frame at all.
+                    spk = msg.get("speaker") or {}
+                    tag = f" <{spk['label']} {spk.get('score')}>" if spk.get("label") else ""
+                    print(f"\n[{msg['id']}]{tag} {msg['transcript']}")
                 elif kind == "read":
                     reads[msg["id"]] = msg
                     # Reads arrive out of order -- one asyncio task per

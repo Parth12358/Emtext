@@ -134,6 +134,17 @@
   /* "save" mirrors the pendant's long-press (clips.md): keep this moment on
      the server for review later. A link rather than a button so it stays
      out of the way of the read it belongs to. */
+  /* Speaker-id chips. A "you" entry is the listener's own line: it is shown
+     (it is the context the other person is replying to) but deliberately
+     quiet, with no read row -- the whole point is not to interpret the user. */
+  .who {
+    display: inline-block; font-size: 11px; margin-left: 8px; padding: 0 7px;
+    border-radius: 999px; border: 1px solid var(--edge); color: var(--muted);
+    vertical-align: middle; position: relative; top: -1px;
+  }
+  .entry.you { opacity: .6; border-left-color: var(--edge); }
+  .entry.you .transcript { font-size: 14px; }
+  .who.mixed { color: var(--mixed); border-color: var(--mixed); }
   .save { margin-left: 10px; font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline; }
   .save.done { color: var(--positive); text-decoration: none; cursor: default; }
   .save.fail { color: var(--negative); text-decoration: none; cursor: default; }
@@ -169,6 +180,8 @@
   </div>
   <div class="meter"><div id="level"></div></div>
   <span id="state" class="state-pill">idle</span>
+  <a id="enrol-link" href="/enroll.html" class="state-pill" style="text-decoration:none"
+     title="record your own voice so your lines are not interpreted">enrol voice</a>
 </header>
 
 <main>
@@ -260,10 +273,10 @@ function handleMessage(msg) {
       setState(msg.state);
       break;
     case "utterance":
-      addTranscript(msg.id, msg.transcript);
+      addTranscript(msg.id, msg.transcript, msg.speaker);
       break;
     case "read":
-      addRead(msg.id, msg.tone, msg.read, msg.voice);
+      addRead(msg.id, msg.tone, msg.read, msg.voice, msg.speaker);
       setState("listening");
       break;
     case "saved":
@@ -292,16 +305,38 @@ function markSaved(id, ok, error) {
 }
 
 // ----- feed rendering -------------------------------------------------------
-function addTranscript(id, transcript) {
+// Speaker labels the server may attach (optional, additive): user / other /
+// mixed / unknown. Only "user" changes what the entry IS -- it gets no read
+// row, because no `read` frame will ever arrive for it -- and "mixed" gets a
+// small flag so the listener knows the line may hold both voices.
+const WHO_TEXT = {user: "you", mixed: "both?"};
+
+function whoChip(speaker) {
+  const label = speaker && speaker.label;
+  if (!label || !WHO_TEXT[label]) return null;
+  const chip = document.createElement("span");
+  chip.className = "who " + label;
+  chip.textContent = WHO_TEXT[label];
+  chip.title = label === "user"
+    ? "your own voice — transcribed as context, not interpreted"
+    : "this line may contain more than one speaker";
+  return chip;
+}
+
+function addTranscript(id, transcript, speaker) {
   const emptyState = feed.querySelector(".empty");
   if (emptyState) emptyState.remove();
 
+  const isUser = speaker && speaker.label === "user";
   const node = document.createElement("div");
-  node.className = "entry t-neutral";
-  node.innerHTML = `
-    <div class="transcript"></div>
+  node.className = "entry t-neutral" + (isUser ? " you" : "");
+  node.innerHTML = isUser
+    ? `<div class="transcript"></div>`
+    : `<div class="transcript"></div>
     <div class="read"><span class="tone-dot"></span><span class="read-text pending">reading…</span></div>`;
   node.querySelector(".transcript").textContent = transcript;
+  const chip = whoChip(speaker);
+  if (chip) node.querySelector(".transcript").appendChild(chip);
   // Stamp arrival so addRead can show how long the interpret step took. This
   // measures transcript->read, not the full stop-talking->read latency: the
   // audio stages already ran before this frame was sent.
@@ -310,13 +345,20 @@ function addTranscript(id, transcript) {
   entries.set(id, node);
 }
 
-function addRead(id, tone, read, voice) {
+function addRead(id, tone, read, voice, speaker) {
   const node = entries.get(id);
   if (!node) return;
   node.className = `entry t-${tone}`;          // recolor by tone
   const txt = node.querySelector(".read-text");
+  if (!txt) return;                             // a "you" entry has no read row
   txt.classList.remove("pending");
   txt.textContent = read;
+  // The utterance frame normally carried the chip already; add it here only
+  // if the label arrived on the read alone.
+  if (speaker && !node.querySelector(".who")) {
+    const chip = whoChip(speaker);
+    if (chip) node.querySelector(".transcript").appendChild(chip);
+  }
 
   // On the read row, not the voice line: the voice line is skipped entirely
   // when SER is off, and saving must work regardless.

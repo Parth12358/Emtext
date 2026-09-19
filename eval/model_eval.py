@@ -101,7 +101,7 @@ async def run_model(model: str, cases: list[dict], runs: int) -> dict:
                     # context-dependent cases (pa-01, ref-01) behave as they
                     # would mid-conversation.
                     for line in case.get("context") or []:
-                        interp._context.append(line)
+                        interp.remember(line)
 
                     start = time.perf_counter()
                     out = await interp.interpret(case["transcript"], case.get("voice"))

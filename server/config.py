@@ -221,6 +221,52 @@ VALENCE_HIGH: float = _env_float("VALENCE_HIGH", 0.6)
 AROUSAL_LOW: float = _env_float("AROUSAL_LOW", 0.4)
 AROUSAL_HIGH: float = _env_float("AROUSAL_HIGH", 0.6)
 
+# --- Speaker identification (server/speaker.py) -----------------------------
+# Answers one question per utterance: is this the LISTENER's own voice, someone
+# else's, or both? Without it the interpreter is regularly handed the user's
+# own words and asked what "the speaker" meant by them -- explaining the
+# user's feelings back to them, which is the one output this product must not
+# produce. With it, the user's lines are transcribed (they are the context the
+# partner is replying to) but never interpreted.
+#
+# Numbers below are from TODO.md ("No diarization"), measured on RAVDESS (24
+# actors, same two sentences, so any separation is speaker identity, not words).
+# CAM++ via funasr: ~20 ms per utterance on CPU, no measurable RSS increase on
+# top of SER, 192-d embeddings. Set SPEAKER_ENABLED=0 to skip loading it; the
+# pipeline then behaves exactly as before (every utterance interpreted).
+SPEAKER_ENABLED: bool = _env_bool("SPEAKER_ENABLED", True)
+# funasr's alias for iic/speech_campplus_sv_zh-cn_16k-common (~27 MB). Trained
+# on Mandarin, measured at 94% on English pairs; ModelScope's English checkpoint
+# (speech_campplus_sv_en_voxceleb_16k) is NOT registered in funasr's AutoModel,
+# so the numbers here are a floor.
+SPEAKER_MODEL: str = _env_str("SPEAKER_MODEL", "cam++")
+SPEAKER_DEVICE: str = _env_str("SPEAKER_DEVICE", "cpu")
+# Where the user's enrolled voiceprint lives: EMBEDDINGS only, never audio.
+# models/ is gitignored. Delete the file (or DELETE /api/speaker) to forget it.
+SPEAKER_PROFILE_PATH: str = _env_str("SPEAKER_PROFILE_PATH", "models/speaker_user.json")
+# Cosine above which a 1 s window counts as the enrolled user. Same-speaker
+# cosine against a calm-only profile ranges 0.76 (calm) down to 0.52 (fearful);
+# cross-speaker is well below 0.45 on average.
+SPEAKER_MATCH_THRESHOLD: float = _env_float("SPEAKER_MATCH_THRESHOLD", 0.45)
+# The utterance label comes from the FRACTION of its windows that match the
+# user, not from cutting it: user-only utterances score ~0.75, partner-only
+# ~0.08, and an utterance containing a turn change ~0.43. Below LO -> "other",
+# above HI -> "user", between -> "mixed" (interpreted anyway, as today).
+# Measured 3-way accuracy 79%, and the error that matters -- a partner line
+# silently dropped as the user's -- is 1.4%.
+SPEAKER_USER_FRAC_LO: float = _env_float("SPEAKER_USER_FRAC_LO", 0.15)
+SPEAKER_USER_FRAC_HI: float = _env_float("SPEAKER_USER_FRAC_HI", 0.75)
+SPEAKER_WINDOW_S: float = _env_float("SPEAKER_WINDOW_S", 1.0)
+SPEAKER_HOP_S: float = _env_float("SPEAKER_HOP_S", 0.5)
+# Below this many enrolled utterances the profile is too thin to trust and
+# every line is labelled "unknown" (= today's behaviour). Enrolment should span
+# moods: a calm-only profile rejects the user precisely when they are upset.
+SPEAKER_MIN_ENROLL: int = _env_int("SPEAKER_MIN_ENROLL", 3)
+# Cap on one POST /api/enroll body. 4 MiB is ~2 minutes of 16 kHz int16 PCM,
+# far more than the guided page records; an exposure limit like
+# WS_MAX_MESSAGE_BYTES, not a feature.
+ENROLL_MAX_BYTES: int = _env_int("ENROLL_MAX_BYTES", 4 * 1024 * 1024)
+
 # --- Websocket keepalive ----------------------------------------------------
 # Cloudflare closes a proxied websocket after ~100s with no traffic in either
 # direction (Free/Pro). uvicorn already sends protocol-level pings every 20s,

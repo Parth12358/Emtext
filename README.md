@@ -245,6 +245,23 @@ to load, or when that utterance couldn't be scored):
 existing clients and firmware that ignore the key keep working unchanged, which
 is why it was added this way rather than as a new frame type.
 
+Both `utterance` and `read` carry a second **optional** field, `speaker`,
+present once the listener has enrolled their voice at `/enroll.html`
+(`server/speaker.py`):
+
+```jsonc
+{"type":"utterance","id":2,"transcript":"...","speaker":{"label":"user","score":1.0}}
+```
+
+`label` is `user` (the listener's own voice), `other`, `mixed` (the utterance
+holds a turn change -- the segmenter glues a fast reply onto the question it
+answers) or `unknown`; `score` is the fraction of the utterance's 1 s windows
+that matched the enrolled voice. **A `user` utterance gets no `read` frame at
+all**: it is transcribed because it is what the other person is replying to,
+but never interpreted -- the app must not explain the listener's own feelings
+back to them. Clients must not wait for a read on a `user` utterance, and, as
+with `voice`, must keep working when `speaker` is absent.
+
 Reads arrive **out of order** relative to transcripts: each utterance is
 processed in its own task, so a short line can overtake a long one. Correlate on
 `id`, never on arrival order.

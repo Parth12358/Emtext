@@ -29,3 +29,7 @@ peft
 # (SER_MODEL=emotion2vec/emotion2vec_plus_base or _large). MERaLiON does not
 # need this, so skip it if you are staying on the default backend.
 funasr
+# CAM++ speaker identification (server/speaker.py) also rides on funasr, but
+# needs an fbank feature backend that emotion2vec does not. kaldi-native-fbank
+# is a 300 KB wheel; torchaudio also satisfies it and is much larger.
+kaldi-native-fbank

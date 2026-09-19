@@ -60,6 +60,7 @@ jieba==0.42.1
 Jinja2==3.1.6
 jmespath==1.1.0
 joblib==1.6.0
+kaldi-native-fbank==1.22.3
 kaldiio==2.18.1
 lazy-loader==0.5
 librosa==1.0.0

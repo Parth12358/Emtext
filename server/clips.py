@@ -77,6 +77,7 @@ class Recent:
             "tone": None,
             "read": None,
             "voice": None,
+            "speaker": None,
         }
         self._prune()
 
@@ -161,6 +162,10 @@ def save(entry: dict[str, Any]) -> tuple[str | None, str | None]:
             "tone": entry.get("tone"),
             "read": entry.get("read"),
             "voice": entry.get("voice"),
+            # Speaker-id result (user / other / mixed) if it was known. A saved
+            # "user" clip is the listener's own voice, which is worth seeing
+            # when reviewing -- and before deciding to keep it.
+            "speaker": entry.get("speaker"),
         }
         # Sidecar last, so a crash mid-write leaves an orphan wav (ignored by
         # the listing) rather than a listed clip with no audio.

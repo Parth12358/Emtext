@@ -491,7 +491,7 @@ function handle(msg) {
       renderVadClose(msg);
       break;
     case "utterance":
-      addEntry(msg.id, msg.transcript);
+      addEntry(msg.id, msg.transcript, msg.speaker);
       break;
     case "read":
       addRead(msg);
@@ -603,7 +603,7 @@ function stopPinging() {
 }
 
 // ----- feed -----------------------------------------------------------------
-function addEntry(id, transcript) {
+function addEntry(id, transcript, speaker) {
   const node = document.createElement("div");
   node.className = "entry t-neutral";
   const t = document.createElement("div");
@@ -611,7 +611,11 @@ function addEntry(id, transcript) {
   t.textContent = transcript;
   const r = document.createElement("div");
   r.className = "read";
-  r.textContent = "reading…";
+  // A "user" line (speaker id) gets no read frame at all -- it is the
+  // listener's own voice -- so do not leave it pending forever.
+  const who = speaker && speaker.label;
+  r.textContent = who === "user" ? "(you — not interpreted)"
+                : who === "mixed" ? "reading… (may hold both voices)" : "reading…";
   const m = document.createElement("div");
   m.className = "meta";
   node.append(t, r, m);

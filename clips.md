@@ -46,7 +46,7 @@ the server should reply `ok: false` rather than save the wrong moment.
 1. **Short rolling retention, keyed by `id`.** A `read` (and thus the id the user reacts to) arrives
    *after* the utterance's audio was processed, and the user reacts a moment later still. So keep a
    small, **bounded, in-memory** ring of recent utterances keyed by id:
-   `{audio (PCM/wav), transcript, tone, read, voice, timestamp}` — long enough that a save arriving
+   `{audio (PCM/wav), transcript, tone, read, voice, speaker, timestamp}` — long enough that a save arriving
    a few seconds after the read still finds it. **Not indefinite** — bound it like `metrics.py`
    (memory-only, rolling), so it can never grow without limit or take the server down.
 2. **Persist on `save` to FILES, not a database** (respects the no-database rule): e.g. a `clips/`
@@ -106,7 +106,8 @@ the dashboard), `clips disabled`, `write failed`.
 
 ## Open questions -- answered
 
-- **Q1.** Audio + transcript + tone + read + voice. "Review later" means listen back, and the audio is
+- **Q1.** Audio + transcript + tone + read + voice (+ the speaker-id label, once enrolled: a `user`
+  clip is the listener's own voice, which is worth knowing before keeping it). "Review later" means listen back, and the audio is
   already in memory, so metadata-only would save nothing.
 - **Q2.** Last **8 utterances** and **45 s**, per connection, whichever bound is tighter
   (`CLIP_RETENTION_N` / `CLIP_RETENTION_S`). Audio is kept as int16, so the worst case is ~3.8 MB per

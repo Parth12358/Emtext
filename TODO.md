@@ -548,10 +548,13 @@ disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §
 
 ## No diarization: every voice in the room is treated as one speaker
 
-**Status:** open, scoped and measured, nothing implemented · **Found:**
-2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:** `server/segmenter.py`,
-`server/main.py`, the `read` frame, and every conversational-dynamics feature
-`RESEARCH.md` §6.3 gates on diarization
+**Status:** IMPLEMENTED 2026-09-18 as `server/speaker.py` (user / other / mixed
+labelling; user lines get no read) -- see "What was built" below. The open
+questions at the end still stand, and the real-room measurement has still not
+been done · **Found:** 2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:**
+`server/speaker.py`, `server/main.py`, `server/interpreter.py`, the `utterance`
+and `read` frames, and every conversational-dynamics feature `RESEARCH.md` §6.3
+gates on diarization
 
 emtext currently interprets the microphone, not a speaker. The user's own voice,
 their conversational partner's, and a television are one undifferentiated stream,
@@ -685,7 +688,40 @@ mislabelled as the user's, i.e. silently dropped, is 1.4%.** The errors are
 concentrated in the safe direction: 28% of the user's own lines land in `mixed`
 and simply get interpreted anyway, which is exactly today's behaviour.
 
-### Proposed shape (not implemented)
+### What was built (2026-09-18)
+
+`server/speaker.py`, same contract as `ser.py` (loaded once, CPU, never raises).
+A third job in the `asyncio.gather` in `main.py`; windows are gated on the VAD
+threshold (a window on the pre-roll / trailing silence embeds as noise: cosine
+0.0 and -0.09 to the speaker's own centroid, measured) and the utterance label
+is the fraction of voiced windows matching the enrolled user. Enrolment is a
+guided page (`/enroll.html` -> `POST /api/enroll`, segmented with the real
+`Segmenter`, embeddings only on disk); the partner centroid is per connection.
+`user` lines go into the interpreter context via `Interpreter.remember()` and
+get no read; `mixed` and `unknown` are interpreted as before.
+
+Re-measured with the shipped code (`python -m eval.spk_eval`, seed 7):
+
+| check | measured |
+|---|---|
+| EER, calm enrolment / all-8-emotion enrolment | 12.4% / 9.2% |
+| same-speaker cosine vs calm profile, calm -> fearful | .76 -> .54 (the emotion trap, unchanged) |
+| pairs, spread + online partner | **94.5%** (user kept 94.7, partner kept 94.2) |
+| pairs, same-sex / opposite-sex | 90.6% / 97.6% |
+| 3-way on glued turns | 80.7% overall; partner-as-user **2.2%**; mixed-as-user 15% |
+
+That last number is the one to keep an eye on: an utterance that holds a turn
+change and gets labelled `user` is dropped along with the partner's half of it.
+User-only window fraction measured 0.86, so `SPEAKER_USER_FRAC_HI` could go up
+to ~0.8 at the cost of more `mixed` -- not tuned, because none of this has been
+measured on a real room yet. Speaker-id latency in the live gather measured
+83 ms mean / 247 ms p95 (3-4 window embeddings, contending with Whisper).
+
+`eval/model_eval` was re-run after the change: the unlabelled prompt is
+byte-identical (asserted in code), so the tone numbers are unchanged within
+run-to-run variance.
+
+### Proposed shape (as implemented; kept for the reasoning)
 
 - New `server/speaker.py` with the same contract as `ser.py`: loaded once, CPU,
   **never raises**, returns None when unavailable, and the rest of the codebase
@@ -717,6 +753,6 @@ and simply get interpreted anyway, which is exactly today's behaviour.
 - Speaker embeddings are **biometric data**. §6.7's note on EU AI Act Art. 5(1)(f)
   applies with more force to a stored voiceprint than to a transient SER call.
 
-Reproduce: the probes are throwaway and live in the session scratchpad. A keeper
-version belongs in `eval/spk_eval.py`, alongside `ser_eval.py`, reusing
-`data/ravdess/`.
+Reproduce: `python -m eval.spk_eval` (the keeper version of the original
+throwaway probes; `--real me.wav conv.wav` is the tool for the real-room
+measurement above).

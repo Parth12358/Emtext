@@ -52,3 +52,4 @@ firmware/emtext/secrets.h
 
 # Saved clips: retained third-party audio, user-initiated (clips.md). Never commit.
 clips/
+experiments/spk/

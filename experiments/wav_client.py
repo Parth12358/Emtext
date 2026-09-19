@@ -1,9 +1,15 @@
 """Headless test client: streams a WAV file over the /stream wire protocol.
 
-Exercises the exact contract the browser page (and the future ESP32) uses, so
-the pipeline can be tested end to end with no microphone and no browser:
+Exercises the audio contract the browser page (and the ESP32) uses, so the
+pipeline can be tested end to end with no microphone and no browser:
 
     TEXT token  ->  BINARY PCM 16 kHz mono int16 LE  ->  JSON frames back
+
+Out of scope here: the client->server `save` frame (clips) -- use the browser
+page's "save" link for that. `speaker` is printed on `utterance` frames; the
+`read` frame carries the same object and it is ignored there. With a voice
+enrolled the "interpreted" count at the end is legitimately lower than the
+number of utterances printed, because `user` lines get no read.
 
 Frames are paced in real time (a 30 ms chunk every 30 ms) because the segmenter
 measures silence in wall-clock-shaped frame counts; blasting the file at full

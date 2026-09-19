@@ -8,9 +8,14 @@ is what keeps the conversation feeling live:
   - Transcription (Whisper) is a blocking CPU call. Running it inline would
     freeze the read loop and back up the audio buffer. Instead we push it to a
     thread executor via loop.run_in_executor.
-  - Speech emotion recognition (SER) is a second blocking CPU call over the same
-    audio, and is independent of transcription. So the two are gathered rather
-    than sequenced: one utterance costs about max(whisper, ser), not their sum.
+  - Speech emotion recognition (SER) and speaker identification are two more
+    blocking CPU calls over the same audio, each independent of the others. So
+    the three are gathered rather than sequenced: one utterance costs about
+    max(whisper, ser, speaker), not their sum.
+  - Speaker id can short-circuit the rest: a line labelled `user` (the
+    listener's own voice) is transcribed and remembered as context, but gets
+    no read -- explaining the user's own feelings back to them is the one
+    output this product must not produce.
   - Interpretation (the LLM) is slow too. We wrap the whole
     transcribe->interpret->send sequence in a fire-and-forget asyncio task, one
     per utterance. The read loop kicks it off and immediately goes back to
@@ -65,7 +70,8 @@ app.include_router(dashboard.router)
 #     What it can't do -- and now can't -- is silently take that host from a
 #     link (see remote.html) or pull a script, style, or image from anywhere.
 # frame-ancestors is the one that matters most day to day: it stops a foreign
-# page framing the dashboard and clickjacking the model switch / evict buttons.
+# page framing the dashboard and clickjacking its write buttons -- model switch
+# and evict, clip delete, and (via enroll.html) forgetting the voice profile.
 _CSP = (
     "default-src 'none'; "
     "script-src 'self' 'unsafe-inline' blob:; "
@@ -463,7 +469,7 @@ async def stream(ws: WebSocket) -> None:
     # that were not the user. A property of the conversation, so per connection
     # and never persisted (speaker.py).
     session = speaker.Session()
-    # Recent utterances by id, so a `save` frame can name one (clips.md). Per
+    # Recent utterances by id, so a `save` frame can name one (README.md, wire protocol). Per
     # connection because ids are per connection: a save after a reconnect
     # refers to an id this ring has never seen, and correctly fails.
     recent = clips.Recent()
@@ -519,9 +525,10 @@ async def stream(ws: WebSocket) -> None:
             data = message.get("bytes")
             if data is None:
                 # TEXT frame after the handshake. The protocol expects binary
-                # PCM from here on, with one exception: a client may send
-                # {"type":"ping"} to measure round-trip latency and to hold an
-                # idle connection open. Anything else is ignored, as before.
+                # PCM from here on, with two exceptions: {"type":"ping"} to
+                # measure round-trip latency and hold an idle connection open,
+                # and {"type":"save",...} to keep a clip. Anything else is
+                # ignored, as before.
                 text = message.get("text")
                 if text:
                     try:
@@ -537,7 +544,7 @@ async def stream(ws: WebSocket) -> None:
                         await _send(ws, {"type": "pong", "t": msg.get("t")})
                     elif kind == "save":
                         # {"type":"save","from":a,"to":b} -- the pendant's
-                        # hold-to-record (clips.md): every utterance heard
+                        # hold-to-record (README.md, wire protocol): every utterance heard
                         # while the button was held, bundled into ONE clip.
                         # The older {"id":n} form is accepted as from == to,
                         # which is what the browser client's "save" link is.

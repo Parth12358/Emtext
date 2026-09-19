@@ -102,7 +102,7 @@ def bench_audio(audio: np.ndarray, runs: int) -> None:
     print("\n" + "=" * 74)
     print("AUDIO STAGES (CPU)")
     print("=" * 74)
-    print(f"  whisper : {config.WHISPER_MODEL} "
+    print(f"  whisper : {config.ASR_MODEL} "
           f"({config.WHISPER_DEVICE}, {config.WHISPER_COMPUTE_TYPE})")
     print(f"  ser     : {config.SER_MODEL if ser.available() else 'UNAVAILABLE'} "
           f"({config.SER_DEVICE})")

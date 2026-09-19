@@ -1,8 +1,12 @@
-"""Diagnostics API for the dashboard: stats, and control over the Ollama model.
+"""Diagnostics and control API behind the dashboard, clips and enrol pages.
 
 Kept out of `main.py` so that file stays what it says it is -- websocket wiring.
-Everything here is read-only observation plus two deliberate write actions
-(select a model, evict a model), and none of it touches the audio path.
+Everything here is read-only observation plus a handful of deliberate write
+actions: select or evict an Ollama model, delete a saved clip, and enrol or
+forget the listener's voice profile. None of it touches the live `/stream`
+audio path -- `POST /api/enroll` does run the segmenter and speaker embedder,
+but on an uploaded file in the executor, and the only shared state it changes
+is the module-level profile that `speaker.identify` reads.
 
 **Auth.** These routes are token-gated, matching `/stream`: when `AUTH_TOKEN` is
 set it must be supplied, and when it is unset everything is open. That is the
@@ -33,7 +37,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import clips, config, metrics, ser, speaker
+from . import clips, config, metrics, ser, speaker, transcriber
 from .segmenter import Segmenter
 
 log = logging.getLogger(__name__)
@@ -158,6 +162,11 @@ async def stats(request: Request,
         },
         "config": {
             "llm_model": config.OLLAMA_MODEL,
+            # ASR is a catalogue key now (server/transcriber.py). whisper_* stay
+            # for the whisper family; asr_* are what the dashboard reads.
+            "asr_model": transcriber.current_key(),
+            "asr_family": transcriber.current_family(),
+            "asr_state": transcriber.status().get("state"),
             "whisper_model": config.WHISPER_MODEL,
             "whisper_device": config.WHISPER_DEVICE,
             "whisper_compute": config.WHISPER_COMPUTE_TYPE,
@@ -286,7 +295,7 @@ async def evict(body: EvictRequest, request: Request,
 
 
 # ---------------------------------------------------------------------------
-# Clips -- the review surface for moments the listener saved (clips.md)
+# Clips -- the review surface for moments the listener saved (README.md, wire protocol)
 # ---------------------------------------------------------------------------
 # Same token rule as everything else. The audio route matters most: it serves
 # retained third-party speech, so it must never be more open than /stream is.
@@ -461,3 +470,70 @@ async def forget_speaker(token: str | None = Query(None),
     speaker.profile.clear()
     log.info("speaker profile cleared")
     return _speaker_state()
+
+
+# ---------------------------------------------------------------------------
+# Transcription model -- the ASR twin of POST /api/model
+# ---------------------------------------------------------------------------
+# Same shape as the interpreter switch: a fixed allowlist (the catalogue in
+# transcriber.py -- never an attacker-supplied path), the same cooldown, not
+# persisted. One difference: a switch can mean a ~650 MB download, so the POST
+# starts the work and returns at once; the card polls GET /api/asr for state.
+
+_asr_lock = asyncio.Lock()
+_asr_task: asyncio.Task | None = None
+_last_asr_op = 0.0
+
+
+class AsrSelectRequest(BaseModel):
+    model: str
+
+
+@router.get("/asr")
+async def asr_state(token: str | None = Query(None),
+                    x_auth_token: str | None = Header(None)) -> dict:
+    """The catalogue, which entry is resident, and any download/load in flight."""
+    _require_token(token, x_auth_token)
+    return {"models": transcriber.catalog(), "selected": transcriber.current_key(),
+            "status": transcriber.status(), "persisted": False}
+
+
+@router.post("/asr")
+async def select_asr(body: AsrSelectRequest,
+                     token: str | None = Query(None),
+                     x_auth_token: str | None = Header(None)) -> dict:
+    """Switch the resident speech-to-text model at runtime (not persisted).
+
+    Returns immediately with the status; the actual download + load runs in the
+    executor as a background task, because a Parakeet archive is ~650 MB and a
+    request that hangs for minutes would be killed by every proxy in the path.
+    409 while a previous switch is still running; 429 inside the cooldown.
+    """
+    global _asr_task, _last_asr_op
+    _require_token(token, x_auth_token)
+    key = body.model
+    if key not in transcriber.CATALOG and not (key.startswith("whisper:") and len(key) > 8):
+        raise HTTPException(status_code=400, detail="unknown ASR model key")
+    async with _asr_lock:
+        if _asr_task is not None and not _asr_task.done():
+            raise HTTPException(status_code=409, detail="a model switch is already running")
+        since = time.monotonic() - _last_asr_op
+        if since < config.MODEL_SWITCH_COOLDOWN_S:
+            raise HTTPException(
+                status_code=429,
+                detail=f"ASR model changed {since:.1f}s ago; wait "
+                       f"{config.MODEL_SWITCH_COOLDOWN_S - since:.1f}s",
+            )
+        _last_asr_op = time.monotonic()
+        loop = asyncio.get_running_loop()
+        log.info("dashboard: ASR model %s -> %s requested", transcriber.current_key(), key)
+        _asr_task = loop.create_task(loop.run_in_executor(None, transcriber.select, key))
+
+        def _done(task: asyncio.Task) -> None:
+            if not task.cancelled() and task.exception() is not None:
+                log.error("ASR switch task failed", exc_info=task.exception())
+        _asr_task.add_done_callback(_done)
+    # Give the executor a moment so an already-downloaded model reports
+    # "loading" rather than the stale previous state.
+    await asyncio.sleep(0.05)
+    return {"requested": key, "status": transcriber.status(), "persisted": False}

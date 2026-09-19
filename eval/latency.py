@@ -127,7 +127,7 @@ async def warmup(model: str, audio: np.ndarray) -> None:
     clip = audio[: config.SAMPLE_RATE * 2]
     t0 = time.perf_counter()
     transcribe(clip)
-    print(f"  whisper  {config.WHISPER_MODEL:<28} {time.perf_counter() - t0:5.1f}s")
+    print(f"  whisper  {config.ASR_MODEL:<28} {time.perf_counter() - t0:5.1f}s")
 
     if ser.available():
         t0 = time.perf_counter()
@@ -256,7 +256,7 @@ async def main_async(args: argparse.Namespace) -> None:
     print("emtext end-to-end latency")
     print("=" * 70)
     print(f"  llm     : {model}")
-    print(f"  whisper : {config.WHISPER_MODEL} ({config.WHISPER_DEVICE})")
+    print(f"  whisper : {config.ASR_MODEL} ({config.WHISPER_DEVICE})")
     print(f"  ser     : {config.SER_MODEL if config.SER_ENABLED else 'disabled'}")
     print(f"  samples : {len(wavs)} utterance(s) x {args.runs} run(s)")
     for name, audio in wavs:

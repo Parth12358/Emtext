@@ -45,7 +45,7 @@ static bool     g_clipFinalizing = false;// released, waiting for the tail utter
 static uint32_t g_clipReleaseAt = 0;     // millis() of release (grace cap)
 static int      g_clipStartAfter = 0;    // last utt id at press -> clip captures ids AFTER this
 // BtnA hold BEGINS here (fires once at the hold threshold). Hold-to-record: the clip is the
-// utterances heard until release -- the "held window" (see clips.md). Release is handled in loop().
+// utterances heard until release -- the "held window" (see README.md, wire protocol). Release is handled in loop().
 static void onHoldA() {
   if (display::state() == display::State::Status) {
     if (!display::settingsLocked()) display::setState(display::State::Glance);
@@ -124,7 +124,7 @@ static void onNetFrame(const proto::Frame& f) {
       display::setProcessing(false);
       display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript);
       break;
-    case proto::Type::Saved:                      // clip-save reply (see clips.md)
+    case proto::Type::Saved:                      // clip-save reply (see README.md, wire protocol)
       LOG_INFO("net: clip %s (#%d)", f.ok ? "saved" : "FAILED", f.id);
       display::setClip(f.ok ? "saved" : "save failed");
       break;

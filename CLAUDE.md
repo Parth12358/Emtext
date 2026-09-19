@@ -6,9 +6,11 @@ Guidance for Claude when working in this repo. Keep it current when conventions 
 
 **emtext** — a live conversation interpreter for a neurodivergent listener. A client
 streams mic audio over a websocket; the server segments it into utterances, transcribes
-each (Whisper, CPU), and reads its emotional subtext (local LLM via Ollama, GPU). A
-browser page is the test client today; an **ESP32 will replace it later using the exact
-same wire protocol**.
+each (Whisper, CPU), scores how the voice sounded (SER, CPU), decides whose voice it was
+(speaker id, CPU), and reads the emotional subtext (local LLM via Ollama, GPU). The
+listener's own lines get no read. A hold on the pendant's button saves the moment as a
+clip for later review. A browser page is the test client; an **M5StickS3 pendant
+(ESP32) speaks the exact same wire protocol** and is the real client.
 
 ## Running things
 
@@ -21,17 +23,19 @@ same wire protocol**.
   built during `__init__`, which fails under transformers 5's meta-device init.
 - On Windows set `HF_HUB_DISABLE_SYMLINKS=1` before any first-time model download;
   without it the HF cache needs symlink privileges and fails with WinError 1314.
-- `server/ser.py` has two backends behind one `analyze()`: `meralion` (default,
-  has valence/arousal/dominance) and `emotion2vec` (via funasr, categorical only,
-  9 classes normalised to our 7). `SER_BACKEND=auto` infers from `SER_MODEL`.
+- `server/ser.py` has two backends behind one `analyze()`: `emotion2vec` (default,
+  via funasr, categorical only, 9 classes normalised to our 7, ~0.17s) and `meralion`
+  (opt-in via `SER_MODEL`, has valence/arousal/dominance, ~2.7s flat).
+  `SER_BACKEND=auto` infers from `SER_MODEL`.
   Compare them with `python -m eval.bench --ser-models`; compare whisper models
   with `python -m eval.asr_eval`.
 - Test without a mic: `experiments/make_speech.ps1` (SAPI -> 16 kHz WAV) then
   `experiments/wav_client.py` (streams it over the real wire protocol). Score one
   WAV directly with `python -m server.ser <wav>`.
 - Start the server: `python -m server.main` (needs full `requirements.txt` + Ollama up).
-- The only automated test is that segmenter self-test. Run it after touching
-  `segmenter.py`.
+- The only self-contained assert test is that segmenter self-test. Run it after
+  touching `segmenter.py`. `python -m server.ser <wav>` and
+  `python -m server.speaker a.wav b.wav` are smoke tests, not assertions.
 - The eval suite is `python -m eval.run_all` (`--quick` for a minutes-long pass,
   `--list` to see stages and their prerequisites). Each stage writes a per-item
   CSV under `eval/results/`. Stages stream progress on purpose -- a full run is
@@ -85,13 +89,22 @@ same wire protocol**.
 - `server/segmenter.py` — **pure logic, zero I/O.** Energy-based VAD state machine: PCM
   bytes in → float32 utterances out. Must stay importable and testable without network,
   files, or async. Keep the `__main__` self-test passing.
-- `server/transcriber.py` — thin faster-whisper wrapper. Model loaded **once** at import.
-  Blocking CPU call — callers must run it off the event loop.
-- `server/ser.py` — speech emotion recognition (MERaLiON). Model loaded **once** at
-  import, on CPU. The rest of the codebase knows only `ser.analyze()` and
-  `ser.available()` — swapping the model must not touch any other file. Must
-  **never** raise: a load or inference failure returns None and the pipeline runs
-  as if SER didn't exist. Blocking CPU call, ~3.3s flat per utterance.
+- `server/transcriber.py` — speech-to-text behind one `transcribe(audio) -> str`. A
+  **catalogue** of backends (`whisper:<name>` via faster-whisper; `parakeet:v2/v3`,
+  `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under
+  `models/asr/`), exactly **one resident** at a time, swapped behind the function by
+  `select(key)` (blocking, executor) so `main.py`'s bound `transcribe` keeps working.
+  Import loads `config.ASR_MODEL` synchronously and raises on failure, as before; a
+  later switch that fails keeps the old model and reports in `status()`. Only catalogue
+  keys are ever accepted from the wire. `build(key)` makes a backend without installing
+  it (what `eval/asr_eval.py` uses). Blocking CPU call — callers must run it off the
+  event loop. Re-run `python -m eval.asr_eval` after adding a backend.
+- `server/ser.py` — speech emotion recognition (emotion2vec by default, MERaLiON
+  opt-in). Model loaded **once** at import, on CPU. The rest of the codebase knows
+  only `ser.analyze()` and `ser.available()` — swapping the model must not touch any
+  other file. Must **never** raise: a load or inference failure returns None and the
+  pipeline runs as if SER didn't exist. Blocking CPU call, ~0.17s per utterance on
+  the default backend; valence/arousal/dominance are None there.
 - `server/speaker.py` — speaker identification: is this utterance the **listener's own
   voice**? CAM++ embeddings via funasr (needs `kaldi-native-fbank`), CPU, loaded once,
   **never raises**; the rest of the codebase knows only `available()`, `identify()`,
@@ -103,7 +116,7 @@ same wire protocol**.
   explaining the listener's own feelings back to them is the one output this product
   must not produce. Enrolment is `/enroll.html` -> `POST /api/enroll`; forget with
   `DELETE /api/speaker`. Score it with `python -m eval.spk_eval` (RAVDESS; ~94% on
-  actor pairs, ~2% partner-as-user). Enrol across moods: calm-only enrolment loses the
+  actor pairs, 1.4% partner-as-user). Enrol across moods: calm-only enrolment loses the
   user precisely when they are upset.
 - `server/interpreter.py` — thin Ollama wrapper + rolling context window. Must **degrade
   gracefully**: if Ollama is unreachable or returns bad JSON, still emit the transcript
@@ -121,18 +134,21 @@ same wire protocol**.
   raises: a failed save is `{"type":"saved","ok":false,"error":...}` on the wire.
 - `server/static/index.html` — single-file browser client. **No build step, no external
   CDNs/fonts.** Uses AudioWorklet (not MediaRecorder) and downsamples to 16 kHz in JS.
+  The same single-file, no-CDN rule covers `dashboard.html`, `remote.html` and
+  `enroll.html`.
 
 ## Invariants — do not break
 
 - **Wire protocol is a contract** (an ESP32 will implement it): connect to `/stream`; first
   frame is a TEXT auth token (any value accepted when `AUTH_TOKEN` env is unset); then
   BINARY frames of raw PCM 16 kHz mono int16 LE. Server replies with the JSON frame types
-  `ready` / `status` / `utterance` / `read`. Changing this means changing future firmware.
-- **Never block the websocket read loop.** Transcription and SER run in a thread
-  executor, `asyncio.gather`ed so they overlap rather than queue; each utterance is a
-  fire-and-forget `asyncio` task so audio keeps flowing while thinking.
-- **Hardware split:** Whisper and SER stay on **CPU**; the Intel Arc B580 GPU is
-  reserved for the **LLM**. Don't move either to GPU.
+  `ready` / `status` / `utterance` / `read` / `ping` / `pong` / `saved`, plus `vad` and
+  `vad_close` only on a `?vad=1` connection. Changing this means changing the firmware.
+- **Never block the websocket read loop.** Transcription, SER and speaker id run in a
+  thread executor, `asyncio.gather`ed so they overlap rather than queue; each utterance
+  is a fire-and-forget `asyncio` task so audio keeps flowing while thinking.
+- **Hardware split:** Whisper, SER and speaker id stay on **CPU**; the Intel Arc B580
+  GPU is reserved for the **LLM**. Don't move any of the three to GPU.
 - **Protocol additions are additive only.** The `voice` object on the `read` frame is
   optional and omitted when SER has nothing; clients must be able to ignore it. Likewise
   the `speaker` object (`{"label","score"}`) on `utterance` and `read`, present only once

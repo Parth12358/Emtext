@@ -16,6 +16,9 @@ httpx
 # LLM. On Linux/Windows install the smaller CPU wheel with
 #   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 torch
+# transformers/omegaconf/peft serve the OPT-IN MERaLiON SER backend only; the
+# default emotion2vec path never imports them directly (funasr pulls transformers
+# in transitively regardless, see TODO.md).
 # Pinned below 5: MERaLiON-SER-v1 ships custom modelling code (trust_remote_code)
 # that builds layers from torch.logspace(...).item() in __init__. transformers 5
 # constructs models on the meta device, where .item() raises, so the model cannot
@@ -25,11 +28,15 @@ transformers<5
 omegaconf
 peft
 
-# Optional: only needed for the lighter emotion2vec SER backend
-# (SER_MODEL=emotion2vec/emotion2vec_plus_base or _large). MERaLiON does not
-# need this, so skip it if you are staying on the default backend.
+# Required: the default emotion2vec SER backend (server/ser.py) and CAM++
+# speaker id (server/speaker.py) both load through FunASR. Only the opt-in
+# MERaLiON backend can do without it.
 funasr
 # CAM++ speaker identification (server/speaker.py) also rides on funasr, but
 # needs an fbank feature backend that emotion2vec does not. kaldi-native-fbank
 # is a 300 KB wheel; torchaudio also satisfies it and is much larger.
 kaldi-native-fbank
+# --- ASR backends beyond Whisper (server/transcriber.py) ---
+# One wheel covers Parakeet TDT, Moonshine and SenseVoice (int8 ONNX, bundled
+# onnxruntime). faster-whisper above stays for the whisper:* catalogue keys.
+sherpa-onnx

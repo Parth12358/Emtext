@@ -34,7 +34,8 @@ emtext is two codebases in one repo, joined only by the websocket **wire protoco
   is just ears and a screen.
 
 The wire protocol is the contract between them (raw PCM 16 kHz mono int16 in;
-`ready`/`status`/`utterance`/`read` JSON out), so the two are developed independently.
+`ready`/`status`/`utterance`/`read`/`saved` JSON out, plus keepalive pings), so the
+two are developed independently.
 **Firmware progress:** board bring-up, config/NVS + serial console, the display + controls
 UX, mic capture with an energy gate, connectivity (authenticated `wss://` on a dedicated core
 so audio capture never stalls), and — the milestone — **the full loop working on the device**: the pendant streams its mic to
@@ -70,13 +71,17 @@ before the SER swap.
 
 **What's built**
 
-- Live app at `/`, streaming mic → transcript → tone read, with the voice label.
+- Live app at `/`, streaming mic → transcript → tone read, with the voice label,
+  a speaker chip on lines that are yours or hold a turn change, a **save** link per
+  read (the browser twin of the pendant's hold-to-record clip), and a link to
+  `/enroll.html` to enrol your own voice so your lines are never interpreted.
 - **Remote access** over a Cloudflare quick tunnel — one command, no account, no
   domain. Also the only way to test a microphone on a phone, since browsers
   require HTTPS for `getUserMedia`.
-- **`/dashboard.html`** — live CPU/RAM/GPU, per-stage latency percentiles, tone
-  and voice-emotion distributions, recent utterances, and runtime switching of
-  the interpreter model.
+- **`/dashboard.html`** — live CPU/RAM/GPU, per-stage latency percentiles, tone,
+  voice-emotion and speaker distributions, connected clients, recent utterances,
+  runtime switching of the interpreter model, and the **saved clips** review list
+  with playback and delete.
 - **`/remote.html`** — connection diagnostics plus a live VAD strip showing which
   audio frames cleared `SPEECH_RMS`, which is how segmentation gets tuned.
 - **An eval suite** (`python -m eval.run_all`) scoring SER, ASR, the interpreter
@@ -169,7 +174,8 @@ The first run also downloads the models, which are cached after that:
 | model | size | notes |
 |-------|------|-------|
 | Whisper `base` (faster-whisper) | ~150 MB | transcription, CPU |
-| `emotion2vec/emotion2vec_plus_base` | ~900 MB | speech emotion, CPU |
+| `emotion2vec/emotion2vec_plus_base` | ~1.07 GB | speech emotion, CPU. Two thirds of that file is optimizer state inference never touches; `python -m eval.slim_ser_ckpt` writes a 355 MB copy under `models/` that `SER_MODEL_DIR` picks up automatically and saves ~1.4 GB of RAM |
+| CAM++ (`cam++`, via funasr) | ~27 MB | speaker id, CPU. Skipped with `SPEAKER_ENABLED=0` |
 
 That download happens the first time the server starts. To skip it entirely,
 start with `SER_ENABLED=0` (see [Speech emotion
@@ -216,12 +222,16 @@ beneath each one once the LLM responds.
 
 ## Wire protocol
 
-The browser client and the future ESP32 firmware both speak this:
+The browser client and the pendant firmware both speak this:
 
-1. Connect to `ws://host:8000/stream`.
+1. Connect to `ws://host:8000/stream` (`wss://` through the tunnel).
 2. Send **one TEXT frame**: the auth token. (Any value is accepted unless the
-   `AUTH_TOKEN` env var is set on the server.)
-3. Then send **BINARY frames**: raw PCM, 16 kHz, mono, int16 little-endian.
+   `AUTH_TOKEN` env var is set on the server.) It must arrive within
+   `WS_AUTH_TIMEOUT_S` (5 s) and be at most 512 characters, and it must be a
+   TEXT frame; otherwise the server closes with code `1008`.
+3. Then send **BINARY frames**: raw PCM, 16 kHz, mono, int16 little-endian. A
+   frame is capped at `WS_MAX_MESSAGE_BYTES` (64 KiB, two seconds of audio) and
+   per-message compression is refused; a real client sends 20-100 ms per frame.
 
 The server replies with TEXT JSON frames:
 
@@ -230,7 +240,43 @@ The server replies with TEXT JSON frames:
 {"type":"status","state":"listening|heard|thinking"}
 {"type":"utterance","id":1,"transcript":"..."}
 {"type":"read","id":1,"tone":"positive|negative|neutral|sarcastic|mixed","read":"one line"}
+{"type":"ping","t":1789794138.7}          // keepalive after WS_IDLE_PING_S (30 s) with no audio
+{"type":"pong","t":...}                   // reply to a client ping, `t` echoed untouched
+{"type":"saved","id":2,"ok":true,"clip":"20260918T230722_1_eb19"}   // reply to a save
+{"type":"saved","id":2,"ok":false,"error":"no audio"}
 ```
+
+Two **client → server** TEXT frames are accepted between the PCM frames. Any
+other JSON type is ignored, never fatal -- the protocol is additive:
+
+```jsonc
+{"type":"ping","t":<your timestamp>}      // answered by pong; use it for RTT and to hold an idle socket open
+{"type":"save","from":3,"to":5}           // keep a clip: the utterances with ids 3..5 (inclusive)
+{"type":"save","id":3}                    // older spelling, same as from == to
+```
+
+`id` is the per-connection utterance counter (it restarts at 1 on every
+connection), so a `save` only makes sense for ids from the current socket. The
+server keeps the last `CLIP_RETENTION_N` (8) utterances or `CLIP_RETENTION_S`
+(45 s) in memory per connection; a `save` naming something still retained
+concatenates that audio into one WAV under `clips/` with a JSON sidecar holding
+the transcripts, tones, reads, voice and speaker labels, and replies `saved`
+with `ok:true` and the clip's id. Nothing else is ever written to disk. Failure
+replies carry `error`: `unknown id` (non-integer or inverted range), `no audio`
+(nothing in that span is retained -- a stale id after a reconnect, or a hold
+that ended before the pipeline produced anything), `clip store full` (over
+`CLIPS_MAX_FILES`, delete some from the dashboard), `clips disabled`, or
+`write failed`. The pendant sends the range of everything it heard while its
+button was held; the browser's save link sends a one-utterance range.
+
+The server closes a connection that has sent no audio for `WS_IDLE_CLOSE_S`
+(900 s) with code `1000`, and keeps at most `MAX_INFLIGHT_UTTERANCES` (3) per
+connection in the pipeline -- extra ones are dropped and counted, never queued.
+Conversational speech never reaches either limit.
+
+Connect with `?vad=1` and the server also streams `vad` (~10/s: current RMS,
+threshold, state) and `vad_close` (why each utterance ended) frames for the
+diagnostics page. Normal clients and the pendant never ask for these.
 
 The `read` frame carries one **optional** field, `voice`, present only when SER
 produced a result (so it is absent when `SER_ENABLED=0`, when the model failed
@@ -300,14 +346,29 @@ mic needed):
 python -m server.segmenter
 ```
 
-Other useful env vars: `PORT`, `AUTH_TOKEN`, `OLLAMA_URL`, `OLLAMA_MODEL`,
-`WHISPER_MODEL`, `CONTEXT_LINES`.
+### Every other knob
+
+All of these live in `server/config.py`, each with a comment on why its default
+is what it is. Override any of them with an environment variable of the same
+name.
+
+| group | env vars | notes |
+|---|---|---|
+| server | `PORT` (8000), `HOST` (`127.0.0.1`), `AUTH_TOKEN`, `ALLOW_NO_AUTH` | `HOST` is loopback on purpose: the tunnel reaches it there, and `0.0.0.0` adds a LAN entrance that bypasses the tunnel. With `AUTH_TOKEN` unset the server **refuses to start** on any non-loopback bind unless `ALLOW_NO_AUTH=1`. |
+| audio | `SAMPLE_RATE` (16000), `FRAME_MS` (30) | fixed by the wire protocol; named, not tunable in practice |
+| whisper | `WHISPER_MODEL` (`base`), `WHISPER_DEVICE` (`cpu`), `WHISPER_COMPUTE_TYPE` (`int8`), `WHISPER_LANGUAGE` (`en`) | |
+| interpreter | `OLLAMA_URL`, `OLLAMA_MODEL` (`qwen3:14b`), `CONTEXT_LINES` (12), `OLLAMA_TEMPERATURE` (0.2), `OLLAMA_NUM_PREDICT` (80), `OLLAMA_TIMEOUT_S` (30) | |
+| SER | `SER_ENABLED`, `SER_MODEL`, `SER_BACKEND`, `SER_DEVICE`, `SER_MODEL_DIR`, `SER_REVISION`, `SER_MIN_CONFIDENCE`, `SER_TORCH_THREADS`, `VALENCE_LOW/HIGH` (0.4/0.6), `AROUSAL_LOW/HIGH` (0.4/0.6) | see [Speech emotion recognition](#speech-emotion-recognition). The gloss thresholds only matter on the MERaLiON backend; emotion2vec has no dimensions. |
+| speaker id | `SPEAKER_ENABLED` (true), `SPEAKER_MODEL` (`cam++`), `SPEAKER_DEVICE` (`cpu`), `SPEAKER_PROFILE_PATH` (`models/speaker_user.json`), `SPEAKER_MATCH_THRESHOLD` (0.45), `SPEAKER_USER_FRAC_LO/HI` (0.15/0.75), `SPEAKER_WINDOW_S` (1.0), `SPEAKER_HOP_S` (0.5), `SPEAKER_MIN_ENROLL` (3), `ENROLL_MAX_BYTES` (4 MiB) | the profile is embeddings only, never audio; `DELETE /api/speaker` forgets it |
+| clips | `CLIPS_ENABLED` (true), `CLIPS_DIR` (`clips`), `CLIP_RETENTION_N` (8), `CLIP_RETENTION_S` (45), `CLIPS_MAX_FILES` (200) | the retention ring is memory-only and dies with the connection; `CLIPS_MAX_FILES` stops a hostile client filling the disk one save at a time |
+| keepalive | `WS_IDLE_PING_S` (30), `WS_KEEPALIVE_CHECK_S` (5), `VAD_TELEMETRY_INTERVAL_S` (0.1) | Cloudflare culls a proxied websocket after ~100 s idle |
+| exposure limits | `WS_AUTH_TIMEOUT_S` (5), `WS_MAX_MESSAGE_BYTES` (65536), `MAX_CONNECTIONS` (32), `MAX_INFLIGHT_UTTERANCES` (3), `WS_IDLE_CLOSE_S` (900), `WS_FLUSH_TIMEOUT_S` (8), `MODEL_SWITCH_COOLDOWN_S` (10) | each closes a measured amplification; a conforming client never approaches any of them |
 
 ## Testing without a microphone
 
 The browser client needs a real mic and a user gesture, which makes it awkward
 to check a change. `experiments/` has a headless path that speaks the same wire
-protocol the ESP32 will:
+protocol the pendant does:
 
 ```powershell
 # 1. synthesize test speech (Windows SAPI -> 16 kHz mono WAV, the wire format)
@@ -321,7 +382,9 @@ python experiments\wav_client.py
 `--fast` to skip real-time pacing. Two other generators produce audio aimed at
 SER specifically: `make_prosody.ps1` (one sentence at three deliveries, to check
 the voice signal actually moves) and `make_mismatch.ps1` (positive words said
-flatly — the sarcasm case).
+flatly — the sarcasm case). `make_asr_set.ps1` builds the known-text set the
+`asr` eval stage scores against, and `experiments/spk/` holds the clips
+`eval.spk_eval --real` uses.
 
 To score a single WAV and print the raw SER dict without running the server:
 
@@ -346,6 +409,8 @@ transcript. It runs on CPU, like Whisper — the GPU stays reserved for the LLM.
 | `SER_DEVICE`         | `cpu`   | Leave it — the Arc B580 is for Ollama. |
 | `SER_MIN_CONFIDENCE` | `0.4`   | Below this the interpreter is told the voice signal is weak and to trust the words instead. |
 | `SER_TORCH_THREADS`  | `0`     | `0` = torch's default. Raising it to your logical core count speeds up one SER pass but competes with Whisper; measure before changing. |
+| `SER_MODEL_DIR`      | `models/emotion2vec_plus_base_slim` | If this directory exists, load the slimmed checkpoint from it instead of the ModelScope cache. Build it with `python -m eval.slim_ser_ckpt`; worth ~1.4 GB of RAM, bit-identical output. |
+| `SER_REVISION`       | *(empty)* | Pin the MERaLiON backend to a hub commit (it executes downloaded code). Empty = the vetted revision in `ser.py`. |
 
 ### Choosing a SER model
 
@@ -406,28 +471,28 @@ python -m eval.bench              # all three models
 python -m eval.bench --skip-llm   # audio stages only (no Ollama needed)
 ```
 
-Measured on a 12-core CPU + Arc B580, `WHISPER_MODEL=base`, `gemma3:12b`:
+Measured on a 12-core CPU + Arc B580, `WHISPER_MODEL=base`, `qwen3:14b`:
 
 | stage | model | device | per utterance |
 |-------|-------|--------|---------------|
 | transcription | Whisper `base` (faster-whisper, int8) | CPU | ~0.28 s |
 | speech emotion | `emotion2vec/emotion2vec_plus_base` | CPU | ~0.12 s |
-| whisper + SER, gathered | | CPU | ~2.6 s (vs ~3.7 s sequentially) |
+| speaker id | CAM++ (3-4 window embeddings) | CPU | ~0.08 s mean, 0.25 s p95 |
+| whisper + SER + speaker, gathered | | CPU | ~0.30 s |
 | interpretation | `qwen3:14b` (Ollama) | GPU | ~0.89 s |
 
-**SER, not Whisper, decides how soon a read appears.** Transcription and SER are
-deliberately gathered onto the executor rather than sequenced, so an utterance
-costs about `max(whisper, ser)` rather than their sum — worth ~1 s per utterance
-— but SER is ~12× Whisper here, so concurrency hides Whisper behind SER rather
-than the reverse. Enabling SER adds roughly 2.3 s before a read arrives.
+**Whisper decides how soon a transcript appears, and the LLM decides the read.**
+The three audio stages are gathered onto the executor rather than sequenced, so
+an utterance costs about `max(whisper, ser, speaker)` rather than their sum, and
+on the default backend that maximum is Whisper.
 
-That cost is **flat**: a 1 s utterance and a 14 s utterance both take ~3.3 s,
-because the Whisper feature extractor pads every input to a fixed 30 s window
-(80 × 3000 mel frames) and the encoder always processes the whole thing. So SER
-runs *slower than real time* for any utterance under ~3.3 s, which is most
-conversational speech. Audio is never dropped — the read just arrives later —
-but during sustained back-to-back speech the backlog grows. Natural pauses are
-what keep it level. To fix it, set `SER_ENABLED=0` or raise `SER_TORCH_THREADS`.
+It was not always so. The original SER backend, MERaLiON, cost ~2.7-3.3 s per
+utterance **flat** -- a 1 s and a 14 s utterance took the same time, because its
+Whisper-derived feature extractor pads every input to a fixed 30 s window and
+the encoder always processes the whole thing -- which put SER below real time on
+sustained speech and made it the stage that set read latency. Switching to
+emotion2vec removed that ceiling (see the SER section). MERaLiON is still
+available via `SER_MODEL`, and that flat cost comes back with it.
 
 ### End-to-end: stop talking -> read on screen
 
@@ -488,13 +553,14 @@ so the audio stages report a real-time factor instead.
 
 ## The eval suite
 
-Five stages, each runnable alone or all together, each writing a CSV of
+Six stages, each runnable alone or all together, each writing a CSV of
 per-item rows so you can slice the detail in a spreadsheet rather than squint at
 a summary.
 
 ```
 python -m eval.run_all --list      # what the stages are and what each needs
 python -m eval.run_all --quick     # small samples, minutes
+python -m eval.run_all --only ser asr   # a subset
 python -m eval.run_all             # the full run (slow: ~1-2 hours)
 ```
 
@@ -506,6 +572,11 @@ python -m eval.run_all             # the full run (slow: ~1-2 hours)
 | `model` | Which Ollama model reads tone best? | `eval/results/model.csv` |
 | `bench` | Where does the time go? | — (printed) |
 | `latency` | What does the user actually feel? | — (printed) |
+
+Outside `run_all`: `python -m eval.spk_eval` scores speaker id against RAVDESS
+(`--eer`, `--pairs`, `--label`; `--real me.wav conv.wav` is the harness for a
+real-room recording, which has not been made yet), and `python -m
+eval.slim_ser_ckpt` builds the slimmed SER checkpoint described above.
 
 Every stage streams progress as it goes — the SER stage prints a line per clip
 with a running ETA — because the full run takes long enough that a silent
@@ -599,29 +670,33 @@ and raw accuracy would reward a model that just leans neutral.
 
 ## Choosing the transcription model
 
-`WHISPER_MODEL` picks the faster-whisper model. Measured on 8 known-text SAPI
-utterances (`python -m eval.asr_eval`):
+`ASR_MODEL` picks the resident speech-to-text model by **catalogue key**, and the
+dashboard's **Transcription model** card switches it live (`POST /api/asr`, not
+persisted -- a restart returns to `ASR_MODEL`). Exactly one model is resident at a
+time; choosing another builds it first (downloading its files on first use, under
+`models/asr/`), then drops the previous one. `WHISPER_MODEL=<name>` still works
+and means `whisper:<name>`.
 
-| `WHISPER_MODEL` | size | WER | per utterance | when to use |
-|---|---|---|---|---|
-| `tiny` | ~39M | 6.0% | 0.12 s | CPU time is the problem |
-| `base` *(default)* | ~74M | 6.0% | 0.26 s | the sensible starting point |
-| `small` | ~244M | 4.8% | 0.80 s | accuracy is the problem |
-| `distil-small.en` | ~166M | 4.8% | 0.67 s | `small`'s accuracy, ~20% cheaper, English-only |
+| key | family | size | why it is here |
+|---|---|---|---|
+| `whisper:base` *(default)* | faster-whisper | ~75 MB | the long-standing default, 6.0% WER / 0.26 s on the SAPI set |
+| `whisper:distil-small.en` | faster-whisper | ~170 MB | `small`'s accuracy for less CPU (4.8% / 0.67 s measured) |
+| `whisper:small.en` | faster-whisper | ~250 MB | 4.8% / 0.80 s measured |
+| `whisper:distil-large-v3` | faster-whisper | ~750 MB | best Whisper on noisy speech; **seconds** per utterance on CPU |
+| `whisper:large-v3-turbo` | faster-whisper | ~810 MB | as above, slightly worse on noise |
+| `parakeet:v2` | sherpa-onnx (NVIDIA Parakeet TDT 0.6B, English) | ~640 MB | ~6% WER on the Open ASR leaderboard vs ~10% for Whisper base; cost scales with audio |
+| `parakeet:v3` | sherpa-onnx (Parakeet TDT 0.6B, 25 languages) | ~640 MB | multilingual sibling |
+| `moonshine:base` | sherpa-onnx (Useful Sensors Moonshine) | ~270 MB | built for short utterances; the fastest here |
+| `moonshine:tiny` | sherpa-onnx | ~120 MB | smallest |
+| `sensevoice:small` | sherpa-onnx (FunAudioLLM SenseVoice) | ~230 MB | also tags language / emotion / laughter events (logged, not used yet) |
 
-Two things worth knowing before you read too much into that table. Much of the
-residual WER is **numeral formatting** — every model writes "four fifteen" as
-"4.15", which scores as errors but changes nothing for the interpreter — so real
-semantic accuracy is better than these figures suggest. And the audio is clean,
-accent-free SAPI speech over no microphone at all, so this is a *relative*
-ranking; real-world WER will be higher for every model, probably by different
-amounts.
-
-Given that, `base` is a reasonable default and `distil-small.en` is the upgrade
-worth trying first if transcripts annoy you — it matched `small`'s accuracy here
-while being cheaper. Note that with SER on, transcription is a rounding error in
-the latency budget (0.26 s against SER's 3.3 s), so paying for `small` costs
-almost nothing end-to-end. With `SER_ENABLED=0` the choice actually matters.
+Whisper pads every utterance to a 30 s window, so its cost is **flat**: a large
+Whisper costs the same seconds for "yeah" as for a paragraph. The transducer and
+CTC families (Parakeet, Moonshine, SenseVoice) scale with the audio and do not
+invent text on silence. Compare them all with `python -m eval.asr_eval`
+(downloads on demand; add real-microphone recordings to `experiments/asr/` first --
+the SAPI set there is clean, accent-free speech that cannot separate these models,
+and much of its residual WER is numeral formatting like "four fifteen" vs "4.15").
 
 ## Choosing the interpreter model
 
@@ -660,16 +735,30 @@ would mostly measure agreement with whoever wrote the labels.
 
 30 cases × 3 runs, Arc B580, current system prompt:
 
-| model | size | overall | mismatch pairs | speed | notable weakness |
-|-------|------|---------|----------------|-------|------------------|
-| `gemma3:12b` | 8.1 GB | 93% | **4/4** | 1.17 s | occasional passive-aggression miss |
-| `qwen3:14b` | 9.3 GB | 93% | 2/4 | 0.85 s | over-calls sarcasm when voice says sincere |
-| `qwen3:8b` | 5.2 GB | 83% | **4/4** | 0.52 s | **0% on passive aggression** |
+| model | size | overall | sarcasm | mismatch pairs | speed | notable weakness |
+|-------|------|---------|---------|----------------|-------|------------------|
+| `gemma3:12b` | 8.1 GB | 93% | 9/12 (75%) | **4/4** | 1.17 s | misses `sar-04` on every run |
+| `qwen3:14b` | 9.3 GB | 93% | **12/12** | 2/4 | 0.85 s | over-calls sarcasm when voice says sincere |
+| `qwen3:8b` | 5.2 GB | 83% | 9/12 (75%) | **4/4** | 0.52 s | **0% on passive aggression**, misses `sar-04` |
 
-**`gemma3:12b` remains the right default.** `qwen3:14b` ties it on overall
-accuracy and is faster, but it is the only model that still ignores a confidently
-positive voice on sarcastic-*looking* phrasing — the exact discrimination SER was
-added to provide.
+The sarcasm column is the axis the product is named for, and it shows two
+opposite failure shapes that the overall score hides. Every sarcasm miss in
+`eval/results/model.csv` is the same case, `sar-04` (*"No, please, take your
+time. It's not like I have anywhere to be."*): `gemma3:12b` and `qwen3:8b` fail it
+on all three runs, so it is deterministic, not occasional, and it is the most
+conversationally common form in the set (sarcasm carried by a negation rather
+than an intensifier like "oh great"). `qwen3:14b` detects every sarcasm case and
+**over-applies** it: its 2/4 on the mismatch pairs comes from the sincere halves,
+where a confidently happy voice should rule sarcasm out. For this product a false
+positive is the more damaging error, because it teaches the listener to distrust
+ordinary speech.
+
+**The shipped default is `qwen3:14b`**, chosen on the end-to-end RAVDESS pipeline
+eval rather than this text suite (see `server/config.py`): there the spoken text
+is always neutral, so every bit of signal is in the voice field, and `qwen3:14b`
+was the only model that used a bare categorical label at all (81% tone accuracy
+against 43% and 33%). On this suite `gemma3:12b` ties it overall and wins the
+mismatch pairs, so if a backend with usable valence ever lands, re-run both.
 
 `qwen3:8b` is half the latency and matches on the voice pairs, but it scores 0%
 on passive aggression across every run, reading "Thanks for finally getting back
@@ -708,6 +797,14 @@ and ruled out. In short:
   that evidence alone.
 - **The default SER backend has no valence**, only an emotion label — which
   weakens the words-vs-voice mismatch rule the whole prompt is built around.
+- **Sarcasm is never tested on real speech.** The mismatch pairs use hand-typed
+  valence gaps far wider than any backend measures, RAVDESS has no sarcastic
+  speech at all, and the default backend has no valence for those cases to
+  exercise. The suite proves the LLM reasons correctly over an idealised voice
+  field; it cannot show the field is ever that clean.
+- **Speaker id has only been measured on studio audio.** ~94% on RAVDESS actor
+  pairs, but nothing has been recorded in a real room with two people and one
+  mic; `python -m eval.spk_eval --real` is the harness waiting for that clip.
 - **Acted-emotion caveat.** RAVDESS is studio recordings by professional actors,
   so every accuracy figure here is an optimistic ceiling rather than what a cheap
   microphone in a busy room will give you.
@@ -748,9 +845,12 @@ https://<random>.trycloudflare.com/dashboard.html?token=<AUTH_TOKEN>
 | GPU | per-engine utilisation and GPU memory in use, 60s sparkline |
 | Pipeline latency | whisper / ser / cpu-stage / llm / total — last, mean, median, p95, n |
 | Interpreter model | every pulled model, which is selected, which is resident and whether it is **fully on GPU** — with **Use** and **Evict** buttons |
-| Configuration | active models, `SPEECH_RMS`, `END_SILENCE_MS`, auth state, Ollama reachability |
-| Tone / voice emotion | distribution across the session |
-| Recent utterances | last 40, with per-stage timings and the voice label |
+| Transcription model | the ASR catalogue (Whisper, Parakeet, Moonshine, SenseVoice): which is resident, which is downloaded, with a **Use** / **Download & use** button and live download progress |
+| Configuration | active models, speaker-id enrolment state, `SPEECH_RMS`, `END_SILENCE_MS`, LLM sampling, auth state, Ollama reachability |
+| Tone / voice emotion / who spoke | distributions across the session |
+| Connected clients | one row per open `/stream` socket: address (`CF-Connecting-IP` through the tunnel), client, uptime, utterances, bytes, idle/streaming |
+| Recent utterances | last 40, with per-stage timings, the voice label and the speaker label |
+| Saved clips | every clip on disk, newest first, with **Play** (fetched with the auth header, played from a Blob URL so the token never lands in a URL) and **Delete** |
 
 **Switching models is live** — it takes effect on the next utterance with no
 restart and without disturbing connected clients, because `Interpreter` reads
@@ -789,7 +889,10 @@ responsive, and a timestamped log of every frame.
 > client — there is no rate limit, connection cap or origin check. A quick-tunnel
 > hostname is random, but random is not secret: it passes through Cloudflare and
 > sits in your shell history, and anyone who obtains it gets unmetered use of
-> your CPU and GPU. The server logs a loud warning at startup when it is unset.
+> your CPU and GPU. The server logs a loud warning at startup when it is unset,
+> and **refuses to start** on any bind other than loopback (`HOST` defaults to
+> `127.0.0.1`) unless `ALLOW_NO_AUTH=1` is set explicitly. `python tunnel/token.py`
+> generates one.
 
 ## Layout
 
@@ -800,29 +903,37 @@ server/
   main.py         FastAPI app + websocket route (wiring only)
   config.py       all tunables, env-overridable
   segmenter.py    pure VAD state machine: bytes in -> utterances out
-  transcriber.py  faster-whisper wrapper (CPU)
+  transcriber.py  speech-to-text behind one transcribe(); catalogue of faster-whisper + sherpa-onnx backends, one resident, switchable (CPU)
   ser.py          speech emotion recognition: emotion2vec / MERaLiON (CPU)
+  speaker.py      speaker id: is this the listener's own voice? CAM++ (CPU)
+  clips.py        clips: per-connection retention ring + wav/json save + listing
   interpreter.py  Ollama wrapper + rolling conversation context
   metrics.py      in-memory rolling metrics for the dashboard (no DB)
-  dashboard.py    token-gated /api/* : stats, model select, model evict
+  dashboard.py    token-gated /api/* : stats, model select/evict, clips, speaker enrol/forget
   static/index.html      browser client, the app itself (no build step)
   static/remote.html     tunnel diagnostics + VAD strip + mic test (phone)
-  static/dashboard.html  monitoring + live model control
+  static/dashboard.html  monitoring, live model control, saved clips
+  static/enroll.html     guided voice enrolment for speaker id
+clips/                  saved clips (gitignored; user-initiated retention only)
+models/                 slimmed SER checkpoint + speaker profile (gitignored)
 eval/results/           committed eval output (the evidence behind config)
 eval/run_all.py         run every stage, one CSV each
 eval/pipeline_eval.py   full workflow over RAVDESS (the matrix runner)
 eval/pipeline_child.py    its CPU half: Segmenter -> whisper + SER
 eval/pipeline_wire.py     the same, over the real websocket (spot check)
 eval/ser_eval.py        SER accuracy vs RAVDESS (real emotional speech)
-eval/asr_eval.py        whisper model A/B: WER + CPU cost on known text
+eval/asr_eval.py        ASR backend A/B (whisper / parakeet / moonshine / sensevoice): WER + CPU cost
 eval/model_eval.py      A/B interpreter LLMs on the labeled tone cases
 eval/tone_cases.jsonl   those labeled cases
 eval/bench.py           per-stage latency + Ollama tok/s
 eval/latency.py         end-to-end: stopped speaking -> read in hand
+eval/spk_eval.py        speaker id vs RAVDESS: EER, actor pairs, glued turns
+eval/slim_ser_ckpt.py   strip optimizer state from the SER checkpoint (-1.4 GB RAM)
 eval/sarcasm_lines.txt  tricky lines to eyeball the interpreter
 data/ravdess/           RAVDESS dataset (gitignored, see below)
 experiments/      scratch space; headless test client + SAPI audio generators
-firmware/         (future) ESP32 client
+firmware/         the M5StickS3 pendant: mic, display, wss client, hold-to-record clips
+website/          the project site (Vite + three.js pendant render)
 ```
 
 ### Endpoints
@@ -831,14 +942,20 @@ firmware/         (future) ESP32 client
 |---|---|---|
 | `/` | the app | token as `?token=` for the websocket |
 | `/remote.html` | connection + VAD diagnostics, mic test | token |
-| `/dashboard.html` | monitoring and model control | token |
+| `/dashboard.html` | monitoring, model control, saved clips | token |
+| `/enroll.html` | guided voice enrolment | token |
 | `/health` | `{"status":"ok"}` | none, deliberately |
-| `/stream` | websocket: TEXT token, then binary PCM | first frame |
+| `/stream` | websocket: TEXT token, then binary PCM (+ `ping` / `save` JSON) | first frame |
 | `/stream?vad=1` | as above, plus VAD telemetry frames | first frame |
 | `/api/stats` | everything the dashboard polls | token |
-| `/api/models` · `POST /api/model` · `POST /api/evict` | model control | token |
+| `/api/models` · `POST /api/model` · `POST /api/evict` | model control; only already-pulled names, one change per `MODEL_SWITCH_COOLDOWN_S` (429 otherwise) | token |
+| `/api/asr` · `POST /api/asr` | transcription model: catalogue + state, and switch (catalogue keys only; returns at once, poll `GET` for download/load progress; 409 while one is running, 429 inside the cooldown) | token |
+| `/api/clips` · `/api/clips/{id}/audio` · `DELETE /api/clips/{id}` | list saved clips, fetch one's WAV, delete one | token |
+| `/api/speaker` · `POST /api/enroll` · `DELETE /api/speaker` | speaker-id state, enrol from an uploaded WAV/PCM (segmented with the real VAD, embeddings only stored), forget the profile | token |
 
 Token auth follows one rule everywhere: **enforced when `AUTH_TOKEN` is set,
-open when it is not.** `/health` is the deliberate exception, so a tunnel can be
+open when it is not.** The HTTP routes accept it as an `X-Auth-Token` header
+(what the pages send, so it stays out of URLs, logs and history) or as
+`?token=` for a hand-pasted link. `/health` is the deliberate exception, so a tunnel can be
 checked without credentials — a 502 there means the tunnel is up but the server
 is not.

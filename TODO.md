@@ -107,7 +107,15 @@ the LLM judged them on wrong words. SER and WER columns are still usable.
 
 ## Whisper accuracy in a noisy room
 
-**Status:** open · **Affects:** `server/config.py` (`WHISPER_MODEL`)
+**Status:** open; the alternatives are now INSTALLED and switchable (2026-09-19)
+· **Affects:** `server/config.py` (`ASR_MODEL`), `server/transcriber.py`
+
+Update 2026-09-19: `transcriber.py` now carries a catalogue -- Whisper `base` /
+`distil-small.en` / `small.en` / `distil-large-v3` / `large-v3-turbo`, Parakeet TDT
+0.6B v2/v3, Moonshine tiny/base, SenseVoice small -- switchable live from the
+dashboard. `python -m eval.asr_eval` scores all of them. The instruction below
+still stands: the default has NOT been changed, because the only eval audio is
+SAPI. Record real-room utterances into `experiments/asr/` first.
 
 `base` is the default and is the weakest link now that SER dropped to ~0.12 s --
 Whisper is the largest CPU cost in the pipeline at ~0.24 s, and the transcript
@@ -371,8 +379,10 @@ error -- it teaches the listener to distrust ordinary speech. Full citations in
 
 ## The model table hides a deterministic sarcasm failure (`sar-04`)
 
-**Status:** open, documentation fix · **Found:** 2026-09-05 · **Affects:**
-`README.md` model comparison table
+**Status:** DONE 2026-09-18 -- `README.md` now carries the sarcasm column, names
+`sar-04` as the deterministic miss, describes the two opposite failure shapes,
+and says the shipped default is `qwen3:14b` (it used to say gemma). Kept for the
+numbers · **Found:** 2026-09-05 · **Affects:** `README.md` model comparison table
 
 Recomputed from `eval/results/model.csv` (270 rows = 30 cases x 3 models x
 3 runs):
@@ -398,8 +408,10 @@ should rule sarcasm out), while the other two **under-detect** it. For this
 product those are not equally bad -- a false positive teaches the listener to
 distrust ordinary speech.
 
-Add the sarcasm column and correct the note. Cheap, and it prevents the next
-model choice being made on a table that omits the axis the product is named for.
+The README used to omit the sarcasm column and call `gemma3:12b` "the right
+default" while `config.py` shipped `qwen3:14b`. Both are fixed; the case itself
+(`sar-04` failing deterministically on two of three models) is still open and
+lives under "Sarcasm is never tested on real speech" above.
 
 ---
 
@@ -549,9 +561,10 @@ disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §
 ## No diarization: every voice in the room is treated as one speaker
 
 **Status:** IMPLEMENTED 2026-09-18 as `server/speaker.py` (user / other / mixed
-labelling; user lines get no read) -- see "What was built" below. The open
-questions at the end still stand, and the real-room measurement has still not
-been done · **Found:** 2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:**
+labelling; user lines get no read; `/enroll.html` -> `POST /api/enroll`,
+`DELETE /api/speaker`; scored by `python -m eval.spk_eval`) -- see "What was
+built" below. What remains open is measurement, not code: the four questions at
+the end still stand and none has been attempted · **Found:** 2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:**
 `server/speaker.py`, `server/main.py`, `server/interpreter.py`, the `utterance`
 and `read` frames, and every conversational-dynamics feature `RESEARCH.md` §6.3
 gates on diarization
@@ -737,7 +750,7 @@ run-to-run variance.
   lines stay in the rolling context (they are what the partner is responding to)
   but do not get a read of their own.
 
-### Open questions before building
+### Still open (none attempted as of 2026-09-18)
 
 - All of the above is clean studio audio, one voice per file. A real room adds
   reverberation, overlap, and a shared mic. **Nothing here has been measured on

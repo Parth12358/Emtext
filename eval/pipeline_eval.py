@@ -318,7 +318,7 @@ def build_row(cell_id, ser_model, ser_backend, llm_model, meta, cached,
         "cell_id": cell_id,
         "ser_backend": ser_backend,
         "ser_model": ser_model,
-        "whisper_model": config.WHISPER_MODEL,
+        "whisper_model": config.ASR_MODEL,
         "llm_model": llm_model,
         "row_ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "file": cached["file"],
@@ -831,7 +831,7 @@ async def run(args) -> None:
     print(f"  cells          : {len(cells)}  (smallest models first)")
     for i, (sm, _slug, llm) in enumerate(cells, 1):
         print(f"      {i}. {sm.split('/')[-1]:<26} + {llm}")
-    print(f"  whisper        : {config.WHISPER_MODEL}")
+    print(f"  whisper        : {config.ASR_MODEL}")
     print(f"  csv            : {CSV_PATH}")
     print(f"  status         : {STATUS_PATH}")
     if done:

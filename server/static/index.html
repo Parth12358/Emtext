@@ -131,9 +131,6 @@
   /* How long this read took to arrive, so the pipeline's cost is visible
      rather than something you only feel as sluggishness. */
   .took { margin-left: auto; color: #6f7783; font-size: 11px; }
-  /* "save" mirrors the pendant's long-press (clips.md): keep this moment on
-     the server for review later. A link rather than a button so it stays
-     out of the way of the read it belongs to. */
   /* Speaker-id chips. A "you" entry is the listener's own line: it is shown
      (it is the context the other person is replying to) but deliberately
      quiet, with no read row -- the whole point is not to interpret the user. */
@@ -145,6 +142,9 @@
   .entry.you { opacity: .6; border-left-color: var(--edge); }
   .entry.you .transcript { font-size: 14px; }
   .who.mixed { color: var(--mixed); border-color: var(--mixed); }
+  /* "save" mirrors the pendant's hold-to-record (README.md, wire protocol): keep this moment
+     on the server for review later. A link rather than a button so it stays
+     out of the way of the read it belongs to. */
   .save { margin-left: 10px; font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline; }
   .save.done { color: var(--positive); text-decoration: none; cursor: default; }
   .save.fail { color: var(--negative); text-decoration: none; cursor: default; }

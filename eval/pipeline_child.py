@@ -57,7 +57,7 @@ def main() -> None:
         "ser_available": ser.available(),
         "backend": getattr(ser, "_backend", None),
         "ser_model": config.SER_MODEL if ser.available() else None,
-        "whisper_model": config.WHISPER_MODEL,
+        "whisper_model": config.ASR_MODEL,
     })
 
     # Two workers so transcribe() and analyze() overlap exactly as they do in

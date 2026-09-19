@@ -108,6 +108,38 @@ WHISPER_DEVICE: str = _env_str("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE: str = _env_str("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_LANGUAGE: str = _env_str("WHISPER_LANGUAGE", "en")
 
+# --- Transcriber backend catalogue (server/transcriber.py) -------------------
+# Which speech-to-text model is resident. A catalogue KEY, not a bare model
+# name, because there are now two families behind one `transcribe()`:
+#
+#   whisper:<name>     faster-whisper (CTranslate2). Any name faster-whisper
+#                      accepts: base, small.en, distil-small.en, distil-large-v3,
+#                      large-v3-turbo... Cost is FLAT per utterance (30 s padding).
+#   parakeet:v2 / v3   NVIDIA Parakeet TDT 0.6B via sherpa-onnx, int8. ~6% WER on
+#                      the Open ASR leaderboard vs ~10% for whisper base; cost
+#                      scales with utterance length. ~650 MB download, ~1.2 GB RSS.
+#   moonshine:tiny/base  Useful Sensors Moonshine via sherpa-onnx. Built for
+#                      short utterances; the fastest option here.
+#   sensevoice:small   FunAudioLLM SenseVoice via sherpa-onnx. Also emits
+#                      language / emotion / audio-event tags (logged, not used).
+#
+# Switchable live from the dashboard (POST /api/asr), NOT persisted: a restart
+# returns here. Exactly one model is resident at a time -- the large ones are
+# 1-1.5 GB each and this process is already ~1.3-2 GB.
+#
+# Back-compat: if ASR_MODEL is unset but WHISPER_MODEL is, the key is derived as
+# whisper:<WHISPER_MODEL>, so existing start scripts keep working.
+ASR_MODEL: str = _env_str("ASR_MODEL", "") or f"whisper:{WHISPER_MODEL}"
+# Where sherpa-onnx model archives are unpacked (gitignored). One directory per
+# catalogue entry, named after the upstream archive.
+ASR_MODELS_DIR: str = _env_str("ASR_MODELS_DIR", "models/asr")
+# Intra-op threads for the sherpa-onnx backends. Whisper and SER share this CPU
+# and run concurrently with the transcriber, so this is deliberately not "all
+# cores"; measure before raising it.
+ASR_THREADS: int = _env_int("ASR_THREADS", 4)
+# Ceiling on one model download (a Parakeet archive is ~650 MB).
+ASR_DOWNLOAD_TIMEOUT_S: float = _env_float("ASR_DOWNLOAD_TIMEOUT_S", 900.0)
+
 # --- Interpreter (Ollama) ---------------------------------------------------
 OLLAMA_URL: str = _env_str("OLLAMA_URL", "http://localhost:11434")
 # qwen3:14b, chosen on the RAVDESS pipeline eval (280 clips per model), where the
@@ -175,8 +207,9 @@ SER_MODEL_DIR: str = _env_str("SER_MODEL_DIR", "models/emotion2vec_plus_base_sli
 SER_MIN_CONFIDENCE: float = _env_float("SER_MIN_CONFIDENCE", 0.4)
 # Torch intra-op threads for SER. 0 = leave torch's own default (typically one
 # per physical core). Raising it to the logical core count measurably speeds up
-# a single SER pass, but SER and Whisper run concurrently and Whisper has its
-# own CPU threads, so oversubscribing can make the pair slower overall. Tune it
+# a single SER pass, but SER, Whisper and speaker id run concurrently and
+# Whisper has its own CPU threads, so oversubscribing can make the set slower
+# overall. Tune it
 # against your machine rather than assuming more is better.
 SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
 
@@ -305,8 +338,9 @@ WS_MAX_MESSAGE_BYTES: int = _env_int("WS_MAX_MESSAGE_BYTES", 65_536)
 # and websockets). Unset by default, i.e. unlimited.
 MAX_CONNECTIONS: int = _env_int("MAX_CONNECTIONS", 32)
 
-# Utterances that may be in the pipeline at once, per connection. Whisper and
-# SER both serialise globally (~3 utterances/sec for the whole process), so
+# Utterances that may be in the pipeline at once, per connection. Whisper, SER
+# and speaker id all serialise globally (~3 utterances/sec for the whole
+# process), so
 # without a bound a client can queue work far faster than it drains and the
 # backlog is retained audio. Over the cap the utterance is dropped and counted,
 # never queued -- dropping a word beats an unbounded queue that ends in an OOM.
@@ -333,9 +367,9 @@ MODEL_SWITCH_COOLDOWN_S: float = _env_float("MODEL_SWITCH_COOLDOWN_S", 10.0)
 
 # --- Clips (explicit, user-initiated retention) ------------------------------
 # The brief rules out retaining third-party audio BY DEFAULT. A clip is the
-# sanctioned exception: the listener long-presses the pendant to flag the moment
-# they just saw, the server writes that one utterance to disk, and the device
-# shows a visible "saved" confirmation. See clips.md for the wire contract.
+# sanctioned exception: the listener holds the pendant's button, the server
+# writes the utterances heard during the hold to disk as one clip, and the
+# device shows a visible "saved" confirmation. See README.md (wire protocol) for the contract.
 CLIPS_ENABLED: bool = _env_bool("CLIPS_ENABLED", True)
 # Where clips land: a wav + json sidecar per clip, relative to the cwd (the
 # project root). No database, per the brief -- the directory IS the index.

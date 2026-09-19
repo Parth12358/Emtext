@@ -18,16 +18,28 @@ So the signal we actually care about is not the emotion label on its own but the
 That comparison happens in `interpreter.py`; this module's only job is to
 produce an honest description of the voice for it to compare against.
 
+Two backends, one `analyze()`
+----------------------------
+`SER_MODEL` picks the backend (see config.py for the numbers behind the choice):
+
+  - **emotion2vec_plus_base via FunASR -- the default.** Categorical only: an
+    emotion label and its confidence. `valence` / `arousal` / `dominance` come
+    back None, and the interpreter reasons from the label alone. Measured at
+    ~0.17 s per utterance, ~10x real time, 86% on RAVDESS.
+  - **MERaLiON-SER-v1 via transformers -- opt-in.** Adds the dimensional head
+    below, at ~2.7 s per utterance regardless of length (it pads every input to
+    30 s), which put SER below real time on sustained speech.
+
 What the numbers mean
 ---------------------
-The model has two heads, and they answer different questions:
+A backend can have up to two heads, and they answer different questions:
 
   - a *categorical* head (softmax over 7 classes) -> one discrete label plus the
     probability of that label, which is our `confidence`.
 
-  - a *dimensional* head (sigmoid, 3 values in [0,1]) -> the VAD model of affect
-    from psychology, which is often more useful than the label because it is
-    continuous and degrades gracefully:
+  - a *dimensional* head (sigmoid, 3 values in [0,1], MERaLiON only) -> the VAD
+    model of affect from psychology, which is often more useful than the label
+    because it is continuous and degrades gracefully:
 
       valence    0 = negative/unpleasant  ..  1 = positive/pleasant
                  This is the sarcasm-relevant axis: it is what you compare
@@ -48,20 +60,21 @@ Operational notes
 Loaded once at import, on CPU by deliberate choice: the Arc B580 is reserved for
 the LLM. Inference is a *blocking* call, so callers must run it off the event
 loop (see main.py, which runs it in the executor concurrently with
-transcription).
+transcription and speaker id).
 
-Cost, measured rather than assumed (12-core CPU, torch defaults): about 3.3 s
-per utterance, against roughly 0.3 s for Whisper `base` on the same audio. That
-is a *flat* cost -- a 1 s utterance and a 14 s utterance both take ~3.3 s --
-because the Whisper feature extractor pads every input to a fixed 30 s window
-(80 x 3000 mel frames) and the encoder always processes the whole thing. So SER,
-not transcription, sets how soon a read can appear.
+Cost, measured rather than assumed (12-core CPU, torch defaults): about 0.17 s
+per utterance on the default emotion2vec backend, against roughly 0.3 s for
+Whisper `base` on the same audio -- so Whisper, not SER, now sets how soon a
+read can appear. MERaLiON is the expensive option at ~2.7-3.3 s, and that cost
+is *flat*: a 1 s utterance and a 14 s one take the same time, because its
+Whisper-derived feature extractor pads every input to a fixed 30 s window
+(80 x 3000 mel frames) and the encoder always processes the whole thing.
 
 It does not stall the pipeline: each utterance is its own asyncio task, audio
 keeps being read and segmented throughout, and running SER concurrently with
-Whisper means the pair costs max(...) rather than the sum. But it does add real
-latency before the read arrives. If that matters more than the voice data, set
-SER_ENABLED=0.
+Whisper and speaker id means the trio costs max(...) rather than the sum. The
+main reason to set SER_ENABLED=0 today is memory (about 1.1 GB, see config.py),
+not latency.
 
 A failure to load is never fatal. If the model is missing, the deps are absent,
 or the weights fail to download, `_model` stays None, `available()` reports
@@ -107,7 +120,7 @@ _DIMS = ("valence", "arousal", "dominance")
 # blips. Guards against a degenerate near-empty buffer reaching the model.
 _MIN_SAMPLES = 1600  # 100 ms at 16 kHz
 
-# emotion2vec (the lighter fallback backend) predicts 9 classes rather than 7,
+# emotion2vec (the default backend) predicts 9 classes rather than 7,
 # and returns them as bilingual strings like "生气/angry". We normalise to the
 # same 7-label vocabulary the rest of the app speaks, so a backend swap never
 # reaches the interpreter prompt or the wire protocol.
@@ -171,10 +184,12 @@ def _revision_for(model: str) -> str | None:
 
 
 def _load_meralion() -> None:
-    """Primary backend: MERaLiON-SER-v1 via transformers.
+    """Opt-in backend: MERaLiON-SER-v1 via transformers.
 
     Gives the full picture -- 7 emotions AND the valence/arousal/dominance
-    dimensions -- which is why it is the default despite being the heavy option.
+    dimensions -- but at ~16x the cost of emotion2vec and lower measured
+    accuracy, which is why it is no longer the default. Select it with
+    SER_MODEL=MERaLiON/MERaLiON-SER-v1.
     """
     global _model, _processor, _labels
 
@@ -281,7 +296,7 @@ def _patch_funasr_deepcopy() -> None:
 
 
 def _load_emotion2vec() -> None:
-    """Fallback backend: emotion2vec_plus_* via FunASR.
+    """Default backend: emotion2vec_plus_* via FunASR.
 
     Roughly an order of magnitude smaller and faster than MERaLiON, at a real
     cost: it is categorical only. There is no dimensional head, so valence,
@@ -463,8 +478,10 @@ def analyze(audio: np.ndarray) -> dict | None:
             the same buffer the transcriber receives.
 
     Returns:
-        {"emotion": str, "confidence": float, "valence": float,
-         "arousal": float, "dominance": float}, or None if SER is unavailable,
+        {"emotion": str, "confidence": float, "valence": float | None,
+         "arousal": float | None, "dominance": float | None} -- the three
+        dimensions are None on the default emotion2vec backend, which has no
+        dimensional head -- or None as a whole if SER is unavailable,
         the audio is too short, or inference failed. Returning None rather than
         raising is intentional: the caller treats missing voice data as "no
         extra information", which is always a safe state to be in.

@@ -39,11 +39,21 @@ from server import config
 ROOT = Path(__file__).resolve().parent.parent
 ASR_DIR = ROOT / "experiments" / "asr"
 
+# Catalogue keys from server/transcriber.py. The two large Whisper keys are
+# included on purpose: the point of this eval is to measure them here rather
+# than trust a blog. Sherpa models download on first use (~650 MB for Parakeet).
 DEFAULT_MODELS = [
-    ("tiny", "~39M  -- when CPU time is the problem"),
-    ("base", "~74M  -- the current default"),
-    ("small", "~244M -- when accuracy is the problem"),
-    ("distil-small.en", "~166M -- distilled, English-only"),
+    ("whisper:tiny", "~39M  -- when CPU time is the problem"),
+    ("whisper:base", "~74M  -- the long-standing default"),
+    ("whisper:small.en", "~244M -- when accuracy is the problem"),
+    ("whisper:distil-small.en", "~166M -- distilled, English-only"),
+    ("whisper:distil-large-v3", "~750M -- best Whisper on noise; flat 30 s cost"),
+    ("whisper:large-v3-turbo", "~810M -- flat 30 s cost"),
+    ("parakeet:v2", "0.6B int8 -- ~6% WER leaderboard, scales with audio"),
+    ("parakeet:v3", "0.6B int8 -- multilingual sibling"),
+    ("moonshine:base", "61M int8 -- built for short utterances"),
+    ("moonshine:tiny", "27M int8 -- smallest"),
+    ("sensevoice:small", "234M int8 -- also tags emotion/events"),
 ]
 
 
@@ -107,7 +117,10 @@ def main() -> None:
                     help="suppress the per-utterance progress lines")
     args = ap.parse_args()
 
-    from faster_whisper import WhisperModel
+    # Backends come from the server's own transcriber so every model is
+    # decoded exactly the way production would decode it. `build()` makes a
+    # model without touching the resident one.
+    from server import transcriber
 
     items = load_set()
     total_audio = sum(a.size for _, a, _ in items) / config.SAMPLE_RATE
@@ -123,21 +136,19 @@ def main() -> None:
 
     for name in wanted:
         try:
+            spec = transcriber.spec_for(name)
+            if spec.family != "whisper" and not transcriber.downloaded(spec):
+                print(f"  {name}: downloading ~{spec.size_mb} MB ...", flush=True)
             load0 = time.perf_counter()
-            model = WhisperModel(name, device=config.WHISPER_DEVICE,
-                                 compute_type=config.WHISPER_COMPUTE_TYPE)
+            model = transcriber.build(name)
             load_s = time.perf_counter() - load0
         except Exception as exc:  # noqa: BLE001
-            print(f"  {name:<18} FAILED to load: {type(exc).__name__}: {exc}")
+            print(f"  {name:<24} FAILED to load: {type(exc).__name__}: {exc}")
             continue
 
         # Untimed warm-up: the first decode pays one-off setup that would
         # otherwise be charged to whichever utterance happened to go first.
-        segments, _ = model.transcribe(items[0][1], beam_size=1,
-                                       language=config.WHISPER_LANGUAGE,
-                                       vad_filter=True,
-                                       condition_on_previous_text=False)
-        list(segments)
+        model.transcribe(items[0][1])
 
         print(f"\n  {name}  (loaded in {load_s:.1f}s)", flush=True)
 
@@ -148,11 +159,7 @@ def main() -> None:
         worst = ("", "", -1.0)
         for stem, audio, reference in items:
             t0 = time.perf_counter()
-            segments, _ = model.transcribe(audio, beam_size=1,
-                                           language=config.WHISPER_LANGUAGE,
-                                           vad_filter=True,
-                                           condition_on_previous_text=False)
-            hypothesis = " ".join(s.text.strip() for s in segments).strip()
+            hypothesis = model.transcribe(audio)
             elapsed = time.perf_counter() - t0
             times.append(elapsed)
             e, n = wer(reference, hypothesis)
@@ -162,7 +169,7 @@ def main() -> None:
                 worst = (reference, hypothesis, e / n)
 
             detail_rows.append({
-                "model": name, "utterance": stem,
+                "model": name, "backend": model.family, "utterance": stem,
                 "reference": reference, "hypothesis": hypothesis,
                 "errors": e, "ref_words": n,
                 "wer_pct": round(100 * e / n, 1) if n else 0.0,
@@ -189,17 +196,17 @@ def main() -> None:
     csv_path = Path(args.csv)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
-        cols = ["model", "utterance", "reference", "hypothesis", "errors",
+        cols = ["model", "backend", "utterance", "reference", "hypothesis", "errors",
                 "ref_words", "wer_pct", "elapsed_s", "duration_s"]
         writer = csv.DictWriter(fh, fieldnames=cols)
         writer.writeheader()
         writer.writerows(detail_rows)
 
     print("\n" + "=" * 78)
-    print(f"{'model':<18}{'WER':>7}{'mean/utt':>10}{'RTF':>8}{'load':>8}   note")
+    print(f"{'model':<26}{'WER':>7}{'mean/utt':>10}{'RTF':>8}{'load':>8}   note")
     print("-" * 78)
     for r in rows:
-        print(f"{r['name']:<18}{r['wer']:>6.1f}%{r['mean']:>9.2f}s"
+        print(f"{r['name']:<26}{r['wer']:>6.1f}%{r['mean']:>9.2f}s"
               f"{r['rtf']:>7.0f}x{r['load']:>7.1f}s   {notes.get(r['name'], '')}")
 
     print("\nWER = word error rate on normalised text (lower is better).")

@@ -4,11 +4,12 @@ Three small pieces, none of which know about websockets or FastAPI:
 
   - `Recent` -- a per-connection ring of the last few utterances, keyed by the
     same per-connection `id` the `utterance` / `read` frames carry. The device
-    only ever *names* a moment (`{"type":"save","id":n}`); the server already
-    holds everything for it. This ring is what makes that lookup possible a
-    few seconds after the read went out.
-  - `save()` -- writes one entry to disk as a WAV plus a JSON sidecar. Blocking
-    file I/O; `main.py` runs it in the executor.
+    only ever *names* a span (`{"type":"save","from":a,"to":b}`, the ids heard
+    while its button was held; the older `{"id":n}` means `from == to`); the
+    server already holds everything for it. This ring is what makes that
+    lookup possible a few seconds after the reads went out.
+  - `save()` -- writes the entries in that span to disk as ONE WAV plus a JSON
+    sidecar. Blocking file I/O; `main.py` runs it in the executor.
   - `list_clips()` / `clip_path()` / `delete_clip()` -- the review surface the
     dashboard routes are built on. Only this module knows the file layout.
 
@@ -100,7 +101,7 @@ class Recent:
 
         Walks the ring (at most CLIP_RETENTION_N entries) rather than the
         range: a client-supplied `to` of a billion must cost nothing. Ids not
-        in the ring are simply absent from the result, per clips.md.
+        in the ring are simply absent from the result, per the clips contract in README.md.
         """
         self._prune()
         return sorted(

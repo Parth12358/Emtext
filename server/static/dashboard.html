@@ -141,8 +141,8 @@
       <th>stage</th><th>last</th><th>mean</th><th>median</th><th>p95</th><th>n</th>
     </tr></thead><tbody></tbody></table>
     <div class="note">
-      whisper and ser run concurrently, so <b>cpu stage</b> is roughly the larger
-      of the two, not their sum. <b>total</b> is cpu stage + llm — it excludes the
+      whisper, ser and speaker id run concurrently, so <b>cpu stage</b> is roughly
+      the largest of the three, not their sum. <b>total</b> is cpu stage + llm — it excludes the
       VAD's end-of-speech wait, which is what you also feel.
     </div>
   </div>
@@ -156,6 +156,19 @@
       <code>OLLAMA_MODEL</code>. Loading evicts the previous model first, because
       two 8–9&nbsp;GB models do not fit in 12&nbsp;GB and a partly-resident model
       runs partly on CPU.
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Transcription model</h2>
+    <div id="asr"><div class="empty">loading…</div></div>
+    <div class="note">
+      Speech-to-text runs on CPU. Exactly <b>one</b> model is resident: choosing
+      another builds it first (downloading its files on first use), then drops the
+      previous one. Like the interpreter switch it takes effect on the next
+      utterance and is <b>not persisted</b> — a restart returns to
+      <code>ASR_MODEL</code>. Whisper's cost is flat per utterance (30&nbsp;s
+      padding); Parakeet, Moonshine and SenseVoice scale with the audio.
     </div>
   </div>
 
@@ -193,8 +206,9 @@
     <div id="clips"><div class="empty">no clips yet — long-press the pendant (or "save" in the test client) to keep a moment</div></div>
     <audio id="player" controls hidden></audio>
     <div class="note" id="clips-note">
-      Each clip is one utterance the listener chose to keep: its audio, transcript
-      and read, as a <code>wav</code> + <code>json</code> pair on disk. Nothing else is retained.
+      Each clip is the utterances heard while the listener held the pendant's button:
+      their audio joined into one <code>wav</code>, with transcripts and reads in a
+      <code>json</code> sidecar. Nothing else is retained.
     </div>
   </div>
 
@@ -203,7 +217,7 @@
 <script>
 // ---------------------------------------------------------------------------
 // Polls /api/stats and renders. Read-mostly: the only writes are selecting and
-// evicting a model, both of which go through token-gated endpoints.
+// evicting a model and deleting a clip, all through token-gated endpoints.
 // ---------------------------------------------------------------------------
 const el = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -436,7 +450,7 @@ function render(d) {
   // --- latency table ---
   const tb = el("lat").querySelector("tbody");
   tb.innerHTML = "";
-  for (const [key, label] of [["whisper", "whisper"], ["ser", "ser"],
+  for (const [key, label] of [["whisper", "asr"], ["ser", "ser"],
                               ["speaker", "speaker id"],
                               ["cpu_stage", "cpu stage (gathered)"],
                               ["llm", "llm"], ["total", "total"]]) {
@@ -450,7 +464,9 @@ function render(d) {
   // --- config ---
   rows(el("cfg"), [
     ["interpreter", c.llm_model],
-    ["whisper", `${c.whisper_model} (${c.whisper_device}/${c.whisper_compute})`],
+    ["asr", `${c.asr_model || c.whisper_model}${c.asr_family ? " (" + c.asr_family + ")" : ""}` +
+      (c.asr_state && c.asr_state !== "ready" ? ` — ${c.asr_state}` : ""),
+      c.asr_state === "failed" ? "warn" : ""],
     ["ser", c.ser_available ? `${(c.ser_model || "").split("/").pop()} (${c.ser_backend})` : "disabled",
       c.ser_available ? "" : "warn"],
     // "loaded but not enrolled" is the state that silently interprets the
@@ -568,6 +584,74 @@ async function loadModels() {
   }
 }
 
+// ----- transcription model ---------------------------------------------------
+// Same shape as loadModels(), with one difference: a switch can be a 650 MB
+// download, so POST /api/asr returns at once and we poll until it settles.
+let asrPoll = null;
+
+async function loadAsr() {
+  const box = el("asr");
+  try {
+    const d = await api("/api/asr");
+    const st = d.status || {};
+    const busy = st.state === "downloading" || st.state === "loading";
+    box.innerHTML = "";
+    for (const m of d.models) {
+      const div = document.createElement("div");
+      div.className = "model";
+      const sel = m.key === d.selected;
+      const name = document.createElement("span");
+      name.className = "name"; name.textContent = m.key;
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = `${m.label} · ${m.family} · ~${m.size_mb} MB · ${m.note}`;
+      div.append(name, meta);
+      if (sel) {
+        const b = document.createElement("span");
+        b.className = "badge sel"; b.textContent = "in use"; div.appendChild(b);
+      } else if (!m.downloaded) {
+        const b = document.createElement("span");
+        b.className = "badge"; b.textContent = "not downloaded"; div.appendChild(b);
+      }
+      if (busy && st.key === m.key) {
+        const b = document.createElement("span");
+        b.className = "badge cpu";
+        b.textContent = st.state === "downloading"
+          ? `downloading${typeof st.progress === "number" ? " " + Math.round(st.progress * 100) + "%" : "…"}`
+          : "loading…";
+        div.appendChild(b);
+      } else if (st.state === "failed" && st.key === m.key) {
+        const b = document.createElement("span");
+        b.className = "badge"; b.style.color = "var(--negative)";
+        b.textContent = "failed: " + (st.error || "?"); b.title = st.error || "";
+        div.appendChild(b);
+      }
+      if (!sel && !busy) {
+        const b = document.createElement("button");
+        b.className = "primary";
+        b.textContent = m.downloaded ? "Use" : "Download & use";
+        b.onclick = async () => {
+          b.disabled = true; b.textContent = "starting…";
+          try {
+            await api("/api/asr", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({model: m.key}),
+            });
+          } catch (e) { b.textContent = "failed"; alert(e.message); return; }
+          await loadAsr();
+        };
+        div.appendChild(b);
+      }
+      box.appendChild(div);
+    }
+    // Poll quickly only while something is in flight.
+    if (busy && !asrPoll) asrPoll = setInterval(loadAsr, 1000);
+    if (!busy && asrPoll) { clearInterval(asrPoll); asrPoll = null; }
+  } catch (e) {
+    setEmpty(box, e.message);
+  }
+}
+
 // ----- clips ----------------------------------------------------------------
 // Playback fetches the wav with the auth header and plays it from a Blob URL,
 // so the token never has to ride in an <audio src> query string. The server's
@@ -672,12 +756,14 @@ async function tick() {
 
 tick();
 loadModels();
+loadAsr();
 loadClips();
 // 2s is responsive without hammering: /api/stats reads cached GPU data and
 // psutil counters, so it is cheap, but there is no reason to poll faster than
 // a human can read.
 setInterval(tick, 2000);
 setInterval(loadModels, 15000);
+setInterval(loadAsr, 15000);
 // Clips change only when someone presses a button; 10s is plenty.
 setInterval(loadClips, 10000);
 </script>

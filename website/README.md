@@ -1,8 +1,10 @@
 # emtext — product website
 
 A single-page marketing site for **emtext**, the live conversation interpreter.
-Built with **Vite** and plain ES modules — no framework, no runtime dependencies
-beyond the bundled variable fonts.
+Built with **Vite** and plain ES modules — no framework. The only runtime
+dependencies are the bundled variable fonts and **three.js** (`three`), which
+renders the pendant in the hardware section and is loaded lazily from
+`lib/device3d.js` so the rest of the page never pays for it.
 
 ## Develop
 
@@ -25,6 +27,7 @@ src/
     tokens.css         the whole design system: color, type, spacing, motion
     base.css           reset, fonts, shared primitives (.section .wrap .btn .tone-chip …)
   lib/dom.js           tiny helpers (fromHTML, tone metadata)
+  lib/device3d.js      three.js render of the M5StickS3 pendant (dynamic import from pendant)
   sections/
     nav · hero · mismatch · pipeline · performance · pendant · privacy · footer
 ```

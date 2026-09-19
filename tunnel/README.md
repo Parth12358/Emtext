@@ -51,19 +51,34 @@ check. A quick-tunnel hostname is random, but random is not secret: it travels
 through Cloudflare, lands in your shell history, and anyone who obtains it gets
 unmetered use of your CPU and GPU.
 
+The shipped way is `tunnel/token.py`, which creates a token once, keeps it in
+`~/.emtext/auth_token` (outside the repo, stable across restarts) and prints it;
+`--rotate` replaces it, `--path` shows where it lives. The `start.ps1` /
+`start.sh` helpers call it for you.
+
 ```powershell
 # Windows
-$env:AUTH_TOKEN = (python -c "import secrets; print(secrets.token_urlsafe(32))")
+$env:AUTH_TOKEN = (python tunnel/token.py)
 echo $env:AUTH_TOKEN
 ```
 
 ```bash
 # Linux / macOS
-export AUTH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export AUTH_TOKEN=$(python tunnel/token.py)
 echo "$AUTH_TOKEN"
 ```
 
-The server prints a loud warning at startup if this is unset.
+A one-off token without the helper works too:
+
+```powershell
+$env:AUTH_TOKEN = (python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+```bash
+export AUTH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
+The server prints a loud warning at startup if this is unset. (Empty or
+whitespace-only counts as unset.)
 
 ## 3. Start the server
 
@@ -143,9 +158,12 @@ are still seeing it, the keepalives are not firing — watch the message log in
 `remote.html`, which timestamps every frame, and check `WS_IDLE_PING_S`.
 
 **Closed immediately with code 1008**
-The token was rejected. `1008` is what `server/main.py` sends when the first
-frame does not match `AUTH_TOKEN`. Check for a stale token in the URL, or a shell
-where `AUTH_TOKEN` was never exported.
+The handshake was rejected. `1008` is what `server/main.py` sends when the first
+frame does not match `AUTH_TOKEN` -- and also when no text frame arrives within
+`WS_AUTH_TIMEOUT_S` (5 s), when the first frame is BINARY rather than TEXT (audio
+sent before the token), or when the token is longer than 512 characters. Check
+for a stale token in the URL, a shell where `AUTH_TOKEN` was never exported, or
+a client that starts streaming before it has sent the token.
 
 **"Permission denied" or no microphone prompt**
 The page is not a secure context. `remote.html` shows this as the first check.
@@ -169,8 +187,15 @@ directly over the LAN. Mobile data is the real test.
   Cloudflare's terms restrict serving large media over its CDN on non-paid plans;
   at this volume it is not a practical concern, but it is worth knowing.
 - **The server knows nothing about any of this.** No tunnel code, no special
-  configuration — it serves HTTP on `0.0.0.0:8000` exactly as it does locally,
-  and cloudflared connects to it over loopback.
-- **For the ESP32 later:** it will need `wss://` and therefore TLS, which costs
-  roughly 20–40 KB of RAM on top of the websocket. Comfortable on an ESP32-S3
-  with PSRAM, tight on a plain ESP32 once audio buffers are added.
+  configuration — it serves HTTP on `127.0.0.1:8000` (`config.HOST` defaults to
+  loopback) exactly as it does locally, and cloudflared connects to it over
+  loopback. You do not need `HOST=0.0.0.0` for the tunnel; if you set it anyway,
+  `server/main.py` refuses to start (`SystemExit`) unless `AUTH_TOKEN` is set or
+  you pass `ALLOW_NO_AUTH=1`, because a non-loopback bind adds a LAN entrance
+  that bypasses the tunnel.
+- **The ESP32 already speaks `wss://`.** The firmware connects over TLS today:
+  certificate-validated against the GTS root bundle on the ArduinoHttpClient
+  backend, and encrypted-but-unvalidated (`L2004_INSECURE`) on the active
+  Links2004 backend -- see `firmware/README.md` for that hardening TODO. TLS costs
+  roughly 20–40 KB of RAM on top of the websocket, which is comfortable on the
+  ESP32-S3 with PSRAM.

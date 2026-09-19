@@ -68,7 +68,7 @@ callbacks; `emtext.ino` decides what each does — **context-dependent on the cu
 | Input | Action (by screen) | Wired |
 |---|---|---|
 | **BtnA** click | Dark→Glance · Glance→More Info · More Info→Glance · **Settings→select row** | `onWake` ✅ |
-| **BtnA** hold | Settings→back to Glance · elsewhere→**save a clip** (stub, needs server) | `onMute` ✅ (clip 🔲) |
+| **BtnA** hold | Settings→back to Glance · elsewhere→**hold-to-record a clip** (§9.7; server-side `save`/`saved` built) | `onHoldA` ✅ |
 | **BtnB** click | **Settings→scroll to next row** · elsewhere→privacy pause | `onPause` ✅ |
 | **BtnB** hold | live screen→open Settings · **Settings→back to Glance** | `onStatus` ✅ |
 | **BtnPWR** hold | → Dark (two-step power-off is Stage 8) | `onPowerOff` ✅ (interim) |
@@ -105,9 +105,10 @@ that long before it flips, so it can't flicker near the 45° boundary. Lift = ac
   - **Lift gesture** → Glance.
   - **BtnB click** → Paused (works even from Dark).
   - **BtnB hold** → Settings.
-  - **BtnA hold** → 🔲 **record a clip to save** (saves the current moment to the server, §9.7).
+  - **BtnA hold** → ✅ **record a clip** — wakes to Glance with the recording overlay; release
+    saves what was heard during the hold to the server (§9.7).
 - **Transitions out:** Glance (BtnA/lift), Settings (BtnB-hold), Paused (BtnB click),
-  clip capture (BtnA hold, 🔲).
+  clip recording (BtnA hold → Glance + overlay).
 - ⚠️ **Read while Dark doesn't wake the screen** — reads accumulate silently (open question §10).
 - ⚠️ **No "mic live" affordance while Dark** — capture state should be externally visible
   (compliance).
@@ -117,8 +118,8 @@ that long before it flips, so it can't flicker near the 45° boundary. Lift = ac
 - **Emotional tone** as a symbol (the hero). ✅ built as the Undertale heart (`drawHeart`),
   colored by tone with Undertale soul colours (§6).
 - **Context from the LLM** (the read). ✅ built as a small caption.
-- **Connectivity** to server + wifi. ✅ conn dot; 🔲 richer info bar.
-- **Battery level.** 🔲 (via info bar).
+- **Connectivity** to server + wifi. ✅ top bar — connectivity glyph (shape) + live ping (§2).
+- **Battery level.** ✅ in the top bar (`NN%` in portrait, icon + charging bolt in landscape).
 - **Clock / time.** 🔲
 - **iOS-style button shadows** to hint BtnB/PWR. 🔲
 
@@ -130,23 +131,24 @@ that long before it flips, so it can't flicker near the 45° boundary. Lift = ac
   - **BtnA click** → **More Info** (renamed from History).
   - **BtnB hold** → Settings.
   - **BtnB click** → Paused.
-  - **BtnA hold** → 🔲 record a clip.
+  - **BtnA hold** → ✅ record a clip (§9.7); the glance stays up under the recording overlay.
 - **Transitions out:** More Info (BtnA), Settings (BtnB-hold), Paused (BtnB), **Dark after 8 s**
   of no new read.
-- ⚠️ **Transcript is captured but not shown** (`g_lastTranscript` → `setGlance`, never rendered).
-  Decide: surface it in More Info, or drop it.
+- **Transcript is not on the glance by design** — the heart + read are the whole screen. It is
+  carried through `setGlance` into the history ring and rendered in More Info (§4.4).
 
 ### 4.4 More Info — `State::History` ✅ (being repurposed)
-- **Now ✅:** "history" title + up to 5 recent reads (tone tick + ordinal label + read text),
-  most-recent-first; "(nothing yet)" when empty. Rows aren't width-clipped ⚠️.
+- **Now ✅:** "more info" title + the **3** most recent reads (of the 5-deep ring), each a tone
+  tick + the read, with the **transcript as a dimmer second line**; no ordinal label;
+  most-recent-first; "(nothing yet)" when empty. Every line is width-clipped via `wrapN`.
 - **Target 🔲:** less of a 5-row list, more of a **detail page** — longer LLM context and a
   summary of the last few prompts/reads. The place you go when the glance caption isn't enough.
 - **Controls from here:**
   - **BtnA click** → Glance.
   - **BtnB hold** → Settings.
   - **BtnB click** → Paused.
-  - **BtnA hold** → 🔲 (clip, TBD in this context).
-- ⚠️ **Does not auto-dim** — only Glance times out.
+  - **BtnA hold** → ✅ starts recording a clip and switches to Glance (recording overlay).
+- **Auto-dims** to Dark after `IDLE_MS` (20 s) with no interaction (Glance stays at 8 s).
 
 ### 4.5 Settings — `State::Status` ✅ (scrollable settings page — built, pending hardware verify)
 A scrollable page (`display.cpp:drawSettings()`), 3 rows with a `>` cursor, a `[B]next [A]sel`
@@ -165,8 +167,9 @@ hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:*
 
 *(The **cues**/mute row is removed — the device has no audio output, so there is nothing to mute.)*
 
-Dropped from the page per the plan: **URL/host** and **token** (secret) aren't shown; **ping**
-isn't surfaced yet (net doesn't measure RTT — future). Uptime/battery live in the footer aside.
+Dropped from the page per the plan: **URL/host** and **token** (secret) aren't shown. **Ping**
+is not a Settings row — `net::pingMs()` (median keepalive RTT) is shown live in the top bar on
+every lit screen instead. Uptime/battery live in the footer aside.
 
 **Portal lock ✅:** while the setup AP is up, the page replaces the rows with a credentials
 panel — **`join: <ssid>` · `pass: <apPass>` · `at: 192.168.4.1`** — and **freezes navigation**
@@ -175,8 +178,9 @@ are **BtnA** (turn the portal off) or **PWR** (→Dark). This is the "no nav dur
 "show the hotspot password" requirement from §5.
 
 - ⚠️ **Live fields:** the footer's uptime/battery only refresh when the screen redraws on an
-  event, so they can read stale — add a periodic redraw while on this screen.
-- **Nice-to-haves 🔲:** nicer UI · theme control · choose what appears on Glance · surface ping.
+  event, so they can read stale — add a periodic redraw while on this screen. (The top bar
+  already refreshes every ~5 s.)
+- **Nice-to-haves 🔲:** nicer UI · theme control · choose what appears on Glance.
 
 ### 4.6 Paused (privacy overlay) ✅
 - **On screen:** dim (brightness 60), a large `||` glyph centered, "paused" along the bottom.
@@ -190,8 +194,10 @@ are **BtnA** (turn the portal off) or **PWR** (→Dark). This is the "no nav dur
   be confused with a live read.
 
 ### 4.7 Chrome overlays
-- **Info bar 🔲:** compact **battery level** + **connectivity indicator**. Today only the
-  connection dot exists (green=`Ready`, amber=else; ⚠️ Degraded looks like searching).
+- **Info bar ✅:** built as the **top bar** (`drawTopBar`, §2) — connectivity **glyph** by shape
+  (`drawConnGlyph`: filled = ready, ring = searching, ring+dot = degraded), **live ping** in ms,
+  and **battery** (`NN%` in portrait; `drawBattIcon` + charging bolt in landscape). On every lit
+  screen except Dark.
 - **Clock 🔲:** a tasteful face — **not** larger than the semantic info, **larger** than the
   summary text, tucked to the side and out of the way.
 - **Button-press shadows 🔲:** iOS-style shadow rendered near BtnB / PWR to show where the button
@@ -258,7 +264,7 @@ is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind
         │      │ ◄──────────────────── │        │ ◄───────────── │           │
         └──────┘   8 s glance timeout  └────────┘      BtnA      └───────────┘
            ▲  ▲                            │  ▲                        │
-           │  │ BtnA hold = record clip 🔲 │  │ unpause                │
+           │  │ BtnA hold = record clip ✅ │  │ unpause                │
    PWR ────┘  │ (from Dark/Glance)         │  │                        │
            │                               ▼  │                        │
    BtnB hold (from any live screen) ──► ┌──────────┐ ◄── BtnB hold ────┘
@@ -327,7 +333,9 @@ New target work (from this plan):
 
 ---
 
-## 9. 🔲 Planned UI (not built) — maps to remaining stages
+## 9. Planned and recently built UI — maps to remaining stages
+
+(9.1 and 9.3–9.6 are still 🔲; 9.2 is removed; 9.7 is ✅ built.)
 
 ### 9.1 Boot stages + Quick Setup (Stage 8 + this plan)
 Replace the fixed splash with network→server→ready progress (+ per-stage failure), and a path
@@ -335,9 +343,23 @@ into the setup portal from boot.
 
 ### 9.2 Audio cues — ❌ REMOVED
 The device has **no speaker output**. The emotional signal is conveyed **visually only** (the
-glance tone edge bar, §6). There are no tone cues, no alert/boot/low-battery tones, no audible
+colour of the glance heart, §6). There are no tone cues, no alert/boot/low-battery tones, no audible
 idle warning, and no mute control. *(Superseded: ≤150 ms cues for negative + words–voice
 mismatch, with a 75% battery volume cap and a Settings mute toggle.)*
+
+### 9.3 Two-step power-off (Stage 8)
+Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket close** before
+sleep. (PWR-hold currently intended → Dark as an interim.)
+
+### 9.4 Idle / motion auto-off (Stage 8)
+Auto power-off after no-speech, **extended by motion** (IMU); on-screen grace cancellable by any
+button (no audible warning — audio output removed); deep sleep + wake-on-button.
+
+### 9.5 Low battery (Stage 8)
+Signal low battery **once**, with a distinct on-screen indication (no tone — audio output removed).
+
+### 9.6 Degraded / outage visibility (Stage 9)
+Interruption visible on screen throughout a drop + recovery, not just a silent amber dot.
 
 ### 9.7 Clips — hold-to-record, built ✅
 Hold **Button A** to save the moment to the server for later review (dashboard). Nothing is stored on
@@ -360,20 +382,6 @@ the device (no storage beyond NVS config).
   user-initiated retention (details in `CLAUDE.md`). The on-screen confirmation is the visible-
   retention signal (compliance: no third-party audio retained by default).
 
-### 9.3 Two-step power-off (Stage 8)
-Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket close** before
-sleep. (PWR-hold currently intended → Dark as an interim.)
-
-### 9.4 Idle / motion auto-off (Stage 8)
-Auto power-off after no-speech, **extended by motion** (IMU); on-screen grace cancellable by any
-button (no audible warning — audio output removed); deep sleep + wake-on-button.
-
-### 9.5 Low battery (Stage 8)
-Signal low battery **once**, with a distinct on-screen indication (no tone — audio output removed).
-
-### 9.6 Degraded / outage visibility (Stage 9)
-Interruption visible on screen throughout a drop + recovery, not just a silent amber dot.
-
 ---
 
 ## 10. Decisions & open questions
@@ -381,21 +389,24 @@ Interruption visible on screen throughout a drop + recovery, not just a silent a
 **Decided:**
 - ✅ **On-device audio output removed** — the pendant has no speaker: no tone cues, no
    alert/boot/low-battery tones, no audible idle warning, and no mute. The emotional signal is
-   **visual only** (the glance tone edge bar, §6). The `cues` module (Stage 7) is dropped; the
-   Settings mute row and mute glyph go with it. BtnA-hold stays free for clips.
+   **visual only** (the colour of the glance heart, §6). The `cues` module (Stage 7) is dropped; the
+   Settings mute row and mute glyph go with it. BtnA-hold is used for clips.
 - ✅ **Clips are stored on the server, reviewed later** (not kept on-device). See §9.7 for the
    flow and wire-protocol addition.
+- ✅ **Clip payload settled — an inclusive id range, no audio re-sent.** The device sends
+   `{"type":"save","from":F,"to":T}`; the server concatenates the retained audio for those
+   utterances into one `wav` with a JSON sidecar (§9.7).
+- ✅ **Transcript shipped in More Info** — the dim second line under each read (§4.4).
 
 **Still open:**
-1. **Clip payload:** flag just the last utterance's **id** (server keeps the audio + transcript +
-   read it already has) vs. also saving audio. Recommended: **flag by id** — cheapest, no
-   re-sending audio, and the server already holds everything (§9.7).
+1. ~~**Clip payload:** id vs. audio?~~ **DECIDED** — id range, see above.
 2. **Read-while-Dark:** wake on every read, only non-neutral, or cue-only?
 3. ~~**Tone symbol:** keep the mark-as-hero curve, or revise the symbol set?~~ **DECIDED** — the
    Undertale heart, coloured by Undertale soul colours, pure colour-only (§6).
-4. **Transcript:** show it in More Info, or drop it?
+4. ~~**Transcript:** show it in More Info, or drop it?~~ **DECIDED / shipped** — More Info (§4.4).
 5. **Settings back/idle:** explicit back (BtnB-hold/BtnA-hold→Glance, PWR→Dark) plus an idle
-   timeout?
+   timeout? *(Both exist now — explicit back and the 20 s `IDLE_MS` dim; open only if the
+   timings want tuning.)*
 
 *Keep this doc in sync when display/controls behavior changes — it's the single place to re-read
 the whole device UX.*

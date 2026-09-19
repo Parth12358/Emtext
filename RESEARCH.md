@@ -590,13 +590,20 @@ speculation. It requires **no model at all** — two timestamps and a subtractio
 
 ### 5.2 The catch, stated honestly
 
-**emtext has no diarization.** `server/segmenter.py` maintains a frame clock
-(`frames_seen × FRAME_MS`), so inter-utterance gaps are already derivable — but a gap in a
-single undifferentiated stream could be a turn transition, the same speaker pausing
-mid-thought, or the user themselves.
+**emtext now has speaker identification, not full diarization.** `server/speaker.py` labels
+each utterance `user` / `other` / `mixed` / `unknown` against the user's enrolled voiceprint
+(the conversation partner is modelled online, per connection); `user` lines get an
+`utterance` frame but no `read`, and the label reaches the interpreter as a speaker tag
+(§6.1). `server/segmenter.py` maintains a frame clock (`frames_seen × FRAME_MS`), so
+inter-utterance gaps are already derivable — and with the labels, a gap between a `user`
+utterance and an `other` utterance *is* a turn transition rather than an undifferentiated
+pause.
 
-The dispreference finding requires knowing that A asked and B answered. So this is **free in
-compute and not free in architecture**. What *is* free today:
+The dispreference finding requires knowing that A asked and B answered. The two halves of
+that now exist separately (who spoke; when the utterances closed) — what is missing is only
+that the inter-utterance gap is not yet placed in the prompt. So this is **free in compute
+and mostly free in architecture**: a timing field, not a new subsystem. What *is* free
+today:
 
 - intra-utterance silence ratio and hesitation (reluctance markers)
 - `last_close_reason` already distinguishes `end_silence` / `max_length` / `too_short`
@@ -630,7 +637,11 @@ are running statistics over RMS — no model.
   the double-empathy frame (§1.5) and the architecture all converge.
 - **A dedicated acoustic SER model rather than an audio LLM** (§4.3). This is now an
   evidence-backed architectural decision, not just a latency one.
-- **Pointing the interpreter at the speaker, not the user** (§1.5).
+- **Pointing the interpreter at the speaker, not the user** (§1.5). Now an implemented
+  mechanism, not just a prompt stance: `interpreter.interpret(..., who=label)` takes the
+  speaker-id label from `server/speaker.py`, `_build_prompt` tags context lines `listener:` /
+  `speaker:` (only once a label exists, so the unlabelled prompt stays byte-identical), and
+  `user` utterances are remembered as context but never sent for a read at all.
 - **`SER_MIN_CONFIDENCE` downweighting.** The right instinct; §6.4 argues for going further.
 
 ### 6.2 Change — stop chasing valence, key the mismatch rule on arousal and dominance

@@ -74,8 +74,9 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
 
 **Foundation** (no hardware, usable everywhere):
 
-- **`config`** ✅ — owns the `Config` struct (**every tunable**: `nets[3]`, `serverHost`,
-  `serverPath`, `token`, `chunkMs`, `energyFloor`, `idleTimeoutS`, `logLevel`) + NVS
+- **`config`** ✅ — owns the `Config` struct (**every tunable**: `nets[3]` + `netCount`, `serverHost`,
+  `serverPath`, `token`, `chunkMs`, `energyFloor`, `idleTimeoutS`, `logLevel`, and the setup-AP
+  credentials `apSsid` / `apPass`) + NVS
   persistence + a serial console (`get` / `set <key> <val>` / `save` / `clear`). Load order:
   `secrets.h` defaults → NVS overrides. Exposes `load()`, `save()`, `clear()`,
   `get() -> const Config&`, `handleSerial()`. NVS keys are ≤15 chars. Deps: `Preferences`, `secrets.h`.
@@ -100,7 +101,10 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   a 15 s client keepalive ping + a 45 s no-frame watchdog that keeps the socket and keeps
   buffering instead of tearing down.
   Exposes `begin()`, `loop()`,
-  `state()`, `onFrame(cb)`, `sendAudio(pcm,n)`.
+  `state()`, `stateName()`, `onFrame(cb)`, `sendAudio(pcm,n)`, `saveClip(from,to)` (the clip
+  `save` frame), `pingMs()` (median keepalive RTT, -1 until measured), `lastTxMs()` / `lastRxMs()`
+  (dev activity glyphs), `reconnect()` (after a config change), `setPortal(on)` / `portalOn()`
+  (the setup AP radio).
 - **`transport`** ✅ — WebSocket-over-TLS, abstracted for swappability. `connect()` does the TLS
   handshake **and** the HTTP upgrade in one call; `sendText/sendBin/poll/connected/close`. Two
   backends, selected by `TRANSPORT_BACKEND_L2004` in `transport.h`; used only from the core-0
@@ -134,18 +138,23 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   emits gated chunks via `onChunk`. `AUDIO_ENERGY_SERIAL` build flag streams a live RMS/peak
   meter. Mic `magnification` lowered to 4. Exposes `begin()`, `loop()`,
   `onChunk(cb)`, `energy()`, `voiced()`, `setPaused(bool)`. Deps: `M5.Mic`, config, logx.
-- **`controls`** ✅ — buttons + IMU → **semantic events**. Exposes `begin()`, `loop()`, and
-  callbacks: `onWake` (BtnA short), `onMute` (BtnA long), `onPause` (BtnB short), `onStatus`
-  (BtnB long), `onPowerOff` (BtnPWR long), `onOrient(rot)` (IMU auto-rotate), `onLift`
-  (lift-to-wake — currently a coarse jerk detector, tuned in Stage 8). Deps: `M5.BtnA/BtnB/BtnPWR`, `M5.Imu`.
-- **`display`** ✅ — owns the screen; four states **Dark / Glance / History / Status** plus a
-  **PAUSED** overlay. Exposes `begin()`, `loop()`, `setState()`, `state()`, `setRotation()`,
-  `setGlance(read, tone, transcript, lowConfidence=false)`, `setConnection()`,
-  `setProcessing()`, `setPaused()`, `setMuted()`. Now fed **real `read` frames** (Stage 6) —
-  `setGlance` renders them and records a 5-deep history ring. See **Glance UX** below.
-  Deps: `M5.Display`, config.
+- **`controls`** ✅ — buttons + IMU → **semantic events**. Exposes `begin()`, `loop()`, the
+  held-state queries `heldA()` / `heldB()` / `heldPwr()` (drive the press indicators and the
+  clip release), and callbacks: `onWake` (BtnA short), `onHoldA` (BtnA long — hold-to-record /
+  Settings back), `onPause` (BtnB short), `onStatus` (BtnB long), `onPowerOff` (BtnPWR long),
+  `onOrient(rot)` (IMU auto-rotate), `onLift` (lift-to-wake — currently a coarse jerk detector,
+  tuned in Stage 8). Deps: `M5.BtnA/BtnB/BtnPWR`, `M5.Imu`.
+- **`display`** ✅ — owns the screen; four states **Dark / Glance / History / Status** plus the
+  **PAUSED** / recording / saving overlays. Exposes `begin()`, `loop()`, `setState()`, `state()`,
+  `setRotation()`, `setGlance(read, tone, transcript, lowConfidence=false)`, `setConnection()`,
+  `setProcessing()`, `setPaused()`; the Settings page — `settingsScroll()`, `settingsSelect()`,
+  `settingsLocked()`, `onSetting(cb)`; the chrome — `setButtons(a,b,pwr)`, `setPing(ms)`,
+  `setActivity(...)`; clips — `setClipRec(on)`, `setSaving(on)`, `setClip(msg)`; and
+  `setPortal(on, ssid, pass, ip)` for the setup-AP credentials panel. Now fed **real `read`
+  frames** (Stage 6) — `setGlance` renders them and records a 5-deep history ring (History shows
+  the 3 most recent). See **Glance UX** below. Deps: `M5.Display`, config.
 - **`cues`** ❌ **removed** — the device has no speaker output, so there is no audio-cue module.
-  The emotional signal is conveyed **visually only** (the glance tone edge bar). No tone cues,
+  The emotional signal is conveyed **visually only** (the colour of the glance heart). No tone cues,
   no alert/boot/low-battery tones, no audible idle warning, no mute.
 - **`power`** ⬜ — PMIC: boot stages, idle/motion auto-off, two-step off, sleep/wake, battery.
   `begin()`, `loop()`, `noteActivity()`, `batteryLevel()`, callbacks `onWarnIdle/onGrace/onOff`.
@@ -171,14 +180,20 @@ The governing rule: **return the user's attention to the person, don't capture i
 - **Neutral is a dim gray heart** and shows **no History tick** — quiet is the calm default.
 - **Low confidence dims the read** (`setGlance(..., true)`), ready for a confidence source.
 - **PAUSED** is a dim, unmistakable privacy screen (`||` glyph). (There is no mute glyph —
-  audio output is removed; the dormant `display::setMuted` hook is unused, see UI/UX gaps.)
+  audio output is removed, and the old `display::setMuted` hook has been deleted.)
 - Instant redraws only — no scrolling, no animation. Connection dot cornered; processing = `...`.
 
 ## Controls & mic gating (in emtext.ino)
 
-- BtnA short → wake / cycle glance↔history. BtnA long → **save a clip** (server-stored; needs
-  server support). BtnB short → **pause** (privacy screen). BtnB long → status. BtnPWR long →
-  power-off (stub until Stage 8). Lift → wake. (No mute — audio output is removed.)
+- BtnA short → wake / cycle glance↔history. BtnA long → **hold-to-record a clip**: the hold marks
+  the last utterance id seen, release waits a short grace for the tail utterance, then sends
+  `{"type":"save","from":P+1,"to":<last id>}` (`net::saveClip`); the server stores it
+  (`server/clips.py`, `/api/clips*`) and answers `saved`. BtnB short → **pause** (privacy screen).
+  BtnB long → status. BtnPWR long → power-off (stub until Stage 8). Lift → wake. (No mute — audio
+  output is removed.)
+- **In Settings the same buttons re-bind** (`emtext.ino` checks `display::state()`): BtnA click =
+  select the highlighted row, BtnB click = scroll to the next row, BtnA hold or BtnB hold = back
+  to Glance. All three are dead while the setup portal is up (`settingsLocked()`).
 - **The mic runs only when not paused.** `emtext.ino` holds `g_paused` and calls
   `audio::setPaused(g_paused)` — the privacy pause is the only thing that cuts the mic.
 
@@ -212,7 +227,7 @@ firmware/emtext/
    ├─ controls/  controls.h  controls.cpp
    ├─ display/   display.h   display.cpp
    ├─ audio/     audio.h     audio.cpp
-   ├─ proto/  transport/  net/  power/     (power planned; cues removed — no audio output)
+   ├─ proto/  transport/  net/  portal/  power/     (power planned; cues removed — no audio output)
 ```
 
 Conventions:
@@ -244,6 +259,9 @@ Conventions:
 - Timing: server pings after 30 s idle and **force-closes after 900 s with no audio** (only
   inbound audio resets that timer). Cloudflare culls proxied sockets after ~100 s of silence.
   Close codes: `1008` auth, `1000` idle.
+- Opt-in only: the server can also stream `vad` / `vad_close` telemetry frames when a client
+  connects with `?vad=1` on the `/stream` URL. The device never requests them, so they never
+  arrive; if they ever did, they fall under "ignore unknown `type`s".
 - Server VAD the device must satisfy (not implement): speech RMS ≥ 500, 650 ms trailing silence
   ends an utterance, 350 ms minimum. **The device energy floor sits below 500** so real speech
   clears the server threshold. (Device RMS is DC-corrected AC RMS, on the same scale.)
@@ -294,12 +312,13 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
   (speak → `utterance` + `read` come back); **5.3** ~3 s drop-oldest PSRAM outage ring (audio
   during a ~3 s WiFi drop survives); **5.4** degraded state (client ping + 45 s no-frame watchdog,
   keeps buffering). (Requires the Links2004 backend — AHC's sub-framing is too slow.)
-- **6 — glance rendering (real reads)** ✅ `read` → `display::setGlance` on the glance (white text,
-  tone edge bar, transcript, `...` processing indicator), a real 5-deep history ring, timeout
-  refresh while conversing. Content updates without auto-waking (lift/press to view). **Verified
-  on hardware.**
+- **6 — glance rendering (real reads)** ✅ `read` → `display::setGlance` on the glance (the
+  tone-coloured heart via `drawHeart`, the read in bold white text, `...` processing indicator —
+  the transcript is **not** on the glance, it is the dim second line of each More Info/History
+  entry), a real 5-deep history ring of which 3 entries are rendered, timeout refresh while
+  conversing. Content updates without auto-waking (lift/press to view). **Verified on hardware.**
 - **7 — audio cues** ❌ **removed** — the device has no speaker output; the emotional signal is
-  conveyed visually only (the glance tone edge bar). No `cues` module, no tones, no mute.
+  conveyed visually only (the colour of the glance heart). No `cues` module, no tones, no mute.
 - **8 — power management** ⬜ `power`: visible boot stages (**on-screen only — no failure
   tones**), idle+motion auto-off (**on-screen grace, no audible warning**), two-step off,
   deep sleep + button wake, battery; tune lift-to-wake to orientation-gated.

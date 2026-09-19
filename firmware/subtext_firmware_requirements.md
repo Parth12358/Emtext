@@ -15,8 +15,11 @@ is a microphone and a display.
   16-bit signed little-endian.
 - Chunk size shall be configurable, defaulting to 64 ms.
 - The device shall accept inbound JSON text frames of the following types:
-  ready, status, utterance, read, and ping.
+  ready, status, utterance, read, ping, pong (reply to the device's keep-alive)
+  and saved (reply to a clip save). Unknown types shall be ignored.
 - The device shall send a closing frame before any intentional disconnect.
+  **Not yet implemented** (Stage 8): `onPowerOff` is an interim stub that only
+  darkens the screen; the clean close ships with two-step power-off.
 - The server address shall be configurable at runtime and persist across
   reboots. It shall not be fixed at build time.
 
@@ -78,15 +81,25 @@ is a microphone and a display.
 - The glance state shall be triggered by lift gesture or button press and shall
   return to dark after approximately 8 seconds.
 - The glance state shall show the interpretation as the primary element, at 3–5
-  words per line, with a smaller transcript excerpt and a connection indicator.
+  words per line, with a connection indicator. The transcript is not shown on
+  the glance; it is rendered beneath each interpretation in the history state
+  ("More Info"). *(Amended: the original requirement placed a smaller
+  transcript excerpt on the glance; the shipped design keeps the glance to the
+  tone mark and the read.)*
 - Screen orientation shall follow device orientation.
 - A processing indicator shall be shown when an interpretation is pending.
-- The history state shall present the five most recent interpretations with
-  their relative position.
-- The status state shall present network name, signal strength, server state,
-  battery level and uptime.
-- Tone shall be conveyed by colour using no more than four distinct values, and
-  shall never be conveyed by colour alone.
+- The history state shall retain the five most recent interpretations and
+  present the three most recent, newest first, each with its transcript.
+  *(Amended: the original requirement rendered all five with an ordinal
+  position label; the shipped screen shows three, two lines each, no ordinal.)*
+- The status state shall present network name, server state, battery level
+  and uptime. *(Amended: signal strength (RSSI) is not shown; the top bar's
+  live ping stands in as the link-quality indicator.)*
+- Tone shall be conveyed by colour. **Deviation, deliberate:** the shipped design
+  uses five tone colours (positive, negative, sarcastic, mixed, neutral) on a
+  single heart shape, so colour *is* the sole tone cue -- see `UI_UX.md` §6 for
+  the rationale. The original requirement (no more than four values, never
+  colour alone) is recorded here as superseded, not met.
 - Low-confidence interpretations shall be rendered with visibly reduced
   emphasis relative to high-confidence interpretations.
 - The interface shall contain no scrolling text and no continuous animation.
@@ -95,7 +108,7 @@ is a microphone and a display.
 ## 6. Audio output — REMOVED (out of scope)
 
 The device has **no speaker output**. All emotional signalling is **visual** (the
-glance tone edge bar, §5): there are no tone cues, no alert/boot/low-battery
+colour of the glance heart, §5): there are no tone cues, no alert/boot/low-battery
 tones, and no audible idle warning. Muting is therefore not applicable. See §9.
 
 *(Superseded: this section previously required ≤150 ms cues for negative and
@@ -103,9 +116,12 @@ words–voice mismatch, mutable by a single action.)*
 
 ## 7. Controls
 
-- Button A: short press wakes the display or advances history. (The long-press
-  mute action is removed with audio output, §6; the gesture is free for other
-  use, e.g. saving a clip.)
+- Button A: short press wakes the display or advances to history; on the
+  status/settings screen it selects the highlighted row. Long press is
+  hold-to-record: the utterances heard while held are saved on the server as
+  one clip on release (from the status screen, long press instead returns to
+  the glance). (The former long-press mute action is removed with audio
+  output, §6.)
 - Button B: short press pauses and resumes streaming, with a visible change of
   display state; long press opens the status screen.
 - A dedicated long press shall initiate power off.

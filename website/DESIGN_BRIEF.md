@@ -24,6 +24,10 @@ headlines. Structure (borders, dividers, real numbers) should encode meaning, no
 - `src/sections/<name>.js`
 - `src/sections/<name>.css`
 
+(One sanctioned exception already exists: the **pendant** section owns a third file,
+`src/lib/device3d.js`, a three.js render of the device that `pendant.js` loads with a
+dynamic `import()`. No other section gets a third file.)
+
 The JS module MUST:
 ```js
 import './<name>.css'
@@ -74,6 +78,7 @@ Layout: `--maxw (1120px) --maxw-narrow (760px) --gutter`. Motion: `--ease --ease
 - Real content only — use the facts in your task prompt verbatim; invent no fake numbers,
   logos, testimonials, or company names.
 - No new npm packages, no external CDNs/fonts/images. Inline SVG is fine and encouraged
-  for icons/diagrams. No emoji as UI icons.
+  for icons/diagrams. No emoji as UI icons. (`three` is already a dependency, used only
+  by the pendant section's `device3d.js`; do not pull it into other sections.)
 - Accessible: real heading levels (`h2` for the section title, `h3` for sub-items),
   `aria-label`/`aria-hidden` where needed, buttons for interactive controls.

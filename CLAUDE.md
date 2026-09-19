@@ -112,10 +112,11 @@ same wire protocol**.
   no profile enrolled the prompt is byte-identical to the measured one and
   `SYSTEM_PROMPT` is untouched. `remember()` adds a line without interpreting it.
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
-- `server/clips.py` — "save this moment" (`clips.md`). `Recent` is a per-connection
-  ring of the last few utterances keyed by the wire `id` (bounded by count AND
-  age, dropped with the connection); `save()` takes the entries in a `[from,to]`
-  range and writes them as ONE `wav` + `json` sidecar under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
+- `server/clips.py` — "save this moment" (hold-to-record on the pendant). `Recent`
+  is a per-connection ring of the last few utterances keyed by the wire `id`
+  (bounded by count AND age, dropped with the connection); `save()` takes the
+  entries in a `[from,to]` range and writes them as ONE `wav` + `json` sidecar
+  under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
   `Recent`/`save`, `dashboard.py` calls the list/lookup/delete helpers. Never
   raises: a failed save is `{"type":"saved","ok":false,"error":...}` on the wire.
 - `server/static/index.html` — single-file browser client. **No build step, no external
@@ -167,7 +168,7 @@ same wire protocol**.
   Whisper+SER+LLM job. A conforming client never approaches any of them, so the
   ESP32 contract is unaffected — but don't "simplify" them away.
 - Clips are the one sanctioned retention of third-party audio: explicit
-  user action, visible confirmation, one utterance per save. `CLIPS_MAX_FILES`
+  user action, visible confirmation, one clip (a bounded id range) per save. `CLIPS_MAX_FILES`
   is load-bearing (a hostile client through the tunnel could otherwise fill
   the disk one `save` at a time); over it the save fails rather than evicting.
   `clips.py` validates the id's shape before touching the filesystem -- that

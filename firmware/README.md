@@ -26,6 +26,24 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 8 power management | `power` | ⬜ |
 | 9 acceptance + compliance | — | ⬜ |
 
+Beyond the stages, also built since: the **status-bar overlays** (connectivity glyph — shape, not
+colour — + live ping + battery %/charging bolt), the **Undertale-heart glance** in both orientations
+with vibrant soul colours, orientation-debounce, History → "More Info" (read + transcript) with
+idle auto-dim, and **hold-to-record clips** (recording/​saving/​status overlays, §9.7 in `UI_UX.md`).
+
+**What's remaining:**
+- **Stage 8 — power management** (`power`): auto-sleep (idle + motion, grace, deep sleep, wake-on-
+  button), two-step power-off with a clean WS close, visible boot stages, low-battery signal, 2.5 h
+  runtime tuning.
+- **Stage 9 — acceptance + compliance**: outage recovery visible on screen, "mic live" affordance
+  while Dark, runtime verification (or press-to-listen fallback).
+- **TLS hardening** (deployment blocker): the active Links2004 backend runs unvalidated `beginSSL`
+  (`L2004_INSECURE`) — move to validated `wss` (see Deviations).
+- **Speaker on the glance** (deferred, next candidate): the server now sends an optional `speaker`
+  label (`user`/`other`); the firmware ignores it — surfacing it on the glance is not yet built.
+- Smaller UI gaps + nice-to-haves (read-while-Dark wake, landscape History/Settings relayout, clock,
+  button-press shadows, Quick Setup at boot): tracked in `UI_UX.md` §8/§9.
+
 ## Two rules that make it modular
 
 1. **Dependencies flow one way (layering).** Foundation modules know nothing about the
@@ -216,10 +234,13 @@ Conventions:
   Then **BINARY** frames of raw PCM **16 kHz, mono, int16 little-endian**, each **< 64 KiB**
   (~20–100 ms of audio per frame). Do not negotiate per-message-deflate.
 - Server → device JSON frames: `ready`; `status` (`state` ∈ `listening`/`heard`/`thinking`);
-  `utterance` (`id`, `transcript`); `read` (`id`, `tone`, `read`, optional
-  `voice{emotion,valence,arousal}`); `ping` (`t`); `pong` (`t`).
-  **`tone` ∈ `positive | negative | neutral | sarcastic | mixed`.** Ignore unknown `type`s.
-- Device → server (optional): `{"type":"ping","t":...}` → server echoes `pong`.
+  `utterance` (`id`, `transcript`, optional `speaker`); `read` (`id`, `tone`, `read`, optional
+  `voice{emotion,valence,arousal}`, optional `speaker{label,score}`); `saved` (`id`, `ok`, optional
+  `error`/`clip`); `ping` (`t`); `pong` (`t`).
+  **`tone` ∈ `positive | negative | neutral | sarcastic | mixed`.** A `user` (own-voice) utterance
+  gets an `utterance` but **no `read`**. Ignore unknown `type`s.
+- Device → server: `{"type":"ping","t":...}` → `pong`; `{"type":"save","from":F,"to":T}` — clip an
+  inclusive utterance-id range (hold-to-record; `from==to` for one utterance) → `saved`.
 - Timing: server pings after 30 s idle and **force-closes after 900 s with no audio** (only
   inbound audio resets that timer). Cloudflare culls proxied sockets after ~100 s of silence.
   Close codes: `1008` auth, `1000` idle.

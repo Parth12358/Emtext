@@ -41,9 +41,10 @@ so audio capture never stalls), and — the milestone — **the full loop workin
 this server, survives a ~3 s WiFi drop with no audio loss, and **shows the tone read on its own
 screen** (Stages 0–6 of 9). A **phone-based Wi-Fi setup portal** is also done — toggle a WPA2
 setup hotspot from the device and reconfigure Wi-Fi/host/token from a captive page that pops up
-automatically. Remaining: power management (Stage 8) and acceptance/compliance (9). (Audio cues,
-the former Stage 7, are dropped — the pendant has no speaker; the emotional signal is visual only.)
-Full module architecture and the
+automatically. **Hold-to-record clips** are also done — hold the button to save a moment (an
+utterance-id range) to the server for later review on the dashboard. Remaining: power management
+(Stage 8) and acceptance/compliance (9). (Audio cues, the former Stage 7, are dropped — the pendant
+has no speaker; the emotional signal is visual only.) Full module architecture and the
 staged plan live in [firmware/README.md](firmware/README.md).
 
 Everything below documents the **server half**.

@@ -316,7 +316,7 @@ New target work (from this plan):
       utterance id>}` (`net::saveClip`) and shows a full-screen **saved/empty** status for a few
       seconds before resuming. Range is tracked from **both** `utterance` and `read` ids (so `user`
       lines + the tail are captured — all spoken text). Server bundles the range into one clip.
-      Spec: `/clips.md`.
+      Spec: §9.7 below + `CLAUDE.md` (server side).
 - [x] **Info bar** ✅ — done as the top status bar (connectivity glyph + ping + battery %, `drawTopBar`).
 - [ ] **Clock** — sized/placed per §4.7.
 - [ ] **Button-press shadows** for BtnB / PWR.
@@ -339,27 +339,26 @@ glance tone edge bar, §6). There are no tone cues, no alert/boot/low-battery to
 idle warning, and no mute control. *(Superseded: ≤150 ms cues for negative + words–voice
 mismatch, with a 75% battery volume cap and a Settings mute toggle.)*
 
-### 9.7 Clips — server-stored, reviewed later 🔲
-BtnA-hold (from Dark/Glance) **saves the current moment to the server** so it can be reviewed
-later on a page/dashboard — not kept on the device (it has no storage beyond NVS config).
+### 9.7 Clips — hold-to-record, built ✅
+Hold **Button A** to save the moment to the server for later review (dashboard). Nothing is stored on
+the device (no storage beyond NVS config).
 
-- **Flow:** BtnA-hold → device sends a small control frame to the server → brief "clip saved"
-  confirmation on screen.
-- **Recommended payload (open q §10.1):** flag the **last utterance/read `id`**. The server
-  already has that utterance's audio, transcript, tone and read, so the device sends only the id
-  — no re-streaming audio. Device already tracks the last read id + `g_lastTranscript`.
-- **Wire protocol:** an **additive** device→server JSON frame, e.g. `{"type":"save","id":<n>}`.
-  Additive-only is required by the protocol contract, and the server already ignores unknown
-  types, so nothing else breaks. Server replies (e.g. `{"type":"saved","id":<n>}`) so the device
-  can confirm on-screen.
-- **Server side (new work, outside firmware):** retain the flagged utterance's
-  {audio, transcript, tone, read, timestamp} and expose it for later review. ⚠️ The brief says
-  **no database** and **no default retention of third-party audio** — clips are **file-based**
-  (a clips folder / JSON index, not a DB) and **user-initiated** (explicit, visible retention,
-  not default), which is the intended way to stay within both rules. This is a deliberate scope
-  addition to confirm.
-- **Compliance note:** because a clip is an explicit user action that retains audio, the "clip
-  saved" confirmation doubles as the visible-retention signal.
+- **Flow:** hold BtnA → full-screen **recording** overlay (pause-screen style) + live `M:SS` timer,
+  screen kept awake → release → **"saving…"** while it waits a short grace (no new utterance ~1.2 s,
+  or a ~4 s cap) for the tail utterance to finish → sends the save → full-screen **saved / empty /
+  save failed** status for ~2.5 s → resumes the glance.
+- **What it sends (additive wire frame):** `{"type":"save","from":P+1,"to":<highest utterance id>}` —
+  an inclusive **id range** of every utterance heard during the hold. Ids are tracked from **both**
+  `utterance` and `read` frames, so the listener's own `user` lines (which get no `read`) and the
+  tail are captured — all spoken text. A one-utterance clip is `from == to`.
+- **Reply:** `{"type":"saved","id":n,"ok":<bool>[,"error":..][,"clip":..]}` drives the status. The
+  device tolerates the reply being absent (optimistic confirm).
+- **Code:** `net::saveClip(from,to)`, `proto::Type::Saved`, `emtext.ino` (hold start / release grace),
+  `display::setClipRec` / `setSaving` / `setClip` (the three overlays).
+- **Server:** retains a bounded per-connection ring (last 8 utterances / 45 s), bundles the id range
+  into one `wav` + JSON sidecar, serves them under `/api/clips` on the dashboard — file-based,
+  user-initiated retention (details in `CLAUDE.md`). The on-screen confirmation is the visible-
+  retention signal (compliance: no third-party audio retained by default).
 
 ### 9.3 Two-step power-off (Stage 8)
 Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket close** before

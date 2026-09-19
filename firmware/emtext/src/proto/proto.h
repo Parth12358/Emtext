@@ -4,7 +4,7 @@
 // Wire frames, as value types. Fixed char buffers (no String/heap) so a Frame
 // can be copied across cores through a FreeRTOS queue by value.
 namespace proto {
-  enum class Type { Unknown, Ready, Status, Utterance, Read, Ping, Pong };
+  enum class Type { Unknown, Ready, Status, Utterance, Read, Ping, Pong, Saved };
   enum class Tone { Neutral, Positive, Negative, Sarcastic, Mixed };
 
   struct Frame {
@@ -18,6 +18,7 @@ namespace proto {
     float valence = -1.0f;        // -1 = absent
     float arousal = -1.0f;
     double t = 0;                 // ping/pong timestamp
+    bool  ok = false;             // saved reply: did the clip save succeed
   };
 
   const char* toneName(Tone t);            // "neutral"/"positive"/...

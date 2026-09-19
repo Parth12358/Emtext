@@ -311,9 +311,10 @@ New target work (from this plan):
       `display::setMuted` / mute-glyph code (`display.cpp:307`, never triggered) can be deleted in
       a cleanup pass.
 - [ ] **Rename + rework** History → **More Info** (detail/summary). Still a 5-row list in code.
-- [ ] **Clips** — BtnA-hold flags the last utterance to the server for later review (§9.7):
-      additive `save` frame + on-screen confirm; server-side file storage + review page.
-      (BtnA-hold currently logs a stub.)
+- [~] **Clips** — **device side built**: BtnA-hold sends `{"type":"save","id":<last read id>}`
+      (`net::saveClip`), wakes the glance, shows a "saved" badge, and handles the server's `saved`
+      reply (`proto::Type::Saved` → `display::setClip`). **Server side still to build** — retention,
+      file storage, review page: spec in `/clips.md` (§9.7).
 - [ ] **Info bar** — battery + connectivity, compact.
 - [ ] **Clock** — sized/placed per §4.7.
 - [ ] **Button-press shadows** for BtnB / PWR.

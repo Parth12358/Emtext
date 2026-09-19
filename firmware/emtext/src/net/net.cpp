@@ -58,6 +58,9 @@ namespace {
   // to flash TX/RX indicators on the status bar. Single aligned ints -> race-safe read.
   volatile uint32_t txAt = 0, rxAt = 0;
 
+  // Clip save: BtnA-hold on core 1 sets the id here; the core-0 task sends the frame.
+  volatile int pendingSaveId = -1;
+
   // Cross-core audio handoff (5.3): a drop-oldest byte ring in PSRAM. core 1 (sendAudio)
   // writes, core 0 (task) drains -> sendBIN. Sized for a ~3 s outage so a WiFi blip loses
   // no audio (requirement Section 2). Mutex-guarded (both cores touch head/tail).
@@ -224,6 +227,14 @@ namespace {
           snprintf(pb, sizeof(pb), "{\"type\":\"ping\",\"t\":%lu}", (unsigned long)millis());
           transport::sendText(pb);
         }
+
+        // Clip save (device -> server): an additive TEXT frame between the audio frames.
+        if (gotReady && pendingSaveId >= 0) {
+          char sb[48];
+          snprintf(sb, sizeof(sb), "{\"type\":\"save\",\"id\":%d}", pendingSaveId);
+          transport::sendText(sb);
+          pendingSaveId = -1;
+        }
         // 5.4: no server frame for DEGRADED_MS while the socket is still up = degraded.
         // Keep the socket and keep buffering into the ring -- do NOT tear down.
         if (gotReady && st == net::State::Ready && (millis() - lastRx) > DEGRADED_MS) {
@@ -307,6 +318,7 @@ const char* net::stateName() { return NAMES[(int)st]; }
 int net::pingMs() { return pingMedianMs; }   // median RTT (ms), -1 until measured
 uint32_t net::lastTxMs() { return txAt; }    // millis() of last audio sent (0 = never)
 uint32_t net::lastRxMs() { return rxAt; }    // millis() of last frame received (0 = never)
+void net::saveClip(int id) { pendingSaveId = id; }   // core 1 -> queue a {type:save,id} frame
 void net::onFrame(void (*cb)(const proto::Frame&)) { cbFrame = cb; }
 
 // Called on core 1 (from audio::onChunk). Copies the chunk into the TX queue,

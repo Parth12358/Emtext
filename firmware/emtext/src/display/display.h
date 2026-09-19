@@ -33,6 +33,7 @@ namespace display {
   void  setButtons(bool a, bool b, bool pwr);  // button-held -> light the press indicators
   void  setPing(int ms);                       // median RTT (ms) for the status bar; -1 = unknown
   void  setActivity(bool listening, bool sending, bool receiving, bool clip);  // dev status glyphs
+  void  setClip(const String& msg);            // transient clip-save confirmation ("saved" / …)
   void  setPaused(bool on);                    // privacy switch: mic not listening
   void  setPortal(bool on, const String& ssid, const String& pass, const String& ip);  // setup-AP status
 }

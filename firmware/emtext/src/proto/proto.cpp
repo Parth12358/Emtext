@@ -59,6 +59,10 @@ proto::Type proto::parse(const char* json, Frame& out) {
   } else if (!strcmp(type, "pong")) {
     out.type = Type::Pong;
     out.t = doc["t"] | 0.0;
+  } else if (!strcmp(type, "saved")) {              // clip-save reply
+    out.type = Type::Saved;
+    out.id = doc["id"] | 0;
+    out.ok = doc["ok"] | false;
   } else {
     out.type = Type::Unknown;   // unknown types are ignored, never an error
   }

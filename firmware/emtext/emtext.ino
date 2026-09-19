@@ -37,14 +37,22 @@ static void applyMic() {
 }
 
 // BtnA hold: back out of Settings; otherwise save a clip (server-stored; needs server support).
-static uint32_t g_clipAt = 0;   // millis() of the last clip action (drives the dev clip glyph)
+static uint32_t g_clipAt = 0;      // millis() of the last clip action (drives the dev clip glyph)
+static int      g_lastReadId = 0;  // id of the last displayed read (the clip-save target; see clips.md)
 static void onHoldA() {
   if (display::state() == display::State::Status) {
     if (!display::settingsLocked()) display::setState(display::State::Glance);
     return;
   }
-  g_clipAt = millis();
-  LOG_INFO("clip: save last read (TODO -- needs server support)");
+  if (g_lastReadId > 0) {                       // save the moment the user last saw
+    net::saveClip(g_lastReadId);                // -> {"type":"save","id":..} on the /stream socket
+    display::setState(display::State::Glance);   // wake so the confirmation is visible
+    display::setClip("saved");                   // optimistic; the server's `saved` reply confirms
+    g_clipAt = millis();
+    LOG_INFO("clip: save id #%d", g_lastReadId);
+  } else {
+    LOG_INFO("clip: nothing to save yet");
+  }
 }
 static void onPause() {
   // In Settings, BtnB scrolls the rows instead of toggling privacy pause.
@@ -105,8 +113,13 @@ static void onNetFrame(const proto::Frame& f) {
       break;
     case proto::Type::Read:
       LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read);
+      g_lastReadId = f.id;                       // the clip-save target
       display::setProcessing(false);
       display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript);
+      break;
+    case proto::Type::Saved:                      // clip-save reply (see clips.md)
+      LOG_INFO("net: clip %s (#%d)", f.ok ? "saved" : "FAILED", f.id);
+      display::setClip(f.ok ? "saved" : "save failed");
       break;
     default: break;
   }

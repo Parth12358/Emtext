@@ -34,6 +34,8 @@ namespace {
   bool   bA = false, bB = false, bPwr = false;   // button-held -> press indicators
   int    pingMs = -1;                            // median RTT (ms) from net; -1 = unknown
   bool   actListen = false, actSend = false, actRecv = false, actClip = false;   // dev activity
+  String clipMsg = "";                           // transient clip-save confirmation badge
+  uint32_t clipUntil = 0;
   String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
@@ -157,6 +159,15 @@ namespace {
       d.setTextColor(cMis(), TFT_BLACK);
       d.setTextDatum(top_left);
       d.drawString("...", 14, 13);                  // clear of the top bar / left strip
+    }
+
+    if (clipMsg.length() && millis() < clipUntil) { // transient clip-save confirmation badge
+      d.setTextSize(1); d.setTextDatum(middle_center);
+      int tw = d.textWidth(clipMsg.c_str());
+      int bw = tw + 12, bh = 14, bx = W / 2 - bw / 2, by = STRIP + 4;
+      d.fillRoundRect(bx, by, bw, bh, 4, cDim());
+      d.setTextColor(TFT_BLACK, cDim());
+      d.drawString(clipMsg.c_str(), W / 2, by + bh / 2);
     }
   }
 
@@ -406,6 +417,12 @@ void display::loop() {
     lastBar = millis();
     drawTopBar(M5.Display.width(), M5.Display.height());
   }
+
+  // clear the clip-save badge when it expires
+  if (clipMsg.length() && millis() >= clipUntil) {
+    clipMsg = "";
+    if (!paused && st != State::Dark) draw();
+  }
 }
 
 void display::setRotation(int rot) {
@@ -451,6 +468,11 @@ void display::setPing(int ms) {
   pingMs = ms;
   if (!paused && st != State::Dark)
     drawTopBar(M5.Display.width(), M5.Display.height());   // repaint the bar only (no flicker)
+}
+
+void display::setClip(const String& msg) {
+  clipMsg = msg; clipUntil = millis() + 1500;      // show the confirmation for ~1.5s
+  if (!paused && st != State::Dark) draw();
 }
 
 void display::setActivity(bool listening, bool sending, bool receiving, bool clip) {

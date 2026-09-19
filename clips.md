@@ -19,9 +19,11 @@ protocol contract.
 
 - **Device → server:**
   ```json
-  {"type": "save", "id": <utterance/read id>}
+  {"type": "save", "from": <first id>, "to": <last id>}
   ```
-  `id` is the integer id the device last displayed (from the `read` / `utterance` frames).
+  An **inclusive id range** = the utterances captured while Button A was **held** (press→release);
+  see "Clip span" below. `from`/`to` are per-connection wire ids from the `read` frames. A single-
+  utterance clip is just `from == to`. *(Superseded: the old single form was `{"type":"save","id":n}`.)*
 
 - **Server → device (reply):**
   ```json
@@ -41,6 +43,13 @@ the device only needs to name it. Cheapest path, no extra bandwidth, fits the fi
 the *current* connection. If the socket dropped and reconnected since the read, the id is stale —
 the server should reply `ok: false` rather than save the wrong moment.
 
+### Clip span (hold-to-record)
+Button A is **hold-to-record**: the clip is **only the utterances that occur while the button is
+held** (the "held window") — it does **not** include the utterance the user had already heard at
+press. On press the device notes the current last-read id `P`; on release it sends
+`from = P + 1, to = <last read id at release>`. If no new utterance completed during the hold
+(`to < from`), the device sends nothing and shows "empty" — so the server always gets `to >= from`.
+
 ## What the server needs to build
 
 1. **Short rolling retention, keyed by `id`.** A `read` (and thus the id the user reacts to) arrives
@@ -49,9 +58,11 @@ the server should reply `ok: false` rather than save the wrong moment.
    `{audio (PCM/wav), transcript, tone, read, voice, speaker, timestamp}` — long enough that a save arriving
    a few seconds after the read still finds it. **Not indefinite** — bound it like `metrics.py`
    (memory-only, rolling), so it can never grow without limit or take the server down.
-2. **Persist on `save` to FILES, not a database** (respects the no-database rule): e.g. a `clips/`
-   dir with a `wav` + a JSON sidecar per clip, or a single JSON index. This is explicit,
-   user-initiated retention.
+2. **Bundle the range into ONE clip, persist to FILES (not a database).** On `save`, gather every
+   retained utterance whose id is in `[from, to]`, **concatenate their audio in id order** and join
+   their transcripts/reads, and write it as a **single** clip — e.g. a `clips/` dir with a `wav` +
+   a JSON sidecar. Ids not in the retention ring are skipped; if the range yields no audio, reply
+   `ok: false`. This is explicit, user-initiated retention.
 3. **Review surface.** A way to list/play clips later. The dashboard already hosts `/api/*`
    (`server/dashboard.py`) — a `GET /api/clips` (list) + audio playback + a small page is the
    natural home. **Token-gated on the same rule as everything else** (only enforced when
@@ -75,15 +86,22 @@ retain anything on `save` beyond the flagged clip.
 - **Never block the `/stream` read loop**; do heavy work off the event loop, like the existing
   transcription/SER/LLM path.
 
-## Firmware side (device)
+## Firmware side (device) — hold-to-record, built
 
-- **BtnA-hold** → device sends `{"type":"save","id":<last read id>}` and shows a brief on-screen
-  **"saved"** confirmation (optimistic; upgraded to the server's `ok` result when the `saved` reply
-  arrives). The device already tracks the last displayed read id.
+- **BtnA is hold-to-record.** On the hold threshold the device shows a persistent **"rec"** badge and
+  notes the last-read id `P`; on **release** it sends `{"type":"save","from":P+1,"to":<last read id>}`
+  and shows an optimistic **"saved"** badge (upgraded to the server's `ok`/`error` when the `saved`
+  reply arrives). An empty hold (no new utterance) sends nothing and shows **"empty"**.
 - The device **ignores** the feature gracefully if the server never replies (pre-implementation).
 - No audio is re-sent; no local storage.
 
 ## Server implementation (done)
+
+> ⚠️ **Built for the superseded single-`id` form.** The contract is now an **id range**
+> `{"type":"save","from":F,"to":T}` (hold-to-record). The server must be updated to accept it and
+> **bundle** the retained utterances in `[F,T]` into one clip (concatenate audio in id order, join
+> metadata). The retention ring, file storage, review page, and reply shape all carry over — only
+> the `save` handler and `clips.save()` need to take a range instead of a single id.
 
 - `server/clips.py` -- per-connection retention ring (`Recent`), `save()`, listing/lookup/delete. Only
   this module knows the file layout.

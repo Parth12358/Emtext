@@ -37,22 +37,22 @@ static void applyMic() {
 }
 
 // BtnA hold: back out of Settings; otherwise save a clip (server-stored; needs server support).
-static uint32_t g_clipAt = 0;      // millis() of the last clip action (drives the dev clip glyph)
-static int      g_lastReadId = 0;  // id of the last displayed read (the clip-save target; see clips.md)
+static uint32_t g_clipAt = 0;         // millis() of the last clip action (drives the dev clip glyph)
+static int      g_lastReadId = 0;     // id of the last displayed read
+static bool     g_clipHolding = false;// BtnA hold-to-record in progress
+static int      g_clipStartAfter = 0; // last read id at press -> the clip captures ids AFTER this
+// BtnA hold BEGINS here (fires once at the hold threshold). Hold-to-record: the clip is the
+// utterances heard until release -- the "held window" (see clips.md). Release is handled in loop().
 static void onHoldA() {
   if (display::state() == display::State::Status) {
     if (!display::settingsLocked()) display::setState(display::State::Glance);
     return;
   }
-  if (g_lastReadId > 0) {                       // save the moment the user last saw
-    net::saveClip(g_lastReadId);                // -> {"type":"save","id":..} on the /stream socket
-    display::setState(display::State::Glance);   // wake so the confirmation is visible
-    display::setClip("saved");                   // optimistic; the server's `saved` reply confirms
-    g_clipAt = millis();
-    LOG_INFO("clip: save id #%d", g_lastReadId);
-  } else {
-    LOG_INFO("clip: nothing to save yet");
-  }
+  g_clipHolding = true;
+  g_clipStartAfter = g_lastReadId;
+  display::setState(display::State::Glance);      // wake so the "rec" badge is visible
+  display::setClipRec(true);
+  LOG_INFO("clip: REC START -- holding; will capture reads AFTER #%d", g_clipStartAfter);
 }
 static void onPause() {
   // In Settings, BtnB scrolls the rows instead of toggling privacy pause.
@@ -114,6 +114,7 @@ static void onNetFrame(const proto::Frame& f) {
     case proto::Type::Read:
       LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read);
       g_lastReadId = f.id;                       // the clip-save target
+      if (g_clipHolding) LOG_INFO("clip: captured read #%d during hold", f.id);
       display::setProcessing(false);
       display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript);
       break;
@@ -194,6 +195,23 @@ void loop() {
                        nowMs - net::lastTxMs() < 250,                              // sending
                        nowMs - net::lastRxMs() < 250,                              // receiving
                        nowMs - g_clipAt < 500);                                    // clip
+  // hold-to-record: finalize the clip when BtnA is released
+  if (g_clipHolding && !controls::heldA()) {
+    g_clipHolding = false;
+    display::setClipRec(false);
+    int from = g_clipStartAfter + 1, to = g_lastReadId;   // the held-window utterances
+    LOG_INFO("clip: REC RELEASE -- startAfter=#%d lastRead=#%d -> range %d..%d",
+             g_clipStartAfter, g_lastReadId, from, to);
+    if (to >= from) {
+      net::saveClip(from, to);                            // -> {"type":"save","from":..,"to":..}
+      display::setClip("saved");                          // optimistic; server's `saved` confirms
+      g_clipAt = nowMs;
+      LOG_INFO("clip: SAVE REQUESTED #%d..#%d (%d utterance(s))", from, to, to - from + 1);
+    } else {
+      display::setClip("empty");                          // nothing new completed during the hold
+      LOG_INFO("clip: EMPTY -- no NEW read completed during the hold (reads lag speech by ~1-3s)");
+    }
+  }
   display::loop();
   audio::loop();
   net::loop();

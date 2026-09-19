@@ -58,8 +58,9 @@ namespace {
   // to flash TX/RX indicators on the status bar. Single aligned ints -> race-safe read.
   volatile uint32_t txAt = 0, rxAt = 0;
 
-  // Clip save: BtnA-hold on core 1 sets the id here; the core-0 task sends the frame.
-  volatile int pendingSaveId = -1;
+  // Clip save: BtnA hold-to-record on core 1 sets an inclusive id range here; the core-0
+  // task sends the frame. -1 = nothing pending.
+  volatile int pendingFrom = -1, pendingTo = -1;
 
   // Cross-core audio handoff (5.3): a drop-oldest byte ring in PSRAM. core 1 (sendAudio)
   // writes, core 0 (task) drains -> sendBIN. Sized for a ~3 s outage so a WiFi blip loses
@@ -229,11 +230,13 @@ namespace {
         }
 
         // Clip save (device -> server): an additive TEXT frame between the audio frames.
-        if (gotReady && pendingSaveId >= 0) {
-          char sb[48];
-          snprintf(sb, sizeof(sb), "{\"type\":\"save\",\"id\":%d}", pendingSaveId);
+        // Inclusive id range [from,to] = the utterances captured while BtnA was held.
+        if (gotReady && pendingFrom >= 0) {
+          char sb[64];
+          snprintf(sb, sizeof(sb), "{\"type\":\"save\",\"from\":%d,\"to\":%d}", pendingFrom, pendingTo);
           transport::sendText(sb);
-          pendingSaveId = -1;
+          LOG_INFO("net: clip SAVE SENT %d..%d", pendingFrom, pendingTo);
+          pendingFrom = -1; pendingTo = -1;
         }
         // 5.4: no server frame for DEGRADED_MS while the socket is still up = degraded.
         // Keep the socket and keep buffering into the ring -- do NOT tear down.
@@ -318,7 +321,7 @@ const char* net::stateName() { return NAMES[(int)st]; }
 int net::pingMs() { return pingMedianMs; }   // median RTT (ms), -1 until measured
 uint32_t net::lastTxMs() { return txAt; }    // millis() of last audio sent (0 = never)
 uint32_t net::lastRxMs() { return rxAt; }    // millis() of last frame received (0 = never)
-void net::saveClip(int id) { pendingSaveId = id; }   // core 1 -> queue a {type:save,id} frame
+void net::saveClip(int from, int to) { pendingFrom = from; pendingTo = to; }  // queue {save,from,to}
 void net::onFrame(void (*cb)(const proto::Frame&)) { cbFrame = cb; }
 
 // Called on core 1 (from audio::onChunk). Copies the chunk into the TX queue,

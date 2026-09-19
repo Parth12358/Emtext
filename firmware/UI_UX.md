@@ -290,32 +290,32 @@ Built-UI gaps (each names where it lives):
 
 - [ ] **Read while Dark doesn't wake the screen** (`emtext.ino:onNetFrame` + `display::setGlance`).
       Decide: wake on every read / only non-neutral / cue-only. Most important call here.
-- [ ] **Transcript is dead data** (`display.cpp:drawGlance`, `emtext.ino:g_lastTranscript`).
-      Surface it in More Info or drop it.
-- [ ] **More Info rows overflow** (`display.cpp` History case) — not width-clipped; reuse
-      `capWords`/`wrap2`.
+- [x] **Transcript surfaced** ✅ — shown as a dim second line under each read in History (stored in
+      the history ring), so the terse 5-word read has its "what was said" context. No longer dead data.
+- [x] **History rows width-clipped** ✅ — each line clipped to width with `wrapN`, both orientations.
 - [x] **Degraded distinct** ✅ — connectivity is now shape-based (`drawConnGlyph`: filled/ring/ring+dot),
       so Degraded reads differently from Searching — and it's colour-blind safe (the user is colour-blind).
 - [ ] **No "mic live" affordance while Dark** (compliance).
-- [ ] **Settings/More Info never auto-dim** (`display.cpp:loop`) — Settings now has explicit back
-      (BtnB/BtnA hold) + PWR→Dark, but neither auto-dims on idle. Add an idle timeout.
-- [ ] **Static fields on Settings** — footer uptime/battery only refresh on redraw; add a periodic
-      redraw while on-screen. (ping isn't surfaced at all — net has no RTT yet.)
+- [x] **History/Settings auto-dim** ✅ — idle-dim to Dark after `IDLE_MS` (20s; Glance stays 8s),
+      reset on interaction; never during the setup portal or clip recording.
+- [x] **Live status** ✅ — the top bar refreshes battery/ping every ~5s (`display::loop`) and ping
+      (median RTT) is measured off the keepalive. (Settings' own footer still refreshes on redraw
+      only — minor; the top bar carries the live data now.)
 
 New target work (from this plan):
 
 - [x] **Settings page** ✅ built — Status is now a scrollable page (wifi/bright/power) with a
       portal-lock credentials panel. Pending hardware verify.
-- [x] **Mute removed** — with audio output cut there is nothing to mute; the Settings `cues` row
-      and the mute glyph are dropped from the plan. BtnA-hold stays free for clips. The dormant
-      `display::setMuted` / mute-glyph code (`display.cpp:307`, never triggered) can be deleted in
-      a cleanup pass.
-- [ ] **Rename + rework** History → **More Info** (detail/summary). Still a 5-row list in code.
-- [~] **Clips** — **device side built**: BtnA-hold sends `{"type":"save","id":<last read id>}`
-      (`net::saveClip`), wakes the glance, shows a "saved" badge, and handles the server's `saved`
-      reply (`proto::Type::Saved` → `display::setClip`). **Server side still to build** — retention,
-      file storage, review page: spec in `/clips.md` (§9.7).
-- [ ] **Info bar** — battery + connectivity, compact.
+- [x] **Mute removed** — with audio output cut there is nothing to mute; the Settings `cues` row and
+      the mute glyph are dropped. BtnA-hold is now hold-to-record clips. The dormant
+      `display::setMuted` / mute-glyph code has been **deleted**.
+- [x] **History → "More Info"** ✅ — read + dim transcript per entry (3 entries), a light detail view.
+- [~] **Clips** — **device side built (hold-to-record)**: hold BtnA to record → persistent "rec"
+      badge; on release the device sends `{"type":"save","from":P+1,"to":<last read id>}` (the
+      held-window utterances, `net::saveClip(from,to)`) and shows "saved"/"empty"; handles the
+      server's `saved` reply (`proto::Type::Saved` → `display::setClip`). **Server side needs
+      updating** to accept the range and bundle it into one clip — spec in `/clips.md` (§9.7).
+- [x] **Info bar** ✅ — done as the top status bar (connectivity glyph + ping + battery %, `drawTopBar`).
 - [ ] **Clock** — sized/placed per §4.7.
 - [ ] **Button-press shadows** for BtnB / PWR.
 - [ ] **Quick Setup at boot** + boot-stage progress.

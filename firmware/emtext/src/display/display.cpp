@@ -8,6 +8,7 @@ namespace {
   display::State st = display::State::Dark;
   uint32_t       glanceSince = 0;
   const uint32_t GLANCE_MS = 8000;
+  const uint32_t IDLE_MS   = 20000;   // History/Settings auto-dim to Dark after this idle
 
   const int      BAR_W = 7;      // tone edge-bar width, px
   const uint8_t  BRIGHT_PAUSED = 60;
@@ -36,10 +37,11 @@ namespace {
   bool   actListen = false, actSend = false, actRecv = false, actClip = false;   // dev activity
   String clipMsg = "";                           // transient clip-save confirmation badge
   uint32_t clipUntil = 0;
+  bool   clipRec = false;                        // hold-to-record in progress -> persistent "rec" badge
   String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
-  struct Hist { String read; String tone; };
+  struct Hist { String read; String tone; String transcript; };
   Hist hist[5];
   int  histCount = 0, histNext = 0;
 
@@ -161,13 +163,15 @@ namespace {
       d.drawString("...", 14, 13);                  // clear of the top bar / left strip
     }
 
-    if (clipMsg.length() && millis() < clipUntil) { // transient clip-save confirmation badge
+    String badge = clipRec ? String("rec")           // recording (persistent while held)
+                 : ((clipMsg.length() && millis() < clipUntil) ? clipMsg : String(""));
+    if (badge.length()) {                             // clip recording / save-confirmation badge
       d.setTextSize(1); d.setTextDatum(middle_center);
-      int tw = d.textWidth(clipMsg.c_str());
+      int tw = d.textWidth(badge.c_str());
       int bw = tw + 12, bh = 14, bx = W / 2 - bw / 2, by = STRIP + 4;
       d.fillRoundRect(bx, by, bw, bh, 4, cDim());
       d.setTextColor(TFT_BLACK, cDim());
-      d.drawString(clipMsg.c_str(), W / 2, by + bh / 2);
+      d.drawString(badge.c_str(), W / 2, by + bh / 2);
     }
   }
 
@@ -367,22 +371,30 @@ namespace {
         drawGlance();
         break;
 
-      case display::State::History:
+      case display::State::History: {               // "More Info": read + transcript, most-recent first
         d.setTextDatum(top_left);
         d.setTextSize(1);
         d.setTextColor(cDim(), TFT_BLACK);
-        d.drawString("history", 14, 14);            // below the top bar
-        if (histCount == 0) { d.drawString("(nothing yet)", 14, 32); break; }
-        for (int i = 0; i < histCount; i++) {       // most-recent first
-          int idx = (histNext - 1 - i + 10) % 5;
-          int y = 32 + i * 16;
+        d.drawString("more info", 14, 14);          // below the top bar
+        if (histCount == 0) { d.drawString("(nothing yet)", 14, 34); break; }
+        int areaW = d.width() - 22 - STRIP;         // clear the left strip + right indicator bar
+        int show = histCount < 3 ? histCount : 3;   // 3 entries, 2 lines each (read + transcript)
+        String ln[1];
+        int y = 30;
+        for (int i = 0; i < show; i++) {
+          int idx = (histNext - 1 - i + 5) % 5;
           Bar tb = toneBar(hist[idx].tone);
-          if (tb.show) d.fillRect(14, y + 2, 4, 8, tb.color);
-          d.setTextColor(cDim(), TFT_BLACK);
-          String label = (i == 0) ? "now  " : (String(i) + " ago ");
-          d.drawString((label + hist[idx].read).c_str(), 22, y);
+          if (tb.show) d.fillRect(14, y + 2, 4, 8, tb.color);      // tone tick
+          d.setTextColor(cDim(), TFT_BLACK);                        // read line (clipped to width)
+          wrapN(hist[idx].read, areaW, 1, ln);
+          d.drawString(ln[0].c_str(), 22, y);
+          d.setTextColor(cFaint(), TFT_BLACK);                      // transcript line, dimmer
+          wrapN(hist[idx].transcript, areaW, 1, ln);
+          d.drawString(ln[0].c_str(), 22, y + 11);
+          y += 26;
         }
         break;
+      }
 
       case display::State::Status:      // Status doubles as the Settings page
         drawSettings();
@@ -402,14 +414,18 @@ display::State display::state() { return st; }
 
 void display::setState(State s) {
   st = s;
-  if (s == State::Glance) glanceSince = millis();
+  if (s != State::Dark) glanceSince = millis();   // start the idle timer for any lit state
   LOG_INFO("display -> %d", (int)s);
   draw();
 }
 
 void display::loop() {
-  if (!paused && st == State::Glance && millis() - glanceSince >= GLANCE_MS)
-    setState(State::Dark);
+  if (!paused && !clipRec && st != State::Dark) {   // auto-dim: Glance 8s, History/Settings 20s
+    uint32_t timeout = (st == State::Glance) ? GLANCE_MS : IDLE_MS;
+    if (!(st == State::Status && portalOn) &&        // stay lit during setup; never dim while recording
+        millis() - glanceSince >= timeout)
+      setState(State::Dark);
+  }
 
   // Keep the top bar live (battery %, charging bolt, ping) without a full redraw/flicker.
   static uint32_t lastBar = 0;
@@ -436,6 +452,7 @@ void display::setGlance(const String& read, const String& tone,
   gRead = read; gTone = tone; gTranscript = transcript; gLowConf = lowConfidence;
   hist[histNext].read = read;                    // record into history
   hist[histNext].tone = tone;
+  hist[histNext].transcript = transcript;
   histNext = (histNext + 1) % 5;
   if (histCount < 5) histCount++;
   if (st == State::Glance) { glanceSince = millis(); draw(); }   // refresh timeout + redraw
@@ -475,6 +492,12 @@ void display::setClip(const String& msg) {
   if (!paused && st != State::Dark) draw();
 }
 
+void display::setClipRec(bool on) {
+  if (on == clipRec) return;
+  clipRec = on;
+  if (!paused && st != State::Dark) draw();
+}
+
 void display::setActivity(bool listening, bool sending, bool receiving, bool clip) {
   if (listening == actListen && sending == actSend && receiving == actRecv && clip == actClip) return;
   actListen = listening; actSend = sending; actRecv = receiving; actClip = clip;
@@ -494,11 +517,13 @@ bool display::settingsLocked() { return portalOn; }
 
 void display::settingsScroll() {
   if (portalOn) return;                               // locked: cursor pinned
+  glanceSince = millis();                             // interaction -> reset the idle-dim timer
   selCursor = (selCursor + 1) % (int)Setting::COUNT;
   if (!paused && st == State::Status) draw();
 }
 
 void display::settingsSelect() {
+  glanceSince = millis();                             // interaction -> reset the idle-dim timer
   // While locked, the only selectable action is turning the portal back off.
   if (portalOn) { if (cbSetting) cbSetting(Setting::Wifi); return; }
 

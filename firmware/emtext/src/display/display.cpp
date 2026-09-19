@@ -9,6 +9,7 @@ namespace {
   uint32_t       glanceSince = 0;
   const uint32_t GLANCE_MS = 8000;
   const uint32_t IDLE_MS   = 20000;   // History/Settings auto-dim to Dark after this idle
+  const uint32_t STATUS_MS = 2500;    // clip result stays full-screen this long, then resumes
 
   const int      BAR_W = 7;      // tone edge-bar width, px
   const uint8_t  BRIGHT_PAUSED = 60;
@@ -37,7 +38,9 @@ namespace {
   bool   actListen = false, actSend = false, actRecv = false, actClip = false;   // dev activity
   String clipMsg = "";                           // transient clip-save confirmation badge
   uint32_t clipUntil = 0;
-  bool   clipRec = false;                        // hold-to-record in progress -> persistent "rec" badge
+  bool     clipRec = false;                       // hold-to-record in progress -> full-screen overlay
+  uint32_t clipRecStart = 0;                      // millis() when recording started (for the timer)
+  bool     clipSaving = false;                     // finalizing after release -> "saving..." overlay
   String portalSsid, portalPass, portalIp;
 
   // history: ring of the last 5 reads, rendered most-recent-first
@@ -163,16 +166,6 @@ namespace {
       d.drawString("...", 14, 13);                  // clear of the top bar / left strip
     }
 
-    String badge = clipRec ? String("rec")           // recording (persistent while held)
-                 : ((clipMsg.length() && millis() < clipUntil) ? clipMsg : String(""));
-    if (badge.length()) {                             // clip recording / save-confirmation badge
-      d.setTextSize(1); d.setTextDatum(middle_center);
-      int tw = d.textWidth(badge.c_str());
-      int bw = tw + 12, bh = 14, bx = W / 2 - bw / 2, by = STRIP + 4;
-      d.fillRoundRect(bx, by, bw, bh, 4, cDim());
-      d.setTextColor(TFT_BLACK, cDim());
-      d.drawString(badge.c_str(), W / 2, by + bh / 2);
-    }
   }
 
   void drawPaused() {                               // privacy screen: unmistakable
@@ -188,6 +181,76 @@ namespace {
     d.setTextDatum(bottom_center);
     d.setTextSize(1);
     d.drawString("paused", cx, d.height() - 6);
+  }
+
+  // Recording overlay -- like the pause screen: dim, full-screen, unmistakable. Shown while BtnA is
+  // held (clipRec) with a live elapsed timer. drawRecTimer() repaints only the timer text (called
+  // from loop) so the count ticks without a flickery full redraw.
+  void drawRecTimer() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height();
+    uint32_t el = (millis() - clipRecStart) / 1000;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%lu:%02lu", (unsigned long)(el / 60), (unsigned long)(el % 60));
+    int y = H / 2 + 10;
+    d.fillRect(0, y - 12, W, 24, TFT_BLACK);                       // clear the previous timer
+    d.setTextDatum(middle_center); d.setTextSize(2);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString(buf, W / 2, y);
+  }
+
+  void drawRecording() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height();
+    d.setBrightness(BRIGHT_PAUSED);
+    d.fillScreen(TFT_BLACK);
+    d.fillCircle(W / 2, H / 2 - 16, 9, d.color565(210, 40, 40));   // record dot (shape is the cue)
+    d.setTextColor(cDim(), TFT_BLACK);
+    d.setTextDatum(bottom_center); d.setTextSize(1);
+    d.drawString("recording", W / 2, H - 6);
+    drawRecTimer();
+  }
+
+  // "saving..." overlay -- shown while finalizing (waiting for the tail utterance to land), same
+  // dim full-screen style as recording/pause. Screen stays awake; no timer.
+  void drawSaving() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height();
+    d.setBrightness(BRIGHT_PAUSED);
+    d.fillScreen(TFT_BLACK);
+    d.setTextDatum(middle_center);
+    d.setTextSize(2); d.setTextColor(cDim(), TFT_BLACK);
+    d.drawString("saving", W / 2, H / 2 - 6);
+    d.setTextSize(1);
+    d.drawString("...", W / 2, H / 2 + 12);
+  }
+
+  // Clip result: full-screen outcome shown for STATUS_MS after release, then the glance resumes.
+  // Shape glyph (check / X / dash) + word, so it reads without colour (the user is colour-blind).
+  void drawClipResult() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height(), cx = W / 2, cy = H / 2;
+    d.setBrightness(uiBright);
+    d.fillScreen(TFT_BLACK);
+    uint16_t c = cDim();
+    int gy = cy - 16;                                   // glyph centre, above the word
+    if (clipMsg == "saved") {                           // check mark (double-stroked)
+      for (int o = 0; o <= 1; o++) {
+        d.drawLine(cx - 12, gy + o, cx - 4, gy + 8 + o, c);
+        d.drawLine(cx - 4, gy + 8 + o, cx + 13, gy - 9 + o, c);
+      }
+    } else if (clipMsg == "save failed") {              // X
+      for (int o = 0; o <= 1; o++) {
+        d.drawLine(cx - 11, gy - 8 + o, cx + 11, gy + 8 + o, c);
+        d.drawLine(cx + 11, gy - 8 + o, cx - 11, gy + 8 + o, c);
+      }
+    } else {                                            // dash ("empty" / other)
+      d.drawLine(cx - 11, gy, cx + 11, gy, c);
+      d.drawLine(cx - 11, gy + 1, cx + 11, gy + 1, c);
+    }
+    d.setTextDatum(middle_center); d.setTextSize(2);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString(clipMsg.c_str(), cx, cy + 14);
   }
 
   // ---- persistent chrome overlays (on every lit screen; not Dark / Paused) ----
@@ -362,6 +425,9 @@ namespace {
   void draw() {
     auto& d = M5.Display;
     if (paused) { drawPaused(); return; }           // privacy takes precedence
+    if (clipRec) { drawRecording(); return; }       // hold-to-record: full-screen overlay + timer
+    if (clipSaving) { drawSaving(); return; }       // finalizing: "saving..." while the tail lands
+    if (clipMsg.length() && millis() < clipUntil) { drawClipResult(); return; }  // post-record status
     d.fillScreen(TFT_BLACK);
     if (st == display::State::Dark) { d.setBrightness(0); return; }
     d.setBrightness(uiBright);
@@ -420,23 +486,33 @@ void display::setState(State s) {
 }
 
 void display::loop() {
-  if (!paused && !clipRec && st != State::Dark) {   // auto-dim: Glance 8s, History/Settings 20s
+  bool statusOn = clipMsg.length() && millis() < clipUntil;   // clip-result overlay is showing
+
+  if (!paused && !clipRec && !clipSaving && !statusOn && st != State::Dark) {  // auto-dim: Glance 8s, History/Settings 20s
     uint32_t timeout = (st == State::Glance) ? GLANCE_MS : IDLE_MS;
-    if (!(st == State::Status && portalOn) &&        // stay lit during setup; never dim while recording
+    if (!(st == State::Status && portalOn) &&        // stay lit during setup / recording / saving / status
         millis() - glanceSince >= timeout)
       setState(State::Dark);
   }
 
   // Keep the top bar live (battery %, charging bolt, ping) without a full redraw/flicker.
   static uint32_t lastBar = 0;
-  if (!paused && st != State::Dark && millis() - lastBar >= 5000) {
+  if (!paused && !clipRec && !clipSaving && !statusOn && st != State::Dark && millis() - lastBar >= 5000) {
     lastBar = millis();
     drawTopBar(M5.Display.width(), M5.Display.height());
   }
 
-  // clear the clip-save badge when it expires
+  // tick the recording timer while held (only the timer text -> no flicker)
+  static uint32_t lastRecTick = 0;
+  if (clipRec && millis() - lastRecTick >= 250) {
+    lastRecTick = millis();
+    drawRecTimer();
+  }
+
+  // status window over -> clear it and resume the glance
   if (clipMsg.length() && millis() >= clipUntil) {
     clipMsg = "";
+    glanceSince = millis();                          // give the glance its full timeout on resume
     if (!paused && st != State::Dark) draw();
   }
 }
@@ -488,14 +564,21 @@ void display::setPing(int ms) {
 }
 
 void display::setClip(const String& msg) {
-  clipMsg = msg; clipUntil = millis() + 1500;      // show the confirmation for ~1.5s
-  if (!paused && st != State::Dark) draw();
+  clipMsg = msg; clipUntil = millis() + STATUS_MS;  // full-screen status for a few seconds, then resume
+  if (!paused) draw();                              // show even if the glance had gone Dark
 }
 
 void display::setClipRec(bool on) {
   if (on == clipRec) return;
   clipRec = on;
-  if (!paused && st != State::Dark) draw();
+  if (on) clipRecStart = millis();                 // start the recording timer
+  if (!paused) draw();                             // overlay shows even from Dark; not during pause
+}
+
+void display::setSaving(bool on) {
+  if (on == clipSaving) return;
+  clipSaving = on;
+  if (!paused) draw();                             // "saving..." overlay; kept awake in loop()
 }
 
 void display::setActivity(bool listening, bool sending, bool receiving, bool clip) {

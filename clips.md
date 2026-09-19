@@ -49,11 +49,16 @@ PCM frames**. **Additive** — an unknown `type` must stay ignored (never fatal)
 reply `ok: false` rather than save the wrong moment.
 
 ### Clip span (hold-to-record)
-The clip is **only the utterances that occur while the button is held** (the "held window") — it does
-**not** include the utterance the user had already heard at press. On press the device notes the
-current last-read id `P`; on release it sends `from = P + 1, to = <last read id at release>`. If no
-new utterance completed during the hold, the device sends nothing and shows "empty" — so the server
-always receives `to >= from`.
+The clip is **every utterance that occurs while the button is held** (the "held window") — not the one
+already heard at press. The device tracks the highest **utterance id** it has seen, updated on **both
+`utterance` and `read` frames** (so the listener's own `user` lines — which get an `utterance` but no
+`read` — still advance it, and their text is captured). On press it notes that id `P`.
+
+On **release** the device does **not** finalize immediately: the last utterance spoken is still being
+transcribed (its frame lands ~1–3s later), so the device waits a short **grace** — until no new
+utterance for ~1.2s, or a ~4s cap — showing a **"saving…"** screen, then sends
+`from = P + 1, to = <highest utterance id seen>`. This guarantees the tail utterance's text is
+included. If nothing was spoken during the hold, it shows "empty" and sends nothing.
 
 ## What the server needs (the range update)
 
@@ -84,8 +89,11 @@ flagged clip.
 
 ## Firmware side (device) — built
 
-- **BtnA hold-to-record.** On the hold threshold the device shows a persistent **"rec"** badge and
-  notes the last-read id `P`; on **release** it sends `{"type":"save","from":P+1,"to":<last read id>}`,
+- **BtnA hold-to-record.** On the hold threshold the device shows a **full-screen recording overlay
+  (like the pause screen) with a live elapsed timer**, keeps the screen awake, and notes the current
+  highest **utterance id** `P` (tracked from `utterance` **and** `read` frames, so `user` lines
+  count). On **release** it shows **"saving…"** and waits a short grace for the tail utterance to
+  land (no new utterance ~1.2s, or ~4s cap), then sends `{"type":"save","from":P+1,"to":<highest utterance id>}`,
   shows an optimistic **"saved"** badge (upgraded to the server's `ok`/`error` on the `saved` reply),
   and shows **"empty"** for an empty hold. Full serial trace of the lifecycle.
 - Ignores the feature gracefully if the server never replies. No audio re-sent, no local storage.

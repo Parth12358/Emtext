@@ -310,11 +310,13 @@ New target work (from this plan):
       the mute glyph are dropped. BtnA-hold is now hold-to-record clips. The dormant
       `display::setMuted` / mute-glyph code has been **deleted**.
 - [x] **History → "More Info"** ✅ — read + dim transcript per entry (3 entries), a light detail view.
-- [~] **Clips** — **device side built (hold-to-record)**: hold BtnA to record → persistent "rec"
-      badge; on release the device sends `{"type":"save","from":P+1,"to":<last read id>}` (the
-      held-window utterances, `net::saveClip(from,to)`) and shows "saved"/"empty"; handles the
-      server's `saved` reply (`proto::Type::Saved` → `display::setClip`). **Server side needs
-      updating** to accept the range and bundle it into one clip — spec in `/clips.md` (§9.7).
+- [x] **Clips** — **hold-to-record, built both sides**: hold BtnA → full-screen recording overlay
+      (pause-screen style) + live timer, screen awake; on release → **"saving…"** while it waits a
+      short grace for the tail utterance to land, then sends `{"type":"save","from":P+1,"to":<highest
+      utterance id>}` (`net::saveClip`) and shows a full-screen **saved/empty** status for a few
+      seconds before resuming. Range is tracked from **both** `utterance` and `read` ids (so `user`
+      lines + the tail are captured — all spoken text). Server bundles the range into one clip.
+      Spec: `/clips.md`.
 - [x] **Info bar** ✅ — done as the top status bar (connectivity glyph + ping + battery %, `drawTopBar`).
 - [ ] **Clock** — sized/placed per §4.7.
 - [ ] **Button-press shadows** for BtnB / PWR.

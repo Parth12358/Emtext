@@ -32,7 +32,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, dashboard, metrics, ser
+from . import clips, config, dashboard, metrics, ser
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -72,6 +72,10 @@ _CSP = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self'; "
+    # blob: for media only. The dashboard fetches a saved clip with the auth
+    # header and plays it from a Blob URL, so the token never has to sit in an
+    # <audio src> query string. 'self' alone would block that silently.
+    "media-src 'self' blob:; "
     "connect-src 'self' https: wss: ws:; "
     "worker-src 'self' blob:; "
     "base-uri 'none'; "
@@ -242,6 +246,7 @@ def _log_task_error(task: asyncio.Task) -> None:
 async def _process_utterance(
     ws: WebSocket,
     interpreter: Interpreter,
+    recent: clips.Recent,
     uid: int,
     audio,
 ) -> None:
@@ -282,6 +287,7 @@ async def _process_utterance(
         metrics.record_event("empty_transcript")
         return
 
+    recent.update(uid, transcript=transcript)
     await _send(ws, {"type": "utterance", "id": uid, "transcript": transcript})
     await _send(ws, {"type": "status", "state": "thinking"})
 
@@ -301,6 +307,10 @@ async def _process_utterance(
         offline=result.get("read") == "(interpreter offline)",
     )
 
+    # Keep the retention ring current so a `save` that names this id gets the
+    # read as well as the audio. Cheap, and a no-op if the entry aged out.
+    recent.update(uid, tone=result.get("tone"), read=result.get("read"), voice=voice)
+
     message = {
         "type": "read",
         "id": uid,
@@ -317,6 +327,22 @@ async def _process_utterance(
             "arousal": voice.get("arousal"),
         }
     await _send(ws, message)
+
+
+async def _save_clip(ws: WebSocket, entry: dict, cid: int) -> None:
+    """Persist one retained utterance and confirm to the device.
+
+    `clips.save` is blocking file I/O and never raises, so the only job here is
+    to keep it off the event loop and turn its result into a `saved` frame.
+    """
+    loop = asyncio.get_running_loop()
+    clip_id, error = await loop.run_in_executor(None, clips.save, entry)
+    if error is None:
+        metrics.record_event("clip_saved")
+        await _send(ws, {"type": "saved", "id": cid, "ok": True, "clip": clip_id})
+    else:
+        metrics.record_event("clip_failed")
+        await _send(ws, {"type": "saved", "id": cid, "ok": False, "error": error})
 
 
 @app.websocket("/stream")
@@ -372,6 +398,10 @@ async def stream(ws: WebSocket) -> None:
     assert _http is not None
     segmenter = Segmenter()
     interpreter = Interpreter(_http)
+    # Recent utterances by id, so a `save` frame can name one (clips.md). Per
+    # connection because ids are per connection: a save after a reconnect
+    # refers to an id this ring has never seen, and correctly fails.
+    recent = clips.Recent()
     uid = 0
 
     # Hold strong references to fire-and-forget tasks. asyncio only keeps weak
@@ -433,10 +463,34 @@ async def stream(ws: WebSocket) -> None:
                         msg = json.loads(text)
                     except ValueError:
                         continue
-                    if isinstance(msg, dict) and msg.get("type") == "ping":
+                    if not isinstance(msg, dict):
+                        continue
+                    kind = msg.get("type")
+                    if kind == "ping":
                         # Echo the client's timestamp back untouched so it can
                         # compute round-trip time without a synchronised clock.
                         await _send(ws, {"type": "pong", "t": msg.get("t")})
+                    elif kind == "save":
+                        # {"type":"save","id":n} -- the pendant's long-press
+                        # (clips.md). Reply with `saved` either way; a failure
+                        # is ok:false, never a closed socket. The disk write
+                        # goes to the executor as its own task so this loop
+                        # gets straight back to audio.
+                        cid = msg.get("id")
+                        entry = (recent.get(cid)
+                                 if isinstance(cid, int) and not isinstance(cid, bool)
+                                 else None)
+                        if entry is None:
+                            metrics.record_event("clip_failed")
+                            await _send(ws, {"type": "saved", "id": cid,
+                                             "ok": False, "error": "unknown id"})
+                        else:
+                            task = asyncio.create_task(_save_clip(ws, entry, cid))
+                            pending.add(task)
+                            task.add_done_callback(pending.discard)
+                            task.add_done_callback(_log_task_error)
+                    # Any other type is ignored: additive protocol, unknown
+                    # frames are never fatal.
                 continue
 
             last_audio = time.monotonic()
@@ -485,6 +539,7 @@ async def stream(ws: WebSocket) -> None:
                     continue
                 uid += 1
                 metrics.client_seen(client_id, utterance=True)
+                recent.add(uid, audio)
                 await _send(ws, {"type": "status", "state": "heard"})
                 if vad_telemetry:
                     # Why this utterance closed, and how much of it was actually
@@ -500,7 +555,7 @@ async def stream(ws: WebSocket) -> None:
                     })
                 segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
-                    _process_utterance(ws, interpreter, uid, audio)
+                    _process_utterance(ws, interpreter, recent, uid, audio)
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
@@ -533,8 +588,9 @@ async def stream(ws: WebSocket) -> None:
         if tail is not None:
             uid += 1
             try:
+                recent.add(uid, tail)
                 await asyncio.wait_for(
-                    _process_utterance(ws, interpreter, uid, tail),
+                    _process_utterance(ws, interpreter, recent, uid, tail),
                     timeout=config.WS_FLUSH_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):

@@ -23,12 +23,14 @@ import asyncio
 import logging
 import secrets
 import time
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import config, metrics, ser
+from . import clips, config, metrics, ser
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["diagnostics"])
@@ -273,3 +275,54 @@ async def evict(body: EvictRequest, request: Request,
         raise HTTPException(status_code=503, detail=result["_error"])
     log.info("dashboard: evicted %s from VRAM", body.model)
     return {"evicted": body.model}
+
+
+# ---------------------------------------------------------------------------
+# Clips -- the review surface for moments the listener saved (clips.md)
+# ---------------------------------------------------------------------------
+# Same token rule as everything else. The audio route matters most: it serves
+# retained third-party speech, so it must never be more open than /stream is.
+# `clips.py` validates the id's shape before touching the filesystem, which is
+# what keeps a URL path segment from becoming a path traversal.
+
+@router.get("/clips")
+async def list_clips(token: str | None = Query(None),
+                     x_auth_token: str | None = Header(None)) -> dict:
+    """Every saved clip, newest first."""
+    _require_token(token, x_auth_token)
+    # A directory scan plus one small JSON read per clip. Off the loop anyway:
+    # the audio path shares this process and must not wait on a slow disk.
+    loop = asyncio.get_running_loop()
+    items = await loop.run_in_executor(None, clips.list_clips)
+    return {
+        "clips": items,
+        "dir": str(Path(config.CLIPS_DIR).resolve()),
+        "max": config.CLIPS_MAX_FILES,
+        "enabled": config.CLIPS_ENABLED,
+    }
+
+
+@router.get("/clips/{clip_id}/audio")
+async def clip_audio(clip_id: str,
+                     token: str | None = Query(None),
+                     x_auth_token: str | None = Header(None)) -> FileResponse:
+    """The clip's WAV. 404 for a malformed id as well as a missing file."""
+    _require_token(token, x_auth_token)
+    path = clips.clip_path(clip_id, "wav")
+    if path is None:
+        raise HTTPException(status_code=404, detail="no such clip")
+    return FileResponse(path, media_type="audio/wav", filename=f"{clip_id}.wav")
+
+
+@router.delete("/clips/{clip_id}")
+async def delete_clip(clip_id: str,
+                      token: str | None = Query(None),
+                      x_auth_token: str | None = Header(None)) -> dict:
+    """Remove one clip (wav + sidecar). The user's call, from the dashboard."""
+    _require_token(token, x_auth_token)
+    loop = asyncio.get_running_loop()
+    removed = await loop.run_in_executor(None, clips.delete_clip, clip_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="no such clip")
+    log.info("dashboard: deleted clip %s", clip_id)
+    return {"deleted": clip_id}

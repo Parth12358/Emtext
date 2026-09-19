@@ -98,6 +98,11 @@
   .t-sarcastic{ border-left-color: var(--sarcastic); } .t-sarcastic .rd { color: var(--sarcastic); }
   .t-mixed    { border-left-color: var(--mixed); }    .t-mixed .rd { color: var(--mixed); }
   .empty { color: var(--muted); font-size: 13px; padding: 14px 0; text-align: center; }
+  .clip { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .clip .body { flex: 1 1 260px; min-width: 0; }
+  .clip .acts { display: flex; gap: 6px; }
+  .clip button { min-height: 32px; padding: 0 10px; font-size: 12.5px; }
+  audio { width: 100%; margin-top: 10px; }
   .note { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
 </style>
 </head>
@@ -179,6 +184,16 @@
   <div class="card wide">
     <h2>Recent utterances</h2>
     <div id="recent"><div class="empty">nothing yet — talk to the app and it appears here</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Saved clips <span class="badge" id="clips-count"></span></h2>
+    <div id="clips"><div class="empty">no clips yet — long-press the pendant (or "save" in the test client) to keep a moment</div></div>
+    <audio id="player" controls hidden></audio>
+    <div class="note" id="clips-note">
+      Each clip is one utterance the listener chose to keep: its audio, transcript
+      and read, as a <code>wav</code> + <code>json</code> pair on disk. Nothing else is retained.
+    </div>
   </div>
 
 </div>
@@ -542,6 +557,90 @@ async function loadModels() {
   }
 }
 
+// ----- clips ----------------------------------------------------------------
+// Playback fetches the wav with the auth header and plays it from a Blob URL,
+// so the token never has to ride in an <audio src> query string. The server's
+// CSP allows blob: for media-src specifically for this.
+let playingUrl = null;
+
+async function playClip(id, btn) {
+  const player = el("player");
+  btn.disabled = true; btn.textContent = "loading…";
+  try {
+    const headers = TOKEN ? {"X-Auth-Token": TOKEN} : {};
+    const res = await fetch(`/api/clips/${encodeURIComponent(id)}/audio`, {headers});
+    if (!res.ok) throw new Error(`${res.status}`);
+    if (playingUrl) URL.revokeObjectURL(playingUrl);
+    playingUrl = URL.createObjectURL(await res.blob());
+    player.src = playingUrl;
+    player.hidden = false;
+    await player.play().catch(() => {});   // autoplay policy may want a click on the element
+  } catch (e) {
+    alert(`could not load clip: ${e.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = "Play";
+  }
+}
+
+function fmtWhen(t) {
+  if (!t) return "";
+  const d = new Date(t * 1000);
+  return d.toLocaleString(undefined, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+}
+
+async function loadClips() {
+  const box = el("clips");
+  try {
+    const d = await api("/api/clips");
+    const list = d.clips || [];
+    el("clips-count").textContent = `${list.length} / ${d.max}`;
+    if (!d.enabled) { setEmpty(box, "clips are disabled (CLIPS_ENABLED=0)"); return; }
+    if (!list.length) {
+      setEmpty(box, "no clips yet — long-press the pendant (or \"save\" in the test client) to keep a moment");
+      return;
+    }
+    box.replaceChildren();
+    for (const c of list) {
+      const row = document.createElement("div");
+      row.className = "utt clip t-" + (c.tone || "neutral");
+
+      // Every string here came off disk from a transcript, i.e. from a
+      // stranger's speech through Whisper -- textContent only, never markup.
+      const body = document.createElement("div"); body.className = "body";
+      const txt = document.createElement("div"); txt.className = "txt";
+      txt.textContent = c.transcript || "(no transcript)";
+      const rd = document.createElement("div"); rd.className = "rd";
+      rd.textContent = c.read || "";
+      const mt = document.createElement("div"); mt.className = "mt";
+      const bits = [fmtWhen(c.saved_at), `${c.duration_s ?? "?"}s`, `#${c.uid}`];
+      if (c.voice && c.voice.emotion) bits.push(`voice ${c.voice.emotion}`);
+      if (!c.has_audio) bits.push("AUDIO MISSING");
+      mt.textContent = bits.join("  ·  ");
+      body.append(txt, rd, mt);
+
+      const acts = document.createElement("div"); acts.className = "acts";
+      const play = document.createElement("button");
+      play.textContent = "Play"; play.disabled = !c.has_audio;
+      play.onclick = () => playClip(c.id, play);
+      const del = document.createElement("button");
+      del.textContent = "Delete";
+      del.onclick = async () => {
+        if (!confirm("Delete this clip? This removes the audio and its transcript.")) return;
+        del.disabled = true;
+        try {
+          await api(`/api/clips/${encodeURIComponent(c.id)}`, {method: "DELETE"});
+        } catch (e) { alert(e.message); }
+        await loadClips();
+      };
+      acts.append(play, del);
+      row.append(body, acts);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    setEmpty(box, e.message);
+  }
+}
+
 // ----- poll -----------------------------------------------------------------
 async function tick() {
   try {
@@ -558,11 +657,14 @@ async function tick() {
 
 tick();
 loadModels();
+loadClips();
 // 2s is responsive without hammering: /api/stats reads cached GPU data and
 // psutil counters, so it is cheap, but there is no reason to poll faster than
 // a human can read.
 setInterval(tick, 2000);
 setInterval(loadModels, 15000);
+// Clips change only when someone presses a button; 10s is plenty.
+setInterval(loadClips, 10000);
 </script>
 </body>
 </html>

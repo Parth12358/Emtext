@@ -92,6 +92,12 @@ same wire protocol**.
   gracefully**: if Ollama is unreachable or returns bad JSON, still emit the transcript
   with read `(interpreter offline)`, never raise.
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
+- `server/clips.py` — "save this moment" (`clips.md`). `Recent` is a per-connection
+  ring of the last few utterances keyed by the wire `id` (bounded by count AND
+  age, dropped with the connection); `save()` writes one `wav` + `json` sidecar
+  under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
+  `Recent`/`save`, `dashboard.py` calls the list/lookup/delete helpers. Never
+  raises: a failed save is `{"type":"saved","ok":false,"error":...}` on the wire.
 - `server/static/index.html` — single-file browser client. **No build step, no external
   CDNs/fonts.** Uses AudioWorklet (not MediaRecorder) and downsamples to 16 kHz in JS.
 
@@ -108,6 +114,8 @@ same wire protocol**.
   reserved for the **LLM**. Don't move either to GPU.
 - **Protocol additions are additive only.** The `voice` object on the `read` frame is
   optional and omitted when SER has nothing; clients must be able to ignore it.
+  The only client->server TEXT frames after auth are `{"type":"ping"}` and
+  `{"type":"save","id":n}` (answered by `saved`); anything else is ignored, never fatal.
 - **Interpreter prompt**'s `voice sounded like: X` slot is now filled by `ser.py`.
   The prompt must keep explaining the words-vs-voice **mismatch** rule (positive
   words + low valence = sarcasm/masking; negative words + high valence = teasing;
@@ -133,6 +141,14 @@ same wire protocol**.
   utterances, and PCM deflates ~21:1, so ~1.6 KB on the wire bought a full
   Whisper+SER+LLM job. A conforming client never approaches any of them, so the
   ESP32 contract is unaffected — but don't "simplify" them away.
+- Clips are the one sanctioned retention of third-party audio: explicit
+  user action, visible confirmation, one utterance per save. `CLIPS_MAX_FILES`
+  is load-bearing (a hostile client through the tunnel could otherwise fill
+  the disk one `save` at a time); over it the save fails rather than evicting.
+  `clips.py` validates the id's shape before touching the filesystem -- that
+  regex is the whole path-traversal defence for `/api/clips/{id}/audio`. The
+  CSP's `media-src 'self' blob:` exists so the dashboard can play a clip it
+  fetched with the auth header, keeping the token out of an `<audio src>` URL.
 - Transcripts reach the LLM through `interpreter._fence()`, which collapses
   whitespace so a spoken line cannot forge a new prompt section. Keep it
   **mechanical**: three prompt-text variants were measured and all scored worse

@@ -83,11 +83,35 @@ retain anything on `save` beyond the flagged clip.
 - The device **ignores** the feature gracefully if the server never replies (pre-implementation).
 - No audio is re-sent; no local storage.
 
-## Open questions for the server (please answer inline or in a reply)
+## Server implementation (done)
 
-- **Q1.** Save **audio + transcript + read**, or is transcript + read enough for v1? (Firmware
-  recommends including audio so "review later" means *listen back*, but metadata-only is simpler.)
-- **Q2.** Retention window: how many seconds / how many recent utterances to keep keyed by id?
-  (Must cover read-latency + user reaction time; a handful of utterances is plenty.)
-- **Q3.** Storage layout: `clips/<timestamp>.wav` + `.json` sidecar, or a single `clips/index.json`?
-- **Q4.** Confirm the `save` / `saved` frame names + shapes above, or propose edits.
+- `server/clips.py` -- per-connection retention ring (`Recent`), `save()`, listing/lookup/delete. Only
+  this module knows the file layout.
+- `server/main.py` -- handles `{"type":"save"}` between PCM frames; the disk write runs in the executor
+  as its own task, so the read loop never waits. Replies `saved` either way. Counts `clip_saved` /
+  `clip_failed` for the dashboard.
+- `server/dashboard.py` -- `GET /api/clips` (list), `GET /api/clips/{id}/audio` (wav),
+  `DELETE /api/clips/{id}`. Token-gated on the same rule as `/stream`.
+- `server/static/dashboard.html` -- "Saved clips" card: list, play, delete.
+- `server/static/index.html` -- a "save" link on every read, so the path is testable without the device.
+- Knobs in `server/config.py`: `CLIPS_ENABLED`, `CLIPS_DIR`, `CLIP_RETENTION_N`, `CLIP_RETENTION_S`,
+  `CLIPS_MAX_FILES`.
+
+### `saved` reply details
+
+On success the reply also carries `"clip": "<clip id>"` (the file stem). Clients may ignore it.
+`error` strings on failure: `unknown id` (not in the retention ring, or not an integer -- covers the
+stale-after-reconnect case too), `no audio`, `clip store full` (over `CLIPS_MAX_FILES`; delete some from
+the dashboard), `clips disabled`, `write failed`.
+
+## Open questions -- answered
+
+- **Q1.** Audio + transcript + tone + read + voice. "Review later" means listen back, and the audio is
+  already in memory, so metadata-only would save nothing.
+- **Q2.** Last **8 utterances** and **45 s**, per connection, whichever bound is tighter
+  (`CLIP_RETENTION_N` / `CLIP_RETENTION_S`). Audio is kept as int16, so the worst case is ~3.8 MB per
+  connection, and the ring dies with the socket.
+- **Q3.** `clips/<YYYYMMDDTHHMMSS>_<uid>_<rand4>.wav` + same-stem `.json` sidecar. The directory is the
+  index: nothing to corrupt, and a half-written save leaves an orphan wav (ignored) rather than a
+  listed clip with no audio.
+- **Q4.** Confirmed exactly as written above. Only addition: the optional `clip` field on success.

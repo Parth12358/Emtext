@@ -284,3 +284,28 @@ WS_FLUSH_TIMEOUT_S: float = _env_float("WS_FLUSH_TIMEOUT_S", 8.0)
 # model partly on CPU, which reads as "the LLM got slow" rather than as an
 # attack. Cheap to send, expensive to serve -- so rate-limit it.
 MODEL_SWITCH_COOLDOWN_S: float = _env_float("MODEL_SWITCH_COOLDOWN_S", 10.0)
+
+# --- Clips (explicit, user-initiated retention) ------------------------------
+# The brief rules out retaining third-party audio BY DEFAULT. A clip is the
+# sanctioned exception: the listener long-presses the pendant to flag the moment
+# they just saw, the server writes that one utterance to disk, and the device
+# shows a visible "saved" confirmation. See clips.md for the wire contract.
+CLIPS_ENABLED: bool = _env_bool("CLIPS_ENABLED", True)
+# Where clips land: a wav + json sidecar per clip, relative to the cwd (the
+# project root). No database, per the brief -- the directory IS the index.
+CLIPS_DIR: str = _env_str("CLIPS_DIR", "clips")
+# How much recent audio each connection keeps in memory so that a `save`
+# arriving a few seconds after the `read` still finds it. The read lands
+# ~1-5s after the utterance and the user reacts a moment later, so a handful
+# is plenty. Both bounds apply: N utterances AND S seconds, whichever is
+# tighter. Audio is held as int16, so the worst case per connection is
+# N x MAX_UTTERANCE_MS x 32 KB/s ~= 3.8 MB at the defaults, and the ring is
+# dropped with the connection.
+CLIP_RETENTION_N: int = _env_int("CLIP_RETENTION_N", 8)
+CLIP_RETENTION_S: float = _env_float("CLIP_RETENTION_S", 45.0)
+# Ceiling on stored clips. Load-bearing, not decoration: without it a `save`
+# per utterance from a hostile client through the tunnel writes audio to disk
+# indefinitely. Over the cap a save replies ok:false ("clip store full") rather
+# than silently evicting moments the user deliberately kept -- deleting is the
+# user's call, from the dashboard.
+CLIPS_MAX_FILES: int = _env_int("CLIPS_MAX_FILES", 200)

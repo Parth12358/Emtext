@@ -131,6 +131,12 @@
   /* How long this read took to arrive, so the pipeline's cost is visible
      rather than something you only feel as sluggishness. */
   .took { margin-left: auto; color: #6f7783; font-size: 11px; }
+  /* "save" mirrors the pendant's long-press (clips.md): keep this moment on
+     the server for review later. A link rather than a button so it stays
+     out of the way of the read it belongs to. */
+  .save { margin-left: 10px; font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline; }
+  .save.done { color: var(--positive); text-decoration: none; cursor: default; }
+  .save.fail { color: var(--negative); text-decoration: none; cursor: default; }
 
   /* Tone modifiers applied to an entry once its read arrives. */
   .t-positive  { border-left-color: var(--positive); }
@@ -260,7 +266,29 @@ function handleMessage(msg) {
       addRead(msg.id, msg.tone, msg.read, msg.voice);
       setState("listening");
       break;
+    case "saved":
+      markSaved(msg.id, msg.ok, msg.error);
+      break;
+    // Unknown types are ignored on purpose: the protocol is additive.
   }
+}
+
+// ----- clips ----------------------------------------------------------------
+// The device sends exactly this frame on a long-press; the test client sends
+// it from a link so the whole save path can be exercised without hardware.
+function requestSave(id, link) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({type: "save", id}));
+  link.textContent = "saving…";
+}
+
+function markSaved(id, ok, error) {
+  const node = entries.get(id);
+  const link = node && node.querySelector(".save");
+  if (!link) return;
+  link.className = "save " + (ok ? "done" : "fail");
+  link.textContent = ok ? "saved ✓" : `save failed: ${error || "?"}`;
+  link.onclick = null;
 }
 
 // ----- feed rendering -------------------------------------------------------
@@ -289,6 +317,15 @@ function addRead(id, tone, read, voice) {
   const txt = node.querySelector(".read-text");
   txt.classList.remove("pending");
   txt.textContent = read;
+
+  // On the read row, not the voice line: the voice line is skipped entirely
+  // when SER is off, and saving must work regardless.
+  const save = document.createElement("span");
+  save.className = "save";
+  save.textContent = "save";
+  save.title = "keep this moment on the server for review (same as the pendant's long-press)";
+  save.onclick = () => requestSave(id, save);
+  node.querySelector(".read").appendChild(save);
 
   // "voice" is optional in the protocol -- absent when SER is disabled or the
   // model didn't load -- so everything below is skipped rather than showing

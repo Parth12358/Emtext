@@ -481,7 +481,7 @@ async def forget_speaker(token: str | None = Query(None),
 # starts the work and returns at once; the card polls GET /api/asr for state.
 
 _asr_lock = asyncio.Lock()
-_asr_task: asyncio.Task | None = None
+_asr_task: asyncio.Future | None = None
 _last_asr_op = 0.0
 
 
@@ -527,9 +527,11 @@ async def select_asr(body: AsrSelectRequest,
         _last_asr_op = time.monotonic()
         loop = asyncio.get_running_loop()
         log.info("dashboard: ASR model %s -> %s requested", transcriber.current_key(), key)
-        _asr_task = loop.create_task(loop.run_in_executor(None, transcriber.select, key))
+        # run_in_executor already returns an awaitable Future; wrapping it in
+        # create_task() raises TypeError (a Future is not a coroutine).
+        _asr_task = loop.run_in_executor(None, transcriber.select, key)
 
-        def _done(task: asyncio.Task) -> None:
+        def _done(task: asyncio.Future) -> None:
             if not task.cancelled() and task.exception() is not None:
                 log.error("ASR switch task failed", exc_info=task.exception())
         _asr_task.add_done_callback(_done)

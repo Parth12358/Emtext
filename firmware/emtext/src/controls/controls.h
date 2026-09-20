@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 // Buttons + IMU -> semantic events. Owns no screen/network state.
 namespace controls {
   void begin();
@@ -7,10 +8,11 @@ namespace controls {
   void onHoldA(void (*cb)());               // BtnA long   (save clip / settings-back)
   void onPause(void (*cb)());               // BtnB short  (pause/resume)
   void onStatus(void (*cb)());              // BtnB long   (status screen)
-  void onPowerOff(void (*cb)());            // BtnPWR long  (power off)
+  void onPowerOff(void (*cb)());            // BtnPWR long  (unused on StickS3 -- PWR is a hardware off)
   void onOrient(void (*cb)(int rotation));  // orientation changed (0..3)
   void onLift(void (*cb)());                // lift-to-wake gesture
   bool heldA();                             // BtnA currently held (drives a press indicator)
   bool heldB();                             // BtnB currently held
   bool heldPwr();                           // BtnPWR currently held
+  uint32_t lastMotionMs();                  // millis() of the last detected motion (idle-sleep gating)
 }

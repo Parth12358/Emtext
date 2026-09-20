@@ -25,6 +25,9 @@ namespace {
   const uint32_t PING_MS     = 15000;   // client keepalive interval
   const uint32_t DEGRADED_MS = 45000;   // no server frame this long (socket up) -> degraded
   volatile bool  forceReconnect = false; // set by reconnect() after a config change
+  volatile bool  pingPaused = false;     // low-power standby: skip the client keepalive ping (server keepalives hold the link)
+  volatile bool  wantShutdown = false;   // set by shutdown() before sleep/off: close cleanly, then park
+  volatile bool  shutdownAck = false;    // task-owned: set once the WS close frame is on the wire
   volatile bool  wantPortal = false;     // desired setup-AP state (set from core 1)
   bool           apOn = false;           // actual AP state (task-owned, core 0)
 
@@ -169,8 +172,20 @@ namespace {
     apOn = wantPortal;
   }
 
+  // Close cleanly and park the task forever. Called from the net task (core 0) once a
+  // shutdown is requested; the device is about to deep-sleep or power off, so there is
+  // nothing to return to. transport::close() sends a WebSocket CLOSE frame first.
+  void shutdownAndPark() {
+    transport::close();               // -> ws->disconnect(): sends the WS close frame, then FIN
+    setState(net::State::Off);
+    shutdownAck = true;               // close frame is on the wire; core 1 may now sleep
+    LOG_INFO("net: shutdown -- socket closed, parking");
+    for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+
   void task(void*) {
     for (;;) {
+      if (wantShutdown) shutdownAndPark();   // requested while idle/searching: close now, park
       applyPortal();
       setState(net::State::Searching);
       if (!connectWiFi()) { backoff(); continue; }
@@ -199,7 +214,7 @@ namespace {
       uint32_t lastRx     = millis();
       uint32_t lastPing   = millis();
 
-      while (transport::connected() && WiFi.status() == WL_CONNECTED && !forceReconnect) {
+      while (transport::connected() && WiFi.status() == WL_CONNECTED && !forceReconnect && !wantShutdown) {
         applyPortal();
         size_t n = transport::poll(buf, sizeof(buf));
         if (n > 0) {
@@ -222,7 +237,9 @@ namespace {
         }
 
         // 5.4: client keepalive ping (server echoes pong -> keeps a quiet link fresh).
-        if (gotReady && millis() - lastPing >= PING_MS) {
+        // Suspended in low-power standby (pausePing) -- the server's own keepalives keep the
+        // socket (and the Cloudflare tunnel) alive, so we can stop transmitting entirely.
+        if (gotReady && !pingPaused && millis() - lastPing >= PING_MS) {
           lastPing = millis();
           char pb[48];
           snprintf(pb, sizeof(pb), "{\"type\":\"ping\",\"t\":%lu}", (unsigned long)millis());
@@ -267,6 +284,7 @@ namespace {
       }
       transport::close();
       resetPing();              // stale RTT must not linger on the status bar
+      if (wantShutdown) shutdownAndPark();   // clean-close requested: park (don't reconnect)
       forceReconnect = false;   // consumed
 
       // Auth-reject inference: the AHC lib can't read the 1008 close code, so a
@@ -351,6 +369,20 @@ void net::sendAudio(const int16_t* pcm, size_t n) {
 void net::reconnect() {
   forceReconnect = true;
   backoffMs = 1000;   // reconnect promptly after a config change
+}
+
+void net::pausePing(bool on) { pingPaused = on; }   // low-power standby toggles the client keepalive
+
+// Called on core 1 right before the full power off. Asks the core-0 task to send a
+// WebSocket CLOSE frame and park, then waits (bounded) for that frame to hit the wire so
+// the server sees a clean disconnect rather than a dropped TCP link. Best-effort: if the
+// link was already down there is nothing to close and the wait simply times out.
+void net::shutdown() {
+  wantShutdown = true;
+  uint32_t start = millis();
+  while (!shutdownAck && millis() - start < 800) delay(5);
+  LOG_INFO("net: shutdown %s (%lums)", shutdownAck ? "clean" : "timeout",
+           (unsigned long)(millis() - start));
 }
 
 void net::setPortal(bool on) { wantPortal = on; }

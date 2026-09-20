@@ -18,8 +18,10 @@ is a microphone and a display.
   ready, status, utterance, read, ping, pong (reply to the device's keep-alive)
   and saved (reply to a clip save). Unknown types shall be ignored.
 - The device shall send a closing frame before any intentional disconnect.
-  **Not yet implemented** (Stage 8): `onPowerOff` is an interim stub that only
-  darkens the screen; the clean close ships with two-step power-off.
+  **Implemented** (Stage 8): `net::shutdown()` sends a WebSocket CLOSE frame and
+  parks the network task; it runs before the auto-sleep full power-off. (Low-power
+  standby does NOT close the socket — it keeps it warm; a raw PWR press is a hardware
+  off that firmware can't intercept, so it has no clean close — see §4.)
 - The server address shall be configurable at runtime and persist across
   reboots. It shall not be fixed at build time.
 
@@ -67,12 +69,40 @@ is a microphone and a display.
   button cancels. (No audible warning — the device has no speaker; see §6.)
 - Idle detection shall incorporate motion: stationary and silent shall permit
   power off; in motion and silent shall extend the timeout.
-- The device shall wake from deep sleep on button press.
+- The device shall wake from its low-power state on button press. (Implemented as a
+  connected standby that wakes on a button — see the note below; no ESP deep sleep.)
 - Processor clock, radio sleep behaviour, backlight state and silence gating
   shall be configured to minimise average current draw.
 - The device shall report battery level and shall signal low battery once.
 - Target runtime: at least 2.5 hours of continuous operation with the display
   dark by default.
+
+  **Implemented** (Stage 8, `power` module; validate on hardware): boot stages
+  (network→server→ready, distinguishable on screen by shape — filled disc / hollow
+  ring / X / faint ring — never colour alone); a **staged auto-sleep** —
+  **Awake → Idle → grace → low-power standby → full power off** — after
+  `config.idleTimeoutS` of silence + stationary, with a `config.graceS` on-screen
+  grace countdown that any button or motion cancels (motion, IMU via
+  `controls::lastMotionMs()`, resets/extends the timer). On grace expiry the device
+  enters **low-power standby**: mic off, device keepalive ping off (`net::pausePing`),
+  screen off, **Wi-Fi kept connected** on deeper modem sleep — the socket stays alive
+  on the server's own keepalives, so it recovers **instantly on a button press** with
+  no reconnect. After `config.standbyMaxS` in standby (kept under the server's ~15-min
+  no-audio close) or on low battery, `net::shutdown()` (clean WebSocket close) then
+  `M5.Power.powerOff()`. Current-draw config (`setCpuFrequencyMhz(160)` + Wi-Fi modem
+  sleep, backlight dark by default, energy-gated radio); battery level on the status
+  bar with a one-time low-battery warning below `config.lowBattPct`.
+  **No ESP deep sleep** — it buys nothing for a button-woken, no-BLE device (it
+  restarts the sketch and draws more than a full off); the recoverable low-power tier
+  is the connected standby (which deep sleep can't do — it drops Wi-Fi).
+  **Deviation — power-off:** the *deliberate two-step power-off* is not a firmware
+  button gesture. On the M5StickS3, PWR is the M5PM1 PMIC's power key: a tap does a
+  **hardware** power-off that firmware cannot intercept (only a "click" is reported,
+  never a hold) or retime (no M5PM1 key-behaviour register). PWR is therefore the
+  physical off switch, and the deliberate clean-shutdown path is the **staged
+  auto-sleep** above. **Deviation — wake:** low-power standby wakes on a **button
+  press only** (motion is ignored in standby); a full power-off wakes on **PWR** (cold
+  boot). **Open:** the 2.5 h runtime is not yet measured — fallback is press-to-listen.
 
 ## 5. Display
 
@@ -124,7 +154,9 @@ words–voice mismatch, mutable by a single action.)*
   output, §6.)
 - Button B: short press pauses and resumes streaming, with a visible change of
   display state; long press opens the status screen.
-- A dedicated long press shall initiate power off.
+- A dedicated long press shall initiate power off. **On the M5StickS3 this is the
+  PWR button — a hardware power-off via the M5PM1 PMIC that firmware cannot intercept
+  or make two-step; the deliberate clean-shutdown path is the idle auto-sleep (§4).**
 
 ## 8. Configuration
 

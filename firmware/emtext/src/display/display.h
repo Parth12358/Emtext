@@ -37,5 +37,11 @@ namespace display {
   void  setClipRec(bool on);                   // full-screen recording overlay while holding
   void  setSaving(bool on);                    // "saving..." overlay while finalizing the clip
   void  setPaused(bool on);                    // privacy switch: mic not listening
+
+  // Stage 8 power screens (shapes + text, never colour alone -- the user is colour-blind).
+  void  setBoot(int stage, bool failed = false);  // one-shot boot progress: 0=network 1=server 2=ready
+  void  setGrace(bool on);                         // pre-sleep grace overlay (countdown; any button cancels)
+  void  setGraceSecs(int s);                       // update the grace countdown number (repaint, no flicker)
+  void  setLowBatt();                              // transient one-time low-battery warning
   void  setPortal(bool on, const String& ssid, const String& pass, const String& ip);  // setup-AP status
 }

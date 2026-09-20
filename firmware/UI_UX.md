@@ -38,12 +38,14 @@ chrome overlays (info bar, clock, button-press shadows).
 
 | Screen | Code name | Now | Purpose |
 |---|---|---|---|
-| **Boot / Quick Setup** | splash | ✅ splash · 🔲 quick setup | logo + connect progress; offer setup while connecting |
+| **Boot** | `display::setBoot` | ✅ boot stages · 🔲 quick setup | logo + network→server→ready progress (shapes) while connecting |
 | **Dark** | `State::Dark` | ✅ | resting/idle; screen black; default state |
 | **Glance** | `State::Glance` | ✅ | the live read: tone symbol + LLM context + chrome |
 | **More Info** | `State::History` | ✅ (as history) | longer LLM context / summary of recent reads |
 | **Settings** | `State::Status` | ✅ scrollable page | rows: wifi/bright/power + portal-lock panel |
 | **Paused** (overlay) | `g_paused` flag | ✅ | privacy screen; mic hard-off |
+| **Sleep grace** (overlay) | `graceOn` | ✅ | pre-sleep countdown (crescent moon + number); any button/motion cancels (§9.4) |
+| **Low battery** (overlay) | `lowBattUntil` | ✅ | transient one-time warning (§9.5) |
 
 **Chrome overlays** (target — ride on top of the live screens):
 
@@ -71,18 +73,28 @@ callbacks; `emtext.ino` decides what each does — **context-dependent on the cu
 | **BtnA** hold | Settings→back to Glance · elsewhere→**hold-to-record a clip** (§9.7; server-side `save`/`saved` built) | `onHoldA` ✅ |
 | **BtnB** click | **Settings→scroll to next row** · elsewhere→privacy pause | `onPause` ✅ |
 | **BtnB** hold | live screen→open Settings · **Settings→back to Glance** | `onStatus` ✅ |
-| **BtnPWR** hold | → Dark (two-step power-off is Stage 8) | `onPowerOff` ✅ (interim) |
+| **BtnPWR** press | **hardware off** — the M5PM1 PMIC power key; firmware can't intercept it (no firmware power-off gesture) | — (hardware) |
 | **IMU** tilt | auto-rotate | `onOrient` ✅ |
 | **IMU** lift | Dark → Glance (lift-to-wake) | `onLift` ✅ |
 
 While the **setup portal is up**, Settings nav is **locked**: BtnB scroll and both back gestures
-are dead; only BtnA (turn portal off) or PWR (→Dark) get you out.
+are dead; only BtnA (turn portal off) gets you out.
+
+During the **pre-sleep grace countdown**, any button or motion cancels. There is no power-off confirm
+screen — deliberate shutdown is the automatic idle path; PWR is the physical off switch.
 
 **Timings & thresholds (Now):** Glance auto-dims to Dark after **8 s** (`GLANCE_MS`, reset on
-each read). Click vs hold = M5Unified `wasClicked()`/`wasHold()` (~500 ms). IMU ~**20 Hz**;
+each read); History/Settings after **20 s** (`IDLE_MS`). Separately, **power auto-sleep** (Stage 8)
+fires after `idleTimeoutS` (**300 s**) of silence + stationary, with a `graceS` (**10 s**) countdown,
+then **low-power standby** (Wi-Fi kept, button-only wake) up to `standbyMaxS`, then full power off.
+**Dev mode** (`devMode`, **default OFF**) disables all auto-dim (screen stays awake), lights
+the glance from boot, **and disables auto-sleep**; enable it for bench work with `set dev 1` + `save`
+on the serial console.
+Click vs hold = M5Unified `wasClicked()`/`wasHold()` (~500 ms). IMU ~**20 Hz**;
 orientation is **debounced** (`ORIENT_STABLE_MS` = **500 ms**) — a new quadrant must hold steady
 that long before it flips, so it can't flicker near the 45° boundary. Lift = accel > **1.35 g** then a **1.5 s** cooldown
-(`LIFT_G`, `LIFT_COOLDOWN_MS`, tune on hardware).
+(`LIFT_G`, `LIFT_COOLDOWN_MS`). Motion for the auto-sleep gate = accel off **1 g** rest by > **0.08 g**
+(`MOTION_G`, `controls::lastMotionMs()`). All three are coarse — **tune on hardware**.
 
 ---
 
@@ -155,7 +167,7 @@ A scrollable page (`display.cpp:drawSettings()`), 3 rows with a `>` cursor, a `[
 hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:**
 - **BtnB click** → scroll cursor to next row (wraps).
 - **BtnA click** → select/activate the highlighted row.
-- **BtnB hold** or **BtnA hold** → back to Glance · **PWR** → Dark.
+- **BtnB hold** or **BtnA hold** → back to Glance · **PWR** → hardware off.
 
 **Rows ✅:**
 
@@ -163,7 +175,7 @@ hint top-right, and a faint footer aside (`ready | up Ns | NN%`). **Navigation:*
 |---|---|---|
 | **wifi** (`Wifi`) | joined SSID (trunc.) | launch/stop the setup **portal** |
 | **bright** (`Brightness`) | `n/4` | cycle 4 brightness presets (`40/90/150/220`), applied live to all lit screens |
-| **power** (`Power`) | battery `%` | ⚠️ stub — logs only (real power profiles = Stage 8) |
+| **power** (`Power`) | battery `%` | informational (battery %); no firmware power-off — PWR is a hardware off |
 
 *(The **cues**/mute row is removed — the device has no audio output, so there is nothing to mute.)*
 
@@ -256,8 +268,8 @@ is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind
 ## 7. Screen transition map (target)
 
 ```
-        power on
-           │  (splash + Quick Setup 🔲)
+        power on / wake (power button)
+           │  (boot stages ✅ network→server→ready · Quick Setup 🔲)
            ▼
         ┌──────┐  BtnA / lift          ┌────────┐  BtnA          ┌───────────┐
         │ Dark │ ────────────────────► │ Glance │ ─────────────► │ More Info │
@@ -284,8 +296,15 @@ is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind
                                                    ▼
                                                 Glance
 
-   ⚠️ read frame while Dark: updates buffers, does NOT wake the screen (open question).
-   ⚠️ read frame while on Glance: refreshes in place and resets the 8 s timer.
+   read frame while Dark: WAKES the screen to Glance for ~8 s, then auto-dims (setGlance).
+   read frame while on Glance: refreshes in place and resets the 8 s timer.
+   (both suppressed while paused / while in History or Settings, which aren't interrupted.)
+
+   PWR = hardware off (M5PM1 power key; firmware can't intercept it, §9.3). Power overlays sit
+   above every screen: boot stages (§9.1), pre-sleep grace (§9.4), low-battery (§9.5).
+   Auto-sleep (silence+stationary → grace → low-power standby → full off after standbyMaxS) is the
+   clean-shutdown path. Standby keeps Wi-Fi connected and wakes on a BUTTON (instant, no reconnect);
+   full off wakes on PWR (cold boot). No ESP deep sleep.
 ```
 
 ---
@@ -294,8 +313,8 @@ is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind
 
 Built-UI gaps (each names where it lives):
 
-- [ ] **Read while Dark doesn't wake the screen** (`emtext.ino:onNetFrame` + `display::setGlance`).
-      Decide: wake on every read / only non-neutral / cue-only. Most important call here.
+- [x] **Read while Dark wakes the screen** ✅ (`display::setGlance`) — a server `read` now brings the
+      glance up from Dark for ~8 s, then auto-dims (skipped while paused / in History / Settings).
 - [x] **Transcript surfaced** ✅ — shown as a dim second line under each read in History (stored in
       the history ring), so the terse 5-word read has its "what was said" context. No longer dead data.
 - [x] **History rows width-clipped** ✅ — each line clipped to width with `wrapN`, both orientations.
@@ -326,7 +345,8 @@ New target work (from this plan):
 - [x] **Info bar** ✅ — done as the top status bar (connectivity glyph + ping + battery %, `drawTopBar`).
 - [ ] **Clock** — sized/placed per §4.7.
 - [ ] **Button-press shadows** for BtnB / PWR.
-- [ ] **Quick Setup at boot** + boot-stage progress.
+- [x] **Boot-stage progress** ✅ — network→server→ready with shape markers (`display::setBoot`, §9.1).
+      **Quick Setup at boot** (a path straight into the portal) still 🔲.
 - [x] **Portal:** ✅ lock nav while up · ✅ show hotspot password. QR fallback still 🔲.
 - [x] **Emotion mark decided** ✅ — the **Undertale "DETERMINATION" heart** (`drawHeart`), colored
       by Undertale soul colours (pure colour-only). Replaced the old curve mark (`drawMark`).
@@ -335,11 +355,14 @@ New target work (from this plan):
 
 ## 9. Planned and recently built UI — maps to remaining stages
 
-(9.1 and 9.3–9.6 are still 🔲; 9.2 is removed; 9.7 is ✅ built.)
+(9.1 and 9.3–9.5 are ✅ built — Stage 8, validate on hardware; 9.6 is 🔲; 9.2 is removed; 9.7 is ✅ built.)
 
-### 9.1 Boot stages + Quick Setup (Stage 8 + this plan)
-Replace the fixed splash with network→server→ready progress (+ per-stage failure), and a path
-into the setup portal from boot.
+### 9.1 Boot stages — built ✅ (Stage 8)
+The fixed splash is replaced by **network → server → ready** progress driven by `net::state()`
+(`display::setBoot(stage, failed)`), on-screen only. Each stage is a **shape** (colour-blind safe):
+filled disc = done, hollow ring = in progress, **X** = failed (e.g. auth-rejected), faint ring =
+pending. `setup()` blocks on this (≤ 20 s) until `ready`, then hands over to the normal UI.
+Quick Setup (a boot path straight into the portal) is still 🔲.
 
 ### 9.2 Audio cues — ❌ REMOVED
 The device has **no speaker output**. The emotional signal is conveyed **visually only** (the
@@ -347,16 +370,36 @@ colour of the glance heart, §6). There are no tone cues, no alert/boot/low-batt
 idle warning, and no mute control. *(Superseded: ≤150 ms cues for negative + words–voice
 mismatch, with a 75% battery volume cap and a Settings mute toggle.)*
 
-### 9.3 Two-step power-off (Stage 8)
-Replace the `onPowerOff` stub with a deliberate two-step + a **clean WebSocket close** before
-sleep. (PWR-hold currently intended → Dark as an interim.)
+### 9.3 Power-off — hardware only (Stage 8)
+There is **no firmware power-off gesture.** On the M5StickS3 the PWR button is the **M5PM1 PMIC's
+power key**: a tap does a **hardware power-off** that firmware cannot intercept (M5Unified only ever
+reports a "click", never a hold — `getKeyState()` returns 0/2) or retime (the M5PM1 driver exposes no
+key-behaviour register). So PWR is the physical off switch. The requirement's *deliberate two-step
+power-off with a clean close* is instead satisfied by the **automatic idle path** (§9.4: grace → deep
+sleep, `net::shutdown()` first). Wakes on the power button. *(A firmware off gesture could be moved to
+a BtnA/BtnB long-press later if desired; not built — the user chose auto-sleep only.)*
 
-### 9.4 Idle / motion auto-off (Stage 8)
-Auto power-off after no-speech, **extended by motion** (IMU); on-screen grace cancellable by any
-button (no audible warning — audio output removed); deep sleep + wake-on-button.
+### 9.4 Staged auto-sleep — built ✅ (Stage 8)
+A staged cycle, **no ESP deep sleep** (pointless for a button-woken, no-BLE device — it restarts the
+sketch anyway and draws more than a full off). **Awake → Idle → grace → low-power standby → full off:**
+- **Idle** — after the display auto-dim (screen Dark), the device keeps listening (gated streaming) and
+  stays connected. This is the existing behaviour.
+- **Grace** — after `idleTimeoutS` of **silence + stationary** (speech and IMU motion both reset the
+  timer; motion keeps a worn device awake), a **grace countdown** (`graceS`) shows a crescent-moon
+  overlay + a big number; **any button or motion cancels**.
+- **Low-power standby** — on grace expiry (`power::onStandby(true)`): **mic off, device ping off,
+  screen off, Wi-Fi kept connected** (deeper modem sleep). The socket stays alive on the **server's own
+  keepalives** (the device stops pinging), so it recovers **instantly on a BUTTON press** — no
+  reconnect. **Motion is ignored in standby** (button-only wake). The waking press is consumed (just
+  wakes, doesn't also advance the UI).
+- **Full power off** — after `standbyMaxS` in standby (kept < the server's ~15-min no-audio close, so
+  the link is still live), or on low battery: `power::onSleep` → `net::shutdown()` (clean WS close) →
+  `M5.Power.powerOff()`. Recover via **PWR** (cold boot). Disabled in dev mode.
 
-### 9.5 Low battery (Stage 8)
-Signal low battery **once**, with a distinct on-screen indication (no tone — audio output removed).
+### 9.5 Low battery — built ✅ (Stage 8)
+Below `lowBattPct` (and not charging) a **one-time** transient warning shows a near-empty battery
+outline (a shape) + "!" + "low battery" (no tone — audio output removed). Hysteresis + charge state
+reset it so it doesn't repeat.
 
 ### 9.6 Degraded / outage visibility (Stage 9)
 Interruption visible on screen throughout a drop + recovery, not just a silent amber dot.

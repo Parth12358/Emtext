@@ -49,10 +49,14 @@ void config::load() {
   if (prefs.isKey("path"))  cfg.serverPath = prefs.getString("path");
   if (prefs.isKey("token")) cfg.token      = prefs.getString("token");
   if (prefs.isKey("ssid0")) { cfg.nets[0].ssid = prefs.getString("ssid0"); cfg.nets[0].pass = prefs.getString("pass0"); cfg.netCount = 1; }
-  cfg.chunkMs      = prefs.getUInt("chunkMs", cfg.chunkMs);
-  cfg.energyFloor  = prefs.getUInt("efloor",  cfg.energyFloor);
-  cfg.idleTimeoutS = prefs.getUInt("idleS",   cfg.idleTimeoutS);
-  cfg.logLevel     = prefs.getUInt("logLvl",  cfg.logLevel);
+  cfg.chunkMs         = prefs.getUInt("chunkMs", cfg.chunkMs);
+  cfg.energyFloor     = prefs.getUInt("efloor",  cfg.energyFloor);
+  cfg.idleTimeoutS    = prefs.getUInt("idleS",   cfg.idleTimeoutS);
+  cfg.graceS          = prefs.getUInt("graceS",  cfg.graceS);
+  cfg.standbyMaxS     = prefs.getUInt("stbyMax", cfg.standbyMaxS);
+  cfg.lowBattPct      = prefs.getUInt("lowBatt", cfg.lowBattPct);
+  cfg.logLevel        = prefs.getUInt("logLvl",  cfg.logLevel);
+  cfg.devMode         = prefs.getBool("dev",     cfg.devMode);
   prefs.end();
   logx::setLevel((logx::Level)cfg.logLevel);
   LOG_INFO("config loaded: host=%s nets=%d chunk=%d floor=%d", cfg.serverHost.c_str(), cfg.netCount, cfg.chunkMs, cfg.energyFloor);
@@ -69,7 +73,11 @@ void config::save() {
   prefs.putUInt("chunkMs", cfg.chunkMs);
   prefs.putUInt("efloor",  cfg.energyFloor);
   prefs.putUInt("idleS",   cfg.idleTimeoutS);
+  prefs.putUInt("graceS",  cfg.graceS);
+  prefs.putUInt("stbyMax", cfg.standbyMaxS);
+  prefs.putUInt("lowBatt", cfg.lowBattPct);
   prefs.putUInt("logLvl",  cfg.logLevel);
+  prefs.putBool("dev",     cfg.devMode);
   prefs.end();
   LOG_INFO("config saved to NVS");
 }
@@ -86,7 +94,8 @@ void config::clear() {
 static void dispatch(const String& s) {
   if (s == "get") {
     LOG_INFO("host=%s path=%s tokenLen=%d", cfg.serverHost.c_str(), cfg.serverPath.c_str(), cfg.token.length());
-    LOG_INFO("wifi0=%s chunk=%d floor=%d idleS=%lu logLvl=%d", cfg.nets[0].ssid.c_str(), cfg.chunkMs, cfg.energyFloor, (unsigned long)cfg.idleTimeoutS, cfg.logLevel);
+    LOG_INFO("wifi0=%s chunk=%d floor=%d idleS=%lu logLvl=%d dev=%d", cfg.nets[0].ssid.c_str(), cfg.chunkMs, cfg.energyFloor, (unsigned long)cfg.idleTimeoutS, cfg.logLevel, cfg.devMode);
+    LOG_INFO("power: graceS=%u standbyMaxS=%lu lowBattPct=%u", cfg.graceS, (unsigned long)cfg.standbyMaxS, cfg.lowBattPct);
     return;
   }
   if (s == "save")  { config::save();  return; }
@@ -105,7 +114,11 @@ static void dispatch(const String& s) {
   else if (key == "chunk") cfg.chunkMs      = val.toInt();
   else if (key == "floor") cfg.energyFloor  = val.toInt();
   else if (key == "idle")  cfg.idleTimeoutS = val.toInt();
+  else if (key == "grace") cfg.graceS = val.toInt();
+  else if (key == "standbymax") cfg.standbyMaxS = val.toInt();  // max time in low-power standby -> off (s)
+  else if (key == "lowbatt")  cfg.lowBattPct = val.toInt();
   else if (key == "log")   { cfg.logLevel = val.toInt(); logx::setLevel((logx::Level)cfg.logLevel); }
+  else if (key == "dev")   cfg.devMode = (val.toInt() != 0);   // 1 = keep screen awake (no auto-dim)
   else { LOG_WARN("unknown key: %s", key.c_str()); return; }
   LOG_INFO("set %s (unsaved -- type `save`)", key.c_str());
 }

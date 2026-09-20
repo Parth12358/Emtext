@@ -20,6 +20,8 @@ namespace net {
   void        sendAudio(const int16_t* pcm, size_t n);    // core 1 -> TX queue -> core 0
   void        saveClip(int from, int to);                 // core 1 -> send {type:save,from,to}
   void        reconnect();                                // drop STA + reconnect (after a config change)
+  void        pausePing(bool on);                         // suspend the client keepalive ping (low-power standby); server keepalives hold the link
+  void        shutdown();                                 // clean WS close (sends a close frame) + park, before power off
   void        setPortal(bool on);                         // enable/disable the setup AP (from core 1)
   bool        portalOn();                                 // is the setup AP currently up?
 }

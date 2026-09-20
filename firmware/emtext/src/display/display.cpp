@@ -43,6 +43,12 @@ namespace {
   bool     clipSaving = false;                     // finalizing after release -> "saving..." overlay
   String portalSsid, portalPass, portalIp;
 
+  // Stage 8 power overlays. Grace/confirm fully take over the screen (draw returns early);
+  // lowBattUntil is a transient warning like the clip badge.
+  bool     graceOn = false;                        // pre-sleep grace countdown showing
+  int      graceSecs = 0;                          // seconds left on that countdown
+  uint32_t lowBattUntil = 0;                        // low-battery warning visible until this millis()
+
   // history: ring of the last 5 reads, rendered most-recent-first
   struct Hist { String read; String tone; String transcript; };
   Hist hist[5];
@@ -253,6 +259,84 @@ namespace {
     d.drawString(clipMsg.c_str(), cx, cy + 14);
   }
 
+  // ---- Stage 8 power screens (shape + text; never colour alone -- the user is colour-blind) ----
+
+  // Boot progress: three stages (network -> server -> ready), each a distinct SHAPE so the
+  // state reads without colour: filled disc = done, hollow ring = in progress, X = failed,
+  // faint ring = pending. One-shot (painted straight from setup(), before the loop runs).
+  void drawBoot(int stage, bool failed) {
+    auto& d = M5.Display;
+    int W = d.width();
+    d.setBrightness(uiBright);
+    d.fillScreen(TFT_BLACK);
+    d.setTextDatum(top_center); d.setTextSize(2);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString("emtext", W / 2, 8);
+    const char* rows[3] = { "network", "server", "ready" };
+    d.setTextSize(1);
+    int y0 = 40;
+    for (int i = 0; i < 3; i++) {
+      int gcy = y0 + i * 20 + 4, gx = 20;
+      if (i < stage)                    d.fillCircle(gx, gcy, 5, cPos());        // done
+      else if (i == stage && !failed)   d.drawCircle(gx, gcy, 5, cMis());        // in progress
+      else if (i == stage && failed) {                                           // failed: X
+        for (int o = 0; o <= 1; o++) {
+          d.drawLine(gx - 4, gcy - 4 + o, gx + 4, gcy + 4 + o, cMis());
+          d.drawLine(gx + 4, gcy - 4 + o, gx - 4, gcy + 4 + o, cMis());
+        }
+      } else                            d.drawCircle(gx, gcy, 5, cFaint());       // pending
+      d.setTextDatum(middle_left);
+      d.setTextColor((i <= stage) ? TFT_WHITE : cFaint(), TFT_BLACK);
+      d.drawString(rows[i], gx + 14, gcy);
+    }
+    if (failed) {
+      d.setTextDatum(bottom_center); d.setTextColor(cMis(), TFT_BLACK);
+      d.drawString("retrying...", W / 2, d.height() - 6);
+    }
+  }
+
+  // Pre-sleep grace: dim full-screen crescent (a moon = sleeping) + a big countdown. The
+  // number is repainted alone by drawGraceSecs() each tick so it ticks without flicker.
+  void drawGraceSecs() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height(), y = H / 2 + 8;
+    d.fillRect(0, y - 16, W, 34, TFT_BLACK);              // clear the previous number
+    d.setTextDatum(middle_center); d.setTextSize(3);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString(String(graceSecs).c_str(), W / 2, y);
+  }
+  void drawGrace() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height();
+    d.setBrightness(BRIGHT_PAUSED);
+    d.fillScreen(TFT_BLACK);
+    int mx = W / 2, my = H / 2 - 30;                      // crescent moon (shape = sleeping)
+    d.fillCircle(mx, my, 12, cDim());
+    d.fillCircle(mx + 6, my - 3, 12, TFT_BLACK);          // carve the crescent
+    d.setTextColor(cDim(), TFT_BLACK);
+    d.setTextDatum(bottom_center); d.setTextSize(1);
+    d.drawString("press any button", W / 2, H - 6);
+    drawGraceSecs();
+  }
+
+  // Transient one-time low-battery warning: a near-empty battery outline (shape) + "!".
+  void drawLowBatt() {
+    auto& d = M5.Display;
+    int W = d.width(), H = d.height(), cx = W / 2, cy = H / 2;
+    d.setBrightness(uiBright);
+    d.fillScreen(TFT_BLACK);
+    int bw = 46, bh = 22, x = cx - bw / 2, y = cy - 26;
+    uint16_t c = cDim();
+    d.drawRect(x, y, bw, bh, c);
+    d.fillRect(x + bw, y + bh / 2 - 4, 3, 8, c);          // terminal nub
+    d.fillRect(x + 3, y + 3, 7, bh - 6, c);               // small (low) fill
+    d.setTextDatum(middle_center); d.setTextSize(2);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawString("!", x + bw - 12, y + bh / 2);
+    d.setTextSize(1); d.setTextColor(cDim(), TFT_BLACK);
+    d.drawString("low battery", cx, cy + 6);
+  }
+
   // ---- persistent chrome overlays (on every lit screen; not Dark / Paused) ----
   // Top bar: connectivity + ping (dark strip) and battery (magenta). Horizontal along
   // the top in portrait, vertical down the left in landscape -- it rides the same edge.
@@ -424,6 +508,8 @@ namespace {
 
   void draw() {
     auto& d = M5.Display;
+    if (graceOn)   { drawGrace();   return; }        // pre-sleep countdown owns the screen
+    if (lowBattUntil && millis() < lowBattUntil) { drawLowBatt(); return; }  // transient warning
     if (paused) { drawPaused(); return; }           // privacy takes precedence
     if (clipRec) { drawRecording(); return; }       // hold-to-record: full-screen overlay + timer
     if (clipSaving) { drawSaving(); return; }       // finalizing: "saving..." while the tail lands
@@ -480,6 +566,7 @@ display::State display::state() { return st; }
 
 void display::setState(State s) {
   st = s;
+  graceOn = false;                                // an explicit state change dismisses the grace overlay
   if (s != State::Dark) glanceSince = millis();   // start the idle timer for any lit state
   LOG_INFO("display -> %d", (int)s);
   draw();
@@ -487,19 +574,27 @@ void display::setState(State s) {
 
 void display::loop() {
   bool statusOn = clipMsg.length() && millis() < clipUntil;   // clip-result overlay is showing
+  bool overlay  = graceOn || (lowBattUntil && millis() < lowBattUntil);  // a power screen owns the display
 
-  if (!paused && !clipRec && !clipSaving && !statusOn && st != State::Dark) {  // auto-dim: Glance 8s, History/Settings 20s
+  if (!paused && !clipRec && !clipSaving && !statusOn && !overlay && !config::get().devMode && st != State::Dark) {  // auto-dim: Glance 8s, History/Settings 20s
     uint32_t timeout = (st == State::Glance) ? GLANCE_MS : IDLE_MS;
-    if (!(st == State::Status && portalOn) &&        // stay lit during setup / recording / saving / status
+    if (!(st == State::Status && portalOn) &&        // stay lit during setup / recording / saving / status / dev mode
         millis() - glanceSince >= timeout)
       setState(State::Dark);
   }
 
   // Keep the top bar live (battery %, charging bolt, ping) without a full redraw/flicker.
   static uint32_t lastBar = 0;
-  if (!paused && !clipRec && !clipSaving && !statusOn && st != State::Dark && millis() - lastBar >= 5000) {
+  if (!paused && !clipRec && !clipSaving && !statusOn && !overlay && st != State::Dark && millis() - lastBar >= 5000) {
     lastBar = millis();
     drawTopBar(M5.Display.width(), M5.Display.height());
+  }
+
+  // low-battery warning window over -> clear it and resume the underlying screen
+  // (draw() also blanks + brightness-0 when the underlying state is Dark).
+  if (lowBattUntil && millis() >= lowBattUntil) {
+    lowBattUntil = 0;
+    if (!paused) draw();
   }
 
   // tick the recording timer while held (only the timer text -> no flicker)
@@ -531,7 +626,11 @@ void display::setGlance(const String& read, const String& tone,
   hist[histNext].transcript = transcript;
   histNext = (histNext + 1) % 5;
   if (histCount < 5) histCount++;
-  if (st == State::Glance) { glanceSince = millis(); draw(); }   // refresh timeout + redraw
+  // A server response wakes the screen: from Dark, come up on the glance for GLANCE_MS
+  // (then auto-dims). Don't interrupt History/Settings, and respect the privacy pause.
+  if (paused) return;
+  if (st == State::Dark)        { setState(State::Glance); return; }   // wake for the read
+  else if (st == State::Glance) { glanceSince = millis(); draw(); }    // refresh + reset timeout
 }
 
 void display::setConnection(const String& label) {
@@ -579,6 +678,28 @@ void display::setSaving(bool on) {
   if (on == clipSaving) return;
   clipSaving = on;
   if (!paused) draw();                             // "saving..." overlay; kept awake in loop()
+}
+
+// ---- Stage 8 power screens ----
+void display::setBoot(int stage, bool failed) {
+  drawBoot(stage, failed);                           // one-shot paint (runs during setup())
+}
+
+void display::setGrace(bool on) {
+  if (on == graceOn) return;
+  graceOn = on;
+  if (on) draw();                                    // shows even from Dark
+  else    setState(State::Glance);                   // cancelled: back to the read (auto-dims later)
+}
+
+void display::setGraceSecs(int s) {
+  graceSecs = s;
+  if (graceOn) drawGraceSecs();                      // repaint the number only (no flicker)
+}
+
+void display::setLowBatt() {
+  lowBattUntil = millis() + STATUS_MS;               // transient full-screen warning, then resume
+  if (!paused) draw();                               // shown even if the glance had gone Dark
 }
 
 void display::setActivity(bool listening, bool sending, bool receiving, bool clip) {

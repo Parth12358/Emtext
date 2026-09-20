@@ -23,25 +23,30 @@ Toolchain: **Arduino IDE** (best-supported by M5Stack). The sketch is
 | 5 wire protocol end-to-end | `net` + `proto` + `audio` | ✅ stream + outage + degraded |
 | 6 glance rendering (real reads) | `display` | ✅ reads + history on glance |
 | ~~7 audio cues~~ | ~~`cues`~~ | ❌ removed — no on-device audio output (visual-only) |
-| 8 power management | `power` | ⬜ |
+| 8 power management | `power` | ✅ built — validate on hardware |
 | 9 acceptance + compliance | — | ⬜ |
 
 Beyond the stages, also built since: the **status-bar overlays** (connectivity glyph — shape, not
 colour — + live ping + battery %/charging bolt), the **Undertale-heart glance** in both orientations
 with vibrant soul colours, orientation-debounce, History → "More Info" (read + transcript) with
-idle auto-dim, and **hold-to-record clips** (recording/​saving/​status overlays, §9.7 in `UI_UX.md`).
+idle auto-dim, **hold-to-record clips** (recording/​saving/​status overlays, §9.7 in `UI_UX.md`), and
+**Stage 8 power management** (`power`) — see below.
 
 **What's remaining:**
-- **Stage 8 — power management** (`power`): auto-sleep (idle + motion, grace, deep sleep, wake-on-
-  button), two-step power-off with a clean WS close, visible boot stages, low-battery signal, 2.5 h
-  runtime tuning.
+- **Stage 8 — hardware validation**: the `power` module is code-complete — staged cycle
+  **Awake → Idle → grace → low-power standby (Wi-Fi kept, mic/ping off, button-only wake) → full power
+  off** after `standbyMaxS`, plus visible boot stages, one-time low-battery warning, and CPU/Wi-Fi
+  current-draw config. **No ESP deep sleep** (pointless for a button-woken, no-BLE device). Still needs
+  on-hardware tuning of `MOTION_G`/`LIFT_G`, confirming the socket survives standby on server
+  keepalives, and the **2.5 h runtime** measurement. **No firmware power-off gesture** — PWR is the
+  M5PM1 hardware off (uninterceptable).
 - **Stage 9 — acceptance + compliance**: outage recovery visible on screen, "mic live" affordance
   while Dark, runtime verification (or press-to-listen fallback).
 - **TLS hardening** (deployment blocker): the active Links2004 backend runs unvalidated `beginSSL`
   (`L2004_INSECURE`) — move to validated `wss` (see Deviations).
 - **Speaker on the glance** (deferred, next candidate): the server now sends an optional `speaker`
   label (`user`/`other`); the firmware ignores it — surfacing it on the glance is not yet built.
-- Smaller UI gaps + nice-to-haves (read-while-Dark wake, landscape History/Settings relayout, clock,
+- Smaller UI gaps + nice-to-haves (landscape History/Settings relayout, clock,
   button-press shadows, Quick Setup at boot): tracked in `UI_UX.md` §8/§9.
 
 ## Two rules that make it modular
@@ -75,8 +80,11 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
 **Foundation** (no hardware, usable everywhere):
 
 - **`config`** ✅ — owns the `Config` struct (**every tunable**: `nets[3]` + `netCount`, `serverHost`,
-  `serverPath`, `token`, `chunkMs`, `energyFloor`, `idleTimeoutS`, `logLevel`, and the setup-AP
-  credentials `apSsid` / `apPass`) + NVS
+  `serverPath`, `token`, `chunkMs`, `energyFloor`, `idleTimeoutS` (silence+stationary before the sleep
+  grace), `graceS` (grace countdown), `standbyMaxS` (max time in low-power standby → full off; keep
+  < server 900 s), `lowBattPct`,
+  `logLevel`, `devMode` (`set dev 1` keeps the screen awake **and disables auto-sleep** — lit from
+  boot), and the setup-AP credentials `apSsid` / `apPass`) + NVS
   persistence + a serial console (`get` / `set <key> <val>` / `save` / `clear`). Load order:
   `secrets.h` defaults → NVS overrides. Exposes `load()`, `save()`, `clear()`,
   `get() -> const Config&`, `handleSerial()`. NVS keys are ≤15 chars. Deps: `Preferences`, `secrets.h`.
@@ -140,25 +148,45 @@ Arrows point down only. No cycles. Every box is a header/`.cpp` pair (except hea
   `onChunk(cb)`, `energy()`, `voiced()`, `setPaused(bool)`. Deps: `M5.Mic`, config, logx.
 - **`controls`** ✅ — buttons + IMU → **semantic events**. Exposes `begin()`, `loop()`, the
   held-state queries `heldA()` / `heldB()` / `heldPwr()` (drive the press indicators and the
-  clip release), and callbacks: `onWake` (BtnA short), `onHoldA` (BtnA long — hold-to-record /
-  Settings back), `onPause` (BtnB short), `onStatus` (BtnB long), `onPowerOff` (BtnPWR long),
-  `onOrient(rot)` (IMU auto-rotate), `onLift` (lift-to-wake — currently a coarse jerk detector,
-  tuned in Stage 8). Deps: `M5.BtnA/BtnB/BtnPWR`, `M5.Imu`.
+  clip release), the motion signal `lastMotionMs()` (accel deviation from 1 g rest — feeds the power
+  idle gate), and callbacks: `onWake` (BtnA short), `onHoldA` (BtnA long — hold-to-record /
+  Settings back), `onPause` (BtnB short), `onStatus` (BtnB long), `onPowerOff` (BtnPWR long — declared
+  but unused on the StickS3: PWR is a hardware off), `onOrient(rot)` (IMU auto-rotate), `onLift`
+  (lift-to-wake — a coarse jerk detector, `LIFT_G`/`MOTION_G` tuned on hardware). Deps:
+  `M5.BtnA/BtnB/BtnPWR`, `M5.Imu`.
 - **`display`** ✅ — owns the screen; four states **Dark / Glance / History / Status** plus the
-  **PAUSED** / recording / saving overlays. Exposes `begin()`, `loop()`, `setState()`, `state()`,
+  **PAUSED** / recording / saving overlays and the **Stage 8 power screens**. Exposes `begin()`,
+  `loop()`, `setState()`, `state()`,
   `setRotation()`, `setGlance(read, tone, transcript, lowConfidence=false)`, `setConnection()`,
   `setProcessing()`, `setPaused()`; the Settings page — `settingsScroll()`, `settingsSelect()`,
   `settingsLocked()`, `onSetting(cb)`; the chrome — `setButtons(a,b,pwr)`, `setPing(ms)`,
-  `setActivity(...)`; clips — `setClipRec(on)`, `setSaving(on)`, `setClip(msg)`; and
+  `setActivity(...)`; clips — `setClipRec(on)`, `setSaving(on)`, `setClip(msg)`; power screens —
+  `setBoot(stage, failed)` (network→server→ready progress; shapes not colour), `setGrace(on)` +
+  `setGraceSecs(s)` (pre-sleep countdown), `setLowBatt()`
+  (transient low-battery warning); and
   `setPortal(on, ssid, pass, ip)` for the setup-AP credentials panel. Now fed **real `read`
   frames** (Stage 6) — `setGlance` renders them and records a 5-deep history ring (History shows
   the 3 most recent). See **Glance UX** below. Deps: `M5.Display`, config.
 - **`cues`** ❌ **removed** — the device has no speaker output, so there is no audio-cue module.
   The emotional signal is conveyed **visually only** (the colour of the glance heart). No tone cues,
   no alert/boot/low-battery tones, no audible idle warning, no mute.
-- **`power`** ⬜ — PMIC: boot stages, idle/motion auto-off, two-step off, sleep/wake, battery.
-  `begin()`, `loop()`, `noteActivity()`, `batteryLevel()`, callbacks `onWarnIdle/onGrace/onOff`.
-  Deps: `M5.Power`, config.
+- **`power`** ✅ — **the single `M5.Power` owner.** Pure policy + PMIC/Wi-Fi-power calls; it never
+  touches the screen, mic or socket — those go through callbacks wired in `.ino`. **Staged cycle**
+  (silence + stationary; **no ESP deep sleep** — see Deviations): **Awake → Idle** (display auto-dim,
+  still listening) **→ grace countdown** (`config.graceS`, any button/motion cancels) **→ low-power
+  standby** **→ full power off** after `config.standbyMaxS`. **Low-power standby** = mic off + device
+  ping off + screen off + Wi-Fi kept connected (deeper modem sleep); the socket stays alive on the
+  server's own keepalives, so it recovers **instantly on a BUTTON press** (`onStandby(false)` — no
+  reconnect). **Motion is ignored in standby** (button-only wake); it only keeps the device awake /
+  delays entering standby. **Idle inputs:** `noteVoiced(audio::voiced())` + `noteActivity()`
+  (buttons) + motion from `controls::lastMotionMs()`. **No firmware power-off gesture:** PWR is the
+  M5PM1 hardware off (uninterceptable); the only clean shutdown is this idle path (`net::shutdown()`
+  before `M5.Power.powerOff()`). **Low battery:** one-time warning below `config.lowBattPct`
+  (hysteresis; cleared on charge). **Current draw:** `begin()` sets `setCpuFrequencyMhz(160)` +
+  Wi-Fi modem sleep. **Disabled in dev mode.** Exposes `begin()`, `loop()`, `noteActivity()`,
+  `noteVoiced(on)`, `standby()`, and callbacks
+  `onGrace(on)`/`onGraceTick(secs)`/`onStandby(on)`/`onSleep()`/`onLowBatt()`.
+  Deps: `M5.Power`, `WiFi` (modem sleep), `controls` (motion), config.
 
 **Orchestrator:**
 
@@ -189,8 +217,9 @@ The governing rule: **return the user's attention to the person, don't capture i
   the last utterance id seen, release waits a short grace for the tail utterance, then sends
   `{"type":"save","from":P+1,"to":<last id>}` (`net::saveClip`); the server stores it
   (`server/clips.py`, `/api/clips*`) and answers `saved`. BtnB short → **pause** (privacy screen).
-  BtnB long → status. BtnPWR long → power-off (stub until Stage 8). Lift → wake. (No mute — audio
-  output is removed.)
+  BtnB long → status. **BtnPWR = hardware off** (the M5PM1 PMIC power key; a tap powers the device off
+  and firmware can't intercept it — there is no firmware power-off gesture; deliberate shutdown is the
+  idle auto-sleep path, which closes the socket cleanly). Lift → wake. (No mute — audio output is removed.)
 - **In Settings the same buttons re-bind** (`emtext.ino` checks `display::state()`): BtnA click =
   select the highlighted row, BtnB click = scroll to the next row, BtnA hold or BtnB hold = back
   to Glance. All three are dead while the setup portal is up (`settingsLocked()`).
@@ -227,7 +256,7 @@ firmware/emtext/
    ├─ controls/  controls.h  controls.cpp
    ├─ display/   display.h   display.cpp
    ├─ audio/     audio.h     audio.cpp
-   ├─ proto/  transport/  net/  portal/  power/     (power planned; cues removed — no audio output)
+   ├─ proto/  transport/  net/  portal/  power/     (cues removed — no audio output)
 ```
 
 Conventions:
@@ -274,6 +303,16 @@ Conventions:
   captures, gates, and emits; `net` owns the send queue that absorbs an outage (Stage 5).
 - **Audio output removed** — the pendant has no speaker, so there are no tone cues and no mute;
   the emotional signal is visual only. Privacy **pause** is the only thing that gates the mic.
+- **No firmware power-off / PWR is a hardware off.** On the StickS3, PWR is the M5PM1 PMIC's power
+  key: a tap does a hardware power-off that firmware cannot intercept (M5Unified only ever reports a
+  "click", never a hold) or retime (the M5PM1 driver exposes no key-behaviour register). So the
+  requirement's *deliberate two-step power-off* is not implemented as a button gesture; the deliberate
+  clean-shutdown path is the **idle auto-sleep** (grace → standby → full power off, `net::shutdown()`
+  first). PWR remains the physical off switch (uninterceptable, so not a clean close).
+- **No ESP deep sleep.** Deep sleep buys nothing here (no BLE, no timer/RTC wake, no RTC retention;
+  wake would be the PMIC button anyway) — it still restarts the sketch (no fast resume) and draws
+  more than a full power-off. The recoverable low-power tier is a **connected standby** (Wi-Fi kept
+  associated → instant resume, which deep sleep can't do); the terminal tier is a full power off.
 - **⚠️ TLS is insecure on the active (Links2004) backend** — a known regression from 4d. Cert
   validation works under AHC but `beginSslWithCA` fails under Links2004, so it runs `beginSSL`
   (encrypted, unvalidated) for now. Fine for dev on a trusted network; **must be fixed before
@@ -319,9 +358,15 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
   conversing. Content updates without auto-waking (lift/press to view). **Verified on hardware.**
 - **7 — audio cues** ❌ **removed** — the device has no speaker output; the emotional signal is
   conveyed visually only (the colour of the glance heart). No `cues` module, no tones, no mute.
-- **8 — power management** ⬜ `power`: visible boot stages (**on-screen only — no failure
-  tones**), idle+motion auto-off (**on-screen grace, no audible warning**), two-step off,
-  deep sleep + button wake, battery; tune lift-to-wake to orientation-gated.
+- **8 — power management** ✅ built (validate on hardware) `power`: visible boot stages
+  (network→server→ready, **on-screen only — no failure tones**), staged cycle
+  **Awake → Idle → grace** (**on-screen countdown, any button/motion cancels, no audible warning**)
+  **→ low-power standby** (mic off, ping off, Wi-Fi kept connected, **button-only wake**, instant, no
+  reconnect) **→ full power off** after `standbyMaxS` (clean WS close first). One-time low-battery
+  warning, CPU-clock + Wi-Fi-modem-sleep current-draw config. **No ESP deep sleep; no firmware
+  power-off gesture** (PWR = M5PM1 hardware off). Verify on hardware: idle grace + cancel; standby
+  holds the socket on server keepalives; button wakes standby (no reconnect); long-standby → full off;
+  low-battery; **≥ 2.5 h runtime**; tune `MOTION_G`/`LIFT_G`.
 - **9 — acceptance + compliance** ⬜ outage recovery visible on screen, capture externally
   visible, no third-party retention, 2.5 h runtime (else press-to-listen default).
 

@@ -43,8 +43,12 @@ this server, survives a ~3 s WiFi drop with no audio loss, and **shows the tone 
 screen** (Stages 0–6 of 9). A **phone-based Wi-Fi setup portal** is also done — toggle a WPA2
 setup hotspot from the device and reconfigure Wi-Fi/host/token from a captive page that pops up
 automatically. **Hold-to-record clips** are also done — hold the button to save a moment (an
-utterance-id range) to the server for later review on the dashboard. Remaining: power management
-(Stage 8) and acceptance/compliance (9). (Audio cues, the former Stage 7, are dropped — the pendant
+utterance-id range) to the server for later review on the dashboard. **Power management (Stage 8)**
+is now built too — a staged cycle of *awake → idle → low-power standby (Wi-Fi kept alive, wakes on a
+button) → full power off*, plus visible boot stages and a low-battery warning (no ESP deep sleep, and
+no firmware power-off gesture: on the M5StickS3 the PWR button is a hardware off). Remaining:
+on-hardware validation of Stage 8 (incl. the ≥2.5 h runtime target) and acceptance/compliance
+(Stage 9). (Audio cues, the former Stage 7, are dropped — the pendant
 has no speaker; the emotional signal is visual only.) Full module architecture and the
 staged plan live in [firmware/README.md](firmware/README.md).
 

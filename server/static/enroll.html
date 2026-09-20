@@ -2,65 +2,159 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>emtext — enrol your voice</title>
 <style>
-  /* Self-contained, no CDNs, same palette as index.html. */
+  /* ---------------------------------------------------------------------
+     Shared emtext look (soft-UI / neumorphism). Copied verbatim into
+     index.html, dashboard.html, remote.html and enroll.html -- single files,
+     no build step, no CDNs -- so keep the four in sync. See index.html for
+     the reasoning behind the style.
+     --------------------------------------------------------------------- */
   :root {
-    --bg: #14161a; --panel: #1d2027; --edge: #2b2f38;
-    --text: #e7e9ee; --muted: #9aa1ad;
-    --positive: #4caf7d; --negative: #e56a6a; --accent: #3a7afe;
+    /* Light only, on purpose: the soft-UI effect depends on a pale surface
+       carrying both a highlight and a shade, and a dark surface loses the
+       highlight. Warm oat rather than the usual blue-grey, with one indigo
+       accent. */
+    color-scheme: light;
+    --surface: #ece8e1;
+    --sh-dark: #cdc6ba;
+    --sh-light: #ffffff;
+    --ink: #2a2622;
+    --ink-2: #6b645b;
+    --ink-3: #958d82;
+    --accent: #4d52c2;
+    --accent-ink: #ffffff;
+    --positive: #1f8f5f;
+    --negative: #d4514a;
+    --neutral: #857d73;
+    --sarcastic: #7d55c9;
+    --mixed: #c4861a;
+    --r-lg: 22px; --r: 14px; --r-sm: 10px;
+    --raise: 7px 7px 14px var(--sh-dark), -7px -7px 14px var(--sh-light);
+    --raise-sm: 3px 3px 7px var(--sh-dark), -3px -3px 7px var(--sh-light);
+    --press: inset 4px 4px 9px var(--sh-dark), inset -4px -4px 9px var(--sh-light);
+    --press-sm: inset 2px 2px 5px var(--sh-dark), inset -2px -2px 5px var(--sh-light);
+    --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Inter, system-ui, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { background: var(--surface); }
   body {
-    margin: 0; background: var(--bg); color: var(--text); line-height: 1.5;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; background: var(--surface); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  header { padding: 18px 22px; border-bottom: 1px solid var(--edge); display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
-  h1 { font-size: 20px; margin: 0; font-weight: 650; }
-  .sub { color: var(--muted); font-size: 13px; }
-  header a { color: var(--muted); font-size: 13px; margin-left: auto; }
-  main { max-width: 720px; margin: 0 auto; padding: 22px; }
-  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
-  h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-  p { margin: 0 0 10px; }
-  .why { font-size: 14px; color: var(--muted); }
-  ol.prompts { margin: 0; padding-left: 22px; }
-  ol.prompts li { margin: 8px 0; }
-  ol.prompts .how { color: var(--muted); font-size: 13px; }
-  ol.prompts b { font-weight: 600; font-size: 16px; }
-  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .9em; padding: 1px 6px; border-radius: 6px; box-shadow: var(--press-sm); }
+  .top {
+    position: sticky; top: 0; z-index: 5;
+    margin: 16px; padding: 12px 18px;
+    border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--raise);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .top .brand { display: flex; align-items: baseline; gap: 10px; }
+  .top .brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+  .top .brand .page { color: var(--ink-2); font-size: 14px; }
+  .top nav { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .top nav a {
+    text-decoration: none; color: var(--ink-2); font-size: 13px; font-weight: 600;
+    padding: 6px 12px; border-radius: 999px; box-shadow: var(--raise-sm);
+  }
+  .top nav a[aria-current="page"] { color: var(--ink); box-shadow: var(--press-sm); }
+  .card {
+    background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--raise);
+    padding: 18px 20px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+  .well { border-radius: var(--r); box-shadow: var(--press); padding: 12px 14px; }
+  .muted { color: var(--ink-2); }
   button {
-    background: var(--accent); color: #fff; border: none; border-radius: 8px;
-    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+    font: inherit; font-weight: 600; font-size: 14px; color: var(--ink);
+    background: var(--surface); border: 0; border-radius: var(--r);
+    padding: 10px 18px; min-height: 42px; cursor: pointer;
+    box-shadow: var(--raise-sm);
+    transition: box-shadow .12s ease, transform .12s ease;
   }
-  button.on { background: var(--negative); }
-  button.quiet { background: transparent; border: 1px solid var(--edge); color: var(--muted); }
-  button:disabled { opacity: .5; cursor: default; }
-  .meter { width: 120px; height: 8px; background: var(--edge); border-radius: 4px; overflow: hidden; }
-  .meter > div { height: 100%; width: 0%; background: var(--accent); transition: width .06s linear; }
-  .stat { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .result { margin-top: 12px; font-size: 14px; }
+  button:hover { box-shadow: var(--raise); }
+  button:active, button.pressed { box-shadow: var(--press-sm); transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button.on { background: var(--negative); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; box-shadow: var(--raise-sm); transform: none; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px;
+  }
+  input {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 0; border-radius: var(--r); padding: 12px 14px; width: 100%;
+    box-shadow: var(--press);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; color: var(--ink-2);
+    padding: 4px 11px; border-radius: 999px; box-shadow: var(--press-sm);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--negative); box-shadow: var(--raise-sm); }
+  .dot.connected, .dot.live { background: var(--positive); }
+  .meter { width: 120px; height: 10px; border-radius: 999px; box-shadow: var(--press-sm); overflow: hidden; }
+  .meter > div { height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .06s linear; }
+  .ok { color: var(--positive); } .bad { color: var(--negative); }
+  .warn { color: var(--mixed); } .pend { color: var(--ink-3); }
+  .empty { color: var(--ink-2); text-align: center; padding: 18px 0; font-size: 14px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+  /* ------------------------------ end shared ------------------------------ */
+
+  /* ---- this page: a three-step enrolment ---- */
+  main { max-width: 720px; margin: 0 auto; padding: 0 16px 40px; display: grid; gap: 22px; }
+  p { margin: 0 0 10px; }
+  .why { font-size: 14.5px; color: var(--ink-2); }
+  .why b { color: var(--ink); }
+  .state { font-size: 14.5px; margin-top: 12px; }
+  .state b { font-weight: 600; }
+
+  /* The lines to read: each one a small well, the mood note under it. This is
+     a sequence -- the user reads them in order -- so numbering is earned. */
+  ol.prompts { margin: 0; padding: 0; list-style: none; counter-reset: line; display: grid; gap: 10px; }
+  ol.prompts li {
+    counter-increment: line; position: relative;
+    padding: 10px 14px 10px 46px; border-radius: var(--r); box-shadow: var(--press);
+  }
+  ol.prompts li::before {
+    content: counter(line); position: absolute; left: 12px; top: 11px;
+    width: 24px; height: 24px; border-radius: 50%; box-shadow: var(--raise-sm);
+    font-size: 12px; font-weight: 700; color: var(--ink-2); text-align: center; line-height: 24px;
+  }
+  ol.prompts b { font-weight: 600; font-size: 16px; }
+  ol.prompts .how { color: var(--ink-2); font-size: 13px; }
+
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .stat { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .result { margin-top: 12px; font-size: 14px; min-height: 1.4em; }
   .result.ok { color: var(--positive); }
   .result.bad { color: var(--negative); }
-  .state { font-size: 14px; }
-  .state b { font-weight: 600; }
-  .warn { color: #e0b56a; }
-  .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
-  code { font-size: 12px; background: #23262e; padding: 1px 5px; border-radius: 4px; }
+  .note { font-size: 13px; color: var(--ink-2); margin-top: 12px; }
+  button.quiet { color: var(--ink-2); }
 </style>
 </head>
 <body>
-<header>
-  <div>
-    <h1>Enrol your voice</h1>
-    <div class="sub">so emtext stops interpreting <i>you</i></div>
+<header class="top">
+  <div class="brand">
+    <h1>emtext</h1>
+    <span class="page">enrol your voice</span>
   </div>
-  <a href="/">← back to the app</a>
+  <nav>
+    <a href="/">app</a>
+    <a href="/enroll.html" aria-current="page">enrol voice</a>
+    <a href="/dashboard.html">dashboard</a>
+    <a href="/remote.html">remote</a>
+  </nav>
 </header>
 
 <main>
   <div class="card">
+    <h2>Why enrol</h2>
     <p class="why">
       emtext hears a microphone, not a person. Without a voiceprint it cannot tell
       your lines from anyone else's, so it interprets <b>your own words</b> and
@@ -93,7 +187,7 @@
   <div class="card">
     <h2>Record</h2>
     <div class="controls">
-      <button id="rec" disabled>Record</button>
+      <button id="rec" class="primary" disabled>Record</button>
       <div class="meter"><div id="level"></div></div>
       <span class="stat" id="dur">0.0 s</span>
       <button id="send" disabled>Send to server</button>

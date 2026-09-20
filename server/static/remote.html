@@ -5,154 +5,208 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>emtext — remote diagnostics</title>
 <style>
-  /* Same palette and self-contained rules as index.html: no CDNs, no build. */
+  /* ---------------------------------------------------------------------
+     Shared emtext look (soft-UI / neumorphism). Copied verbatim into
+     index.html, dashboard.html, remote.html and enroll.html -- single files,
+     no build step, no CDNs -- so keep the four in sync. See index.html for
+     the reasoning behind the style.
+     --------------------------------------------------------------------- */
   :root {
-    --bg: #14161a;
-    --panel: #1d2027;
-    --edge: #2b2f38;
-    --text: #e7e9ee;
-    --muted: #9aa1ad;
-    --positive: #4caf7d;
-    --negative: #e56a6a;
-    --neutral: #8b93a1;
-    --sarcastic: #b98be0;
-    --mixed: #e0b56a;
-    --accent: #3a7afe;
+    /* Light only, on purpose: the soft-UI effect depends on a pale surface
+       carrying both a highlight and a shade, and a dark surface loses the
+       highlight. Warm oat rather than the usual blue-grey, with one indigo
+       accent. */
+    color-scheme: light;
+    --surface: #ece8e1;
+    --sh-dark: #cdc6ba;
+    --sh-light: #ffffff;
+    --ink: #2a2622;
+    --ink-2: #6b645b;
+    --ink-3: #958d82;
+    --accent: #4d52c2;
+    --accent-ink: #ffffff;
+    --positive: #1f8f5f;
+    --negative: #d4514a;
+    --neutral: #857d73;
+    --sarcastic: #7d55c9;
+    --mixed: #c4861a;
+    --r-lg: 22px; --r: 14px; --r-sm: 10px;
+    --raise: 7px 7px 14px var(--sh-dark), -7px -7px 14px var(--sh-light);
+    --raise-sm: 3px 3px 7px var(--sh-dark), -3px -3px 7px var(--sh-light);
+    --press: inset 4px 4px 9px var(--sh-dark), inset -4px -4px 9px var(--sh-light);
+    --press-sm: inset 2px 2px 5px var(--sh-dark), inset -2px -2px 5px var(--sh-light);
+    --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Inter, system-ui, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { background: var(--surface); }
   body {
-    margin: 0;
-    padding: 16px;
-    /* Respect the iPhone notch/home indicator -- this page is meant to be used
-       on a phone, held in one hand, while walking around testing the mic. */
-    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.45;
-    font-size: 16px;   /* 16px minimum stops iOS zooming the page on input focus */
+    margin: 0; background: var(--surface); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  h1 { font-size: 19px; margin: 0 0 2px; font-weight: 650; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
-
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .9em; padding: 1px 6px; border-radius: 6px; box-shadow: var(--press-sm); }
+  .top {
+    position: sticky; top: 0; z-index: 5;
+    margin: 16px; padding: 12px 18px;
+    border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--raise);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .top .brand { display: flex; align-items: baseline; gap: 10px; }
+  .top .brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+  .top .brand .page { color: var(--ink-2); font-size: 14px; }
+  .top nav { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .top nav a {
+    text-decoration: none; color: var(--ink-2); font-size: 13px; font-weight: 600;
+    padding: 6px 12px; border-radius: 999px; box-shadow: var(--raise-sm);
+  }
+  .top nav a[aria-current="page"] { color: var(--ink); box-shadow: var(--press-sm); }
   .card {
-    background: var(--panel);
-    border: 1px solid var(--edge);
-    border-radius: 12px;
-    padding: 14px;
-    margin-bottom: 14px;
+    background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--raise);
+    padding: 18px 20px;
   }
-  .card h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--muted); margin: 0 0 10px; font-weight: 600;
-  }
-
-  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
-  input {
-    width: 100%; padding: 12px; font-size: 16px;
-    background: #16181d; color: var(--text);
-    border: 1px solid var(--edge); border-radius: 8px;
-    font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  }
-  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-
-  /* Touch targets: 48px minimum, and buttons go full width on a phone. */
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+  .well { border-radius: var(--r); box-shadow: var(--press); padding: 12px 14px; }
+  .muted { color: var(--ink-2); }
   button {
-    width: 100%; min-height: 52px; margin-top: 12px;
-    font-size: 16px; font-weight: 600;
-    background: var(--accent); color: #fff;
-    border: none; border-radius: 10px; cursor: pointer;
+    font: inherit; font-weight: 600; font-size: 14px; color: var(--ink);
+    background: var(--surface); border: 0; border-radius: var(--r);
+    padding: 10px 18px; min-height: 42px; cursor: pointer;
+    box-shadow: var(--raise-sm);
+    transition: box-shadow .12s ease, transform .12s ease;
   }
-  button.secondary { background: #2b2f38; color: var(--text); }
-  button.on { background: var(--negative); }
-  button:disabled { opacity: .45; cursor: default; }
-  @media (min-width: 560px) {
-    body { max-width: 720px; margin: 0 auto; }
-    .row { display: flex; gap: 10px; }
-    .row button { flex: 1; }
+  button:hover { box-shadow: var(--raise); }
+  button:active, button.pressed { box-shadow: var(--press-sm); transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button.on { background: var(--negative); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; box-shadow: var(--raise-sm); transform: none; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px;
   }
+  input {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 0; border-radius: var(--r); padding: 12px 14px; width: 100%;
+    box-shadow: var(--press);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; color: var(--ink-2);
+    padding: 4px 11px; border-radius: 999px; box-shadow: var(--press-sm);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--negative); box-shadow: var(--raise-sm); }
+  .dot.connected, .dot.live { background: var(--positive); }
+  .meter { width: 120px; height: 10px; border-radius: 999px; box-shadow: var(--press-sm); overflow: hidden; }
+  .meter > div { height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .06s linear; }
+  .ok { color: var(--positive); } .bad { color: var(--negative); }
+  .warn { color: var(--mixed); } .pend { color: var(--ink-3); }
+  .empty { color: var(--ink-2); text-align: center; padding: 18px 0; font-size: 14px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+  /* ------------------------------ end shared ------------------------------ */
+
+  /* ---- this page: phone-first diagnostics, held in one hand ---- */
+  body { font-size: 16px; }   /* 16px minimum stops iOS zooming the page on input focus */
+  main {
+    max-width: 720px; margin: 0 auto; display: grid; gap: 22px;
+    padding: 0 16px max(24px, env(safe-area-inset-bottom));
+  }
+  label { display: block; font-size: 13px; color: var(--ink-2); margin: 12px 0 6px; }
+  input { font-family: var(--mono); font-size: 15px; }
+  /* Touch targets: 48px minimum, full width on a phone. */
+  main button { width: 100%; min-height: 52px; margin-top: 12px; font-size: 16px; }
+  button.secondary { color: var(--ink-2); }
+  .row { display: flex; gap: 12px; }
+  .row button { flex: 1; }
+  main .meter { width: 100%; margin-top: 14px; }
 
   /* Diagnostic rows: label left, result right, colour-coded. */
   .check {
     display: flex; align-items: baseline; justify-content: space-between;
-    gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--edge);
-    font-size: 14px;
+    gap: 12px; padding: 8px 0; font-size: 14px;
   }
-  .check:last-child { border-bottom: none; }
-  .check .k { color: var(--muted); }
-  .check .v { font-family: ui-monospace, Consolas, monospace; text-align: right; }
-  .ok   { color: var(--positive); }
-  .bad  { color: var(--negative); }
-  .warn { color: var(--mixed); }
-  .pend { color: var(--muted); }
-
-  .meter { height: 8px; background: var(--edge); border-radius: 4px; overflow: hidden; margin-top: 12px; }
-  .meter > div { height: 100%; width: 0%; background: var(--accent); transition: width .06s linear; }
+  .check + .check { border-top: 1px solid color-mix(in srgb, var(--sh-dark) 55%, transparent); }
+  .check .k { color: var(--ink-2); }
+  .check .v { font-family: var(--mono); font-size: 13px; text-align: right; }
 
   /* Log: monospace, newest last, scrolls independently so the controls above
      stay reachable without scrolling the whole page on a small screen. */
   #log {
-    font-family: ui-monospace, "SF Mono", Consolas, monospace;
-    font-size: 11.5px; line-height: 1.5;
-    max-height: 40vh; overflow-y: auto;
-    background: #101216; border: 1px solid var(--edge); border-radius: 8px;
-    padding: 10px; white-space: pre-wrap; word-break: break-word;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+    max-height: 40vh; overflow-y: auto; border-radius: var(--r); box-shadow: var(--press);
+    padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
   }
-  #log .t { color: #5c6470; }
+  #log .t { color: var(--ink-3); }
   #log .rx { color: var(--positive); }
   #log .tx { color: var(--accent); }
   #log .er { color: var(--negative); }
-  #log .in { color: var(--muted); }
+  #log .in { color: var(--ink-2); }
 
-  .entry { border-left: 3px solid var(--neutral); padding: 8px 0 8px 10px; margin-bottom: 10px; }
+  /* Utterances with the same tone-tinted read well as the app. */
+  .entry { margin-top: 12px; }
   .entry .transcript { font-size: 15px; }
-  .entry .read { font-size: 13.5px; margin-top: 3px; }
-  .entry .meta { font-size: 11px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
-  .t-positive  { border-left-color: var(--positive); }  .t-positive  .read { color: var(--positive); }
-  .t-negative  { border-left-color: var(--negative); }  .t-negative  .read { color: var(--negative); }
-  .t-neutral   { border-left-color: var(--neutral); }
-  .t-sarcastic { border-left-color: var(--sarcastic); } .t-sarcastic .read { color: var(--sarcastic); }
-  .t-mixed     { border-left-color: var(--mixed); }     .t-mixed     .read { color: var(--mixed); }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .entry .read {
+    display: inline-block; margin-top: 6px; padding: 4px 12px; border-radius: 999px;
+    font-size: 13.5px; font-weight: 600; box-shadow: var(--press-sm);
+    color: var(--tone, var(--ink-2));
+    background: color-mix(in srgb, var(--tone, var(--neutral)) 9%, var(--surface));
+  }
+  .entry .meta { font-size: 11px; color: var(--ink-3); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .t-positive  { --tone: var(--positive); }
+  .t-negative  { --tone: var(--negative); }
+  .t-neutral   { --tone: var(--neutral); }
+  .t-sarcastic { --tone: var(--sarcastic); }
+  .t-mixed     { --tone: var(--mixed); }
+  .t-neutral .read { color: var(--ink); }
+  .hint { font-size: 12.5px; color: var(--ink-2); margin-top: 12px; }
 
   /* VAD panel. The level bar carries a threshold marker because the single
-     question when tuning is "does my voice actually clear SPEECH_RMS", and a
+     question when tuning is "does my voice actually clear the threshold", and a
      bar without the line on it cannot answer that. */
   .vadbar {
-    position: relative; height: 26px; background: #101216;
-    border: 1px solid var(--edge); border-radius: 6px; overflow: hidden;
-    margin-top: 6px;
+    position: relative; height: 28px; border-radius: 999px; box-shadow: var(--press);
+    overflow: hidden; margin-top: 6px;
   }
-  .vadbar .fill { height: 100%; width: 0%; background: var(--neutral); transition: width .05s linear; }
+  .vadbar .fill { height: 100%; width: 0%; background: var(--neutral); border-radius: 999px; transition: width .05s linear; }
   .vadbar .fill.speech { background: var(--positive); }
-  .vadbar .thresh {
-    position: absolute; top: 0; bottom: 0; width: 2px; background: var(--mixed);
-  }
+  .vadbar .thresh { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--mixed); }
   .vadbar .num {
-    position: absolute; top: 0; right: 6px; line-height: 26px; font-size: 11px;
-    font-family: ui-monospace, Consolas, monospace; color: var(--text);
+    position: absolute; top: 0; right: 12px; line-height: 28px; font-size: 11px;
+    font-family: var(--mono); color: var(--ink);
   }
   /* Rolling speech/silence strip: one column per telemetry sample, newest at
      the right. Shows the SHAPE of a sentence -- where the gaps fell and how
      long they were -- which is what tells a split from a clip. */
   .strip {
-    display: flex; align-items: flex-end; gap: 1px; height: 34px; margin-top: 8px;
-    background: #101216; border: 1px solid var(--edge); border-radius: 6px;
-    padding: 3px; overflow: hidden;
+    display: flex; align-items: flex-end; gap: 1px; height: 38px; margin-top: 10px;
+    border-radius: var(--r-sm); box-shadow: var(--press); padding: 4px 6px; overflow: hidden;
   }
-  .strip i { flex: 0 0 3px; background: var(--edge); border-radius: 1px; min-height: 2px; }
+  .strip i { flex: 0 0 3px; background: var(--sh-dark); border-radius: 1px; min-height: 2px; }
   .strip i.sp { background: var(--positive); }
-  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
-  .legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin-top: 8px; flex-wrap: wrap; }
+  .legend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
 
-<h1>emtext remote diagnostics</h1>
-<div class="sub">Verify a tunnel end to end from a phone or another network.</div>
+<header class="top">
+  <div class="brand">
+    <h1>emtext</h1>
+    <span class="page">remote diagnostics</span>
+  </div>
+  <nav>
+    <a href="/">app</a>
+    <a href="/enroll.html">enrol voice</a>
+    <a href="/dashboard.html">dashboard</a>
+    <a href="/remote.html" aria-current="page">remote</a>
+  </nav>
+</header>
 
+<main>
 <div class="card">
   <h2>Connection</h2>
+  <p class="muted" style="margin:0 0 4px;font-size:14px">Verify a tunnel end to end from a phone or another network.</p>
   <label for="url">Server URL — paste the trycloudflare.com address</label>
   <input id="url" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
          spellcheck="false" placeholder="https://random-words.trycloudflare.com" />
@@ -160,7 +214,7 @@
   <input id="token" type="text" autocapitalize="off" autocorrect="off"
          spellcheck="false" placeholder="the value of AUTH_TOKEN on the server" />
   <div class="row">
-    <button id="connect">Run diagnostics</button>
+    <button id="connect" class="primary">Run diagnostics</button>
     <button id="disconnect" class="secondary" disabled>Disconnect</button>
   </div>
   <div class="hint">
@@ -184,9 +238,9 @@
 
 <div class="card">
   <h2>Microphone → tunnel → read</h2>
-  <button id="mic" disabled>Stream mic</button>
+  <button id="mic" class="primary" disabled>Stream mic</button>
   <div class="meter"><div id="level"></div></div>
-  <div class="check" style="margin-top:10px">
+  <div class="check" style="margin-top:12px">
     <span class="k">Last utterance → read</span><span class="v pend" id="c-latency">—</span>
   </div>
   <div id="feed"></div>
@@ -206,12 +260,13 @@
   </div>
   <div class="legend">
     <span>threshold <b id="v-threshold">—</b></span>
+    <span>floor <b id="v-floor" title="the room's noise level as the adaptive VAD hears it; threshold = floor × NOISE_MARGIN, clamped to [SPEECH_RMS_MIN, SPEECH_RMS]">—</b></span>
     <span>peak <b id="v-peak">—</b></span>
     <span>voiced <b id="v-voiced">—</b></span>
     <span>discarded <b id="v-discarded">0</b></span>
   </div>
   <div class="strip" id="v-strip"></div>
-  <div class="check" style="margin-top:10px">
+  <div class="check" style="margin-top:12px">
     <span class="k">Last utterance closed because</span><span class="v pend" id="v-reason">—</span>
   </div>
   <div class="hint" id="v-advice">
@@ -226,6 +281,7 @@
   <div id="log"></div>
   <button id="clear" class="secondary">Clear log</button>
 </div>
+</main>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -516,7 +572,9 @@ function renderVad(m) {
   fill.classList.toggle("speech", m.rms >= m.threshold);
   el("v-num").textContent = Math.round(m.rms);
   el("v-thresh").style.left = rmsToPct(m.threshold) + "%";
-  el("v-threshold").textContent = m.threshold;
+  el("v-threshold").textContent = Math.round(m.threshold);
+  // Older servers do not send the floor; leave the dash rather than "undefined".
+  if (typeof m.noise_floor === "number") el("v-floor").textContent = Math.round(m.noise_floor);
   el("v-threshold").dataset.endSilence = m.end_silence_ms;
   el("v-peak").textContent = Math.round(m.peak_rms);
   el("v-voiced").textContent = m.frames

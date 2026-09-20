@@ -16,33 +16,36 @@ namespace {
   bool wantActive = false;   // requested serving state (from setActive)
   bool dnsUp = false;        // captive DNS currently running
 
+  // Brushed-aluminium soft UI: one silver surface, elements raised or pressed by
+  // shadow alone, one steel-blue accent. Minified from portal_page.html.
   const char PAGE[] = R"HTML(<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>emtext setup</title>
 <style>
-  :root{--bg:#0e1116;--card:#161b22;--fg:#e8ebf0;--muted:#8b93a3;--accent:#4a9eff;--line:#242b36;--field:#0f141b}
+  :root{color-scheme:light;--surface:#dfe2e6;--sh-dark:#b6bac1;--sh-light:#fbfcfd;--ink:#1f2226;--ink-2:#5c626b;--ink-3:#8a9099;--accent:#2f5d8f;--raise:7px 7px 14px var(--sh-dark),-7px -7px 14px var(--sh-light);--raise-sm:3px 3px 7px var(--sh-dark),-3px -3px 7px var(--sh-light);--press:inset 4px 4px 9px var(--sh-dark),inset -4px -4px 9px var(--sh-light);--press-sm:inset 2px 2px 5px var(--sh-dark),inset -2px -2px 5px var(--sh-light)}
   *{box-sizing:border-box}html,body{margin:0}
-  body{background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-  .wrap{max-width:440px;margin:0 auto;padding:26px 18px 48px}
-  header{text-align:center;padding:22px 0 6px}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:7px;vertical-align:middle}
-  .logo{font-weight:700;font-size:22px;letter-spacing:.3px;vertical-align:middle}
-  .sub{color:var(--muted);font-size:13px;margin-top:5px}
-  form{margin-top:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 16px}
-  label{display:block;font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);margin:16px 0 7px}
-  label:first-of-type{margin-top:2px}
-  input{width:100%;padding:13px 12px;font-size:16px;color:var(--fg);background:var(--field);border:1px solid var(--line);border-radius:10px;outline:none}
-  input:focus{border-color:var(--accent)}input::placeholder{color:#59606e}
-  .hint{font-size:12px;color:var(--muted);margin-top:6px}
-  button{width:100%;margin-top:22px;padding:14px;font-size:16px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:11px}
-  button:active{filter:brightness(.9)}
-  .foot{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}
+  body{background:var(--surface);background-image:radial-gradient(120% 70% at 12% -10%,rgba(255,255,255,.55),transparent 60%),repeating-linear-gradient(90deg,rgba(255,255,255,.07) 0 1px,transparent 1px 3px);color:var(--ink);font:16px/1.5 "Segoe UI Variable Text","Segoe UI",-apple-system,"Helvetica Neue",system-ui,sans-serif;-webkit-font-smoothing:antialiased;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:440px;margin:0 auto;padding:30px 18px 48px}
+  header{text-align:center;padding:14px 0 22px}
+  .plate{display:inline-flex;align-items:center;gap:10px;padding:10px 20px;border-radius:999px;box-shadow:var(--raise)}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:var(--press-sm)}
+  .logo{font-weight:700;font-size:21px;letter-spacing:-.01em}
+  .sub{color:var(--ink-2);font-size:13.5px;margin-top:14px}
+  form{margin-top:4px}
+  .card{background:var(--surface);border-radius:22px;padding:22px 20px;box-shadow:var(--raise)}
+  label{display:block;font-size:13px;font-weight:600;color:var(--ink-2);margin:16px 0 7px}
+  label:first-of-type{margin-top:0}
+  input{width:100%;padding:13px 14px;font-size:16px;color:var(--ink);background:var(--surface);border:0;border-radius:14px;outline:none;box-shadow:var(--press)}
+  input:focus{outline:2px solid var(--accent);outline-offset:2px}input::placeholder{color:var(--ink-3)}
+  .hint{font-size:12.5px;color:var(--ink-2);margin-top:7px}
+  button{width:100%;margin-top:24px;padding:14px;font:inherit;font-size:16px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:14px;box-shadow:var(--raise-sm)}
+  button:active{box-shadow:var(--press-sm);transform:translateY(1px)}
+  .foot{text-align:center;color:var(--ink-2);font-size:12.5px;margin-top:22px;line-height:1.5}
 </style></head><body>
 <div class="wrap">
-  <header><span class="dot"></span><span class="logo">emtext</span><div class="sub">pendant Wi-Fi setup</div></header>
+  <header><div class="plate"><span class="dot"></span><span class="logo">emtext</span></div><div class="sub">pendant Wi-Fi setup</div></header>
   <form method="POST" action="/save">
     <div class="card">
       <label>Wi-Fi network</label>
@@ -54,7 +57,7 @@ namespace {
       <div class="hint">hostname only — no https:// and no /stream</div>
       <label>Access token</label>
       <input name="token" type="password" placeholder="leave blank to keep current">
-      <button type="submit">Save &amp; reconnect</button>
+      <button type="submit">Save and reconnect</button>
     </div>
   </form>
   <div class="foot">The pendant saves this and reconnects. You can then rejoin your own Wi-Fi.</div>
@@ -82,13 +85,20 @@ namespace {
     LOG_INFO("portal: config saved via AP -> reconnecting");
 
     String shown = ssid.length() ? ssid : c.nets[0].ssid;
+    // Same aluminium surface as the form, so the confirmation reads as the
+    // same object: one raised plate carrying the outcome.
     String body =
       "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-      "<body style='font-family:-apple-system,system-ui,sans-serif;background:#0e1116;"
-      "color:#e8ebf0;text-align:center;padding:48px 20px'>"
-      "<h2 style='color:#4a9eff'>Saved</h2>"
-      "<p>Reconnecting to <b>" + shown + "</b>&hellip;</p>"
-      "<p style='color:#8b93a3;font-size:14px'>You can rejoin your own Wi-Fi now.</p></body>";
+      "<body style='margin:0;min-height:100vh;box-sizing:border-box;"
+      "font-family:\"Segoe UI Variable Text\",\"Segoe UI\",-apple-system,system-ui,sans-serif;"
+      "background:#dfe2e6;background-image:radial-gradient(120% 70% at 12% -10%,rgba(255,255,255,.55),transparent 60%),"
+      "repeating-linear-gradient(90deg,rgba(255,255,255,.07) 0 1px,transparent 1px 3px);"
+      "color:#1f2226;text-align:center;padding:64px 20px'>"
+      "<div style='display:inline-block;max-width:400px;padding:26px 30px;border-radius:22px;"
+      "box-shadow:7px 7px 14px #b6bac1,-7px -7px 14px #fbfcfd'>"
+      "<div style='font-size:22px;font-weight:700;color:#2f5d8f'>Saved</div>"
+      "<p style='margin:12px 0 6px'>Reconnecting to <b>" + shown + "</b>&hellip;</p>"
+      "<p style='margin:0;color:#5c626b;font-size:14px'>You can rejoin your own Wi-Fi now.</p></div></body>";
     server.send(200, "text/html", body);
     net::reconnect();
   }

@@ -5,115 +5,203 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>emtext — dashboard</title>
 <style>
+  /* ---------------------------------------------------------------------
+     Shared emtext look (soft-UI / neumorphism). Copied verbatim into
+     index.html, dashboard.html, remote.html and enroll.html -- single files,
+     no build step, no CDNs -- so keep the four in sync. See index.html for
+     the reasoning behind the style.
+     --------------------------------------------------------------------- */
   :root {
-    --bg: #14161a; --panel: #1d2027; --edge: #2b2f38;
-    --text: #e7e9ee; --muted: #9aa1ad;
-    --positive: #4caf7d; --negative: #e56a6a; --neutral: #8b93a1;
-    --sarcastic: #b98be0; --mixed: #e0b56a; --accent: #3a7afe;
+    /* Light only, on purpose: the soft-UI effect depends on a pale surface
+       carrying both a highlight and a shade, and a dark surface loses the
+       highlight. Warm oat rather than the usual blue-grey, with one indigo
+       accent. */
+    color-scheme: light;
+    --surface: #ece8e1;
+    --sh-dark: #cdc6ba;
+    --sh-light: #ffffff;
+    --ink: #2a2622;
+    --ink-2: #6b645b;
+    --ink-3: #958d82;
+    --accent: #4d52c2;
+    --accent-ink: #ffffff;
+    --positive: #1f8f5f;
+    --negative: #d4514a;
+    --neutral: #857d73;
+    --sarcastic: #7d55c9;
+    --mixed: #c4861a;
+    --r-lg: 22px; --r: 14px; --r-sm: 10px;
+    --raise: 7px 7px 14px var(--sh-dark), -7px -7px 14px var(--sh-light);
+    --raise-sm: 3px 3px 7px var(--sh-dark), -3px -3px 7px var(--sh-light);
+    --press: inset 4px 4px 9px var(--sh-dark), inset -4px -4px 9px var(--sh-light);
+    --press-sm: inset 2px 2px 5px var(--sh-dark), inset -2px -2px 5px var(--sh-light);
+    --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Inter, system-ui, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { background: var(--surface); }
   body {
-    margin: 0; padding: 16px;
-    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--text); line-height: 1.45; font-size: 15px;
+    margin: 0; background: var(--surface); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-  h1 { font-size: 19px; margin: 0; font-weight: 650; }
-  .sub { color: var(--muted); font-size: 13px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); display: inline-block; }
-  .dot.live { background: var(--positive); }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .9em; padding: 1px 6px; border-radius: 6px; box-shadow: var(--press-sm); }
+  .top {
+    position: sticky; top: 0; z-index: 5;
+    margin: 16px; padding: 12px 18px;
+    border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--raise);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .top .brand { display: flex; align-items: baseline; gap: 10px; }
+  .top .brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+  .top .brand .page { color: var(--ink-2); font-size: 14px; }
+  .top nav { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .top nav a {
+    text-decoration: none; color: var(--ink-2); font-size: 13px; font-weight: 600;
+    padding: 6px 12px; border-radius: 999px; box-shadow: var(--raise-sm);
+  }
+  .top nav a[aria-current="page"] { color: var(--ink); box-shadow: var(--press-sm); }
+  .card {
+    background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--raise);
+    padding: 18px 20px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+  .well { border-radius: var(--r); box-shadow: var(--press); padding: 12px 14px; }
+  .muted { color: var(--ink-2); }
+  button {
+    font: inherit; font-weight: 600; font-size: 14px; color: var(--ink);
+    background: var(--surface); border: 0; border-radius: var(--r);
+    padding: 10px 18px; min-height: 42px; cursor: pointer;
+    box-shadow: var(--raise-sm);
+    transition: box-shadow .12s ease, transform .12s ease;
+  }
+  button:hover { box-shadow: var(--raise); }
+  button:active, button.pressed { box-shadow: var(--press-sm); transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button.on { background: var(--negative); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; box-shadow: var(--raise-sm); transform: none; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px;
+  }
+  input {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 0; border-radius: var(--r); padding: 12px 14px; width: 100%;
+    box-shadow: var(--press);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; color: var(--ink-2);
+    padding: 4px 11px; border-radius: 999px; box-shadow: var(--press-sm);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--negative); box-shadow: var(--raise-sm); }
+  .dot.connected, .dot.live { background: var(--positive); }
+  .meter { width: 120px; height: 10px; border-radius: 999px; box-shadow: var(--press-sm); overflow: hidden; }
+  .meter > div { height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .06s linear; }
+  .ok { color: var(--positive); } .bad { color: var(--negative); }
+  .warn { color: var(--mixed); } .pend { color: var(--ink-3); }
+  .empty { color: var(--ink-2); text-align: center; padding: 18px 0; font-size: 14px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+  /* ------------------------------ end shared ------------------------------ */
 
-  .grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
-  @media (min-width: 720px) {
-    body { max-width: 1180px; margin: 0 auto; }
+  /* ---- this page: the operator's view ---- */
+  .top .status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+  main { padding: 0 16px max(24px, env(safe-area-inset-bottom)); }
+  .grid { display: grid; gap: 22px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) {
+    main { max-width: 1200px; margin: 0 auto; }
     .grid { grid-template-columns: repeat(2, 1fr); }
     .grid .wide { grid-column: 1 / -1; }
   }
-  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 14px; }
-  .card h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--muted); margin: 0 0 12px; font-weight: 600;
-  }
+  .card h2 + h2 { margin-top: 18px; }
 
-  /* Big numbers: the things worth seeing from across the room. */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
-  .tile { background: #16181d; border: 1px solid var(--edge); border-radius: 9px; padding: 10px; }
-  .tile .n { font-size: 21px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .tile .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
-  .tile .s { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* Big numbers: the things worth seeing from across the room. Each tile is a
+     pressed well so the numbers read as set into the surface. */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 14px; }
+  .tile { border-radius: var(--r); box-shadow: var(--press); padding: 12px 14px; }
+  .tile .n { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .tile .l { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .tile .s { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-  .bar { height: 7px; background: var(--edge); border-radius: 4px; overflow: hidden; margin-top: 6px; }
-  .bar > div { height: 100%; width: 0%; background: var(--accent); transition: width .3s ease; }
+  .bar { height: 9px; border-radius: 999px; box-shadow: var(--press-sm); overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
   .bar > div.hot { background: var(--mixed); }
   .bar > div.crit { background: var(--negative); }
 
-  .row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0;
-         border-bottom: 1px solid var(--edge); font-size: 13.5px; }
-  .row:last-child { border-bottom: none; }
-  .row .k { color: var(--muted); }
-  .row .v { font-family: ui-monospace, Consolas, monospace; text-align: right; }
-  .ok { color: var(--positive); } .bad { color: var(--negative); }
-  .warn { color: var(--mixed); } .pend { color: var(--muted); }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; font-size: 13.5px; }
+  .row + .row { border-top: 1px solid color-mix(in srgb, var(--sh-dark) 55%, transparent); }
+  .row .k { color: var(--ink-2); }
+  .row .v { font-family: var(--mono); font-size: 12.5px; text-align: right; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: right; font-weight: 600; color: var(--muted); font-size: 11px;
-       text-transform: uppercase; letter-spacing: .05em; padding: 0 0 6px; }
+  th { text-align: right; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 0 0 8px; }
   th:first-child { text-align: left; }
-  td { padding: 5px 0; border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums;
-       text-align: right; font-family: ui-monospace, Consolas, monospace; }
-  td:first-child { text-align: left; font-family: inherit; color: var(--muted); }
+  td { padding: 6px 0; border-top: 1px solid color-mix(in srgb, var(--sh-dark) 55%, transparent);
+       font-variant-numeric: tabular-nums; text-align: right; font-family: var(--mono); font-size: 12.5px; }
+  td:first-child { text-align: left; font-family: inherit; font-size: 13px; color: var(--ink-2); }
 
-  /* Sparklines: plain SVG, no chart library (no CDNs allowed, and a line of
-     polyline points is less code than any dependency would be). */
-  svg.spark { width: 100%; height: 40px; display: block; margin-top: 8px; }
+  /* Sparklines: plain SVG, no chart library (no CDNs allowed). Drawn in a
+     shallow well so the line reads as carved rather than floating. */
+  svg.spark { width: 100%; height: 44px; display: block; margin-top: 10px; border-radius: var(--r-sm); box-shadow: var(--press-sm); padding: 4px; }
 
-  button {
-    min-height: 40px; padding: 0 14px; font-size: 13.5px; font-weight: 600;
-    background: #2b2f38; color: var(--text); border: 1px solid var(--edge);
-    border-radius: 8px; cursor: pointer;
-  }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button:disabled { opacity: .45; cursor: default; }
   .model {
-    display: flex; align-items: center; gap: 10px; padding: 9px 0;
-    border-bottom: 1px solid var(--edge); flex-wrap: wrap;
+    display: flex; align-items: center; gap: 10px; padding: 10px 0; flex-wrap: wrap;
   }
-  .model:last-child { border-bottom: none; }
-  .model .name { flex: 1 1 150px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
-  .model .meta { color: var(--muted); font-size: 11.5px; }
-  .badge { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--edge); color: var(--muted); }
-  .badge.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .badge.gpu { background: #1d3a2a; border-color: #2f6647; color: var(--positive); }
-  .badge.cpu { background: #3a2a1d; border-color: #66492f; color: var(--mixed); }
+  .model + .model { border-top: 1px solid color-mix(in srgb, var(--sh-dark) 55%, transparent); }
+  .model .name { flex: 1 1 150px; font-family: var(--mono); font-size: 13px; }
+  .model .meta { color: var(--ink-2); font-size: 12px; flex: 1 1 200px; }
+  .model button { min-height: 36px; padding: 0 14px; font-size: 13px; }
+  .badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; color: var(--ink-2); box-shadow: var(--press-sm); }
+  .badge.sel { background: var(--accent); color: var(--accent-ink); box-shadow: var(--raise-sm); }
+  .badge.gpu { color: var(--positive); }
+  .badge.cpu { color: var(--mixed); }
 
-  .utt { padding: 9px 0; border-bottom: 1px solid var(--edge); border-left: 3px solid var(--neutral); padding-left: 10px; }
-  .utt:last-child { border-bottom: none; }
+  /* Recent utterances and clips: the same tone-tinted read well as the app. */
+  .utt { padding: 10px 0; }
+  .utt + .utt { border-top: 1px solid color-mix(in srgb, var(--sh-dark) 55%, transparent); }
   .utt .txt { font-size: 14px; }
-  .utt .rd { font-size: 12.5px; margin-top: 2px; }
-  .utt .mt { font-size: 10.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
-  .t-positive { border-left-color: var(--positive); } .t-positive .rd { color: var(--positive); }
-  .t-negative { border-left-color: var(--negative); } .t-negative .rd { color: var(--negative); }
-  .t-neutral  { border-left-color: var(--neutral); }
-  .t-sarcastic{ border-left-color: var(--sarcastic); } .t-sarcastic .rd { color: var(--sarcastic); }
-  .t-mixed    { border-left-color: var(--mixed); }    .t-mixed .rd { color: var(--mixed); }
-  .empty { color: var(--muted); font-size: 13px; padding: 14px 0; text-align: center; }
-  .clip { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .utt .rd {
+    display: inline-block; margin-top: 6px; padding: 4px 12px; border-radius: 999px;
+    font-size: 12.5px; font-weight: 600; box-shadow: var(--press-sm);
+    color: var(--tone, var(--ink));
+    background: color-mix(in srgb, var(--tone, var(--neutral)) 9%, var(--surface));
+  }
+  .utt .rd:empty { display: none; }
+  .utt .mt { font-size: 11px; color: var(--ink-3); margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .t-positive  { --tone: var(--positive); }
+  .t-negative  { --tone: var(--negative); }
+  .t-neutral   { --tone: var(--neutral); }
+  .t-sarcastic { --tone: var(--sarcastic); }
+  .t-mixed     { --tone: var(--mixed); }
+  .t-neutral .rd { color: var(--ink); }
+  .clip { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
   .clip .body { flex: 1 1 260px; min-width: 0; }
-  .clip .acts { display: flex; gap: 6px; }
-  .clip button { min-height: 32px; padding: 0 10px; font-size: 12.5px; }
-  audio { width: 100%; margin-top: 10px; }
-  .note { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+  .clip .acts { display: flex; gap: 8px; }
+  .clip button { min-height: 34px; padding: 0 12px; font-size: 12.5px; }
+  audio { width: 100%; margin-top: 12px; border-radius: 999px; }
+  .note { font-size: 12px; color: var(--ink-2); margin-top: 12px; line-height: 1.5; }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>emtext dashboard</h1>
-  <span class="sub"><span class="dot" id="live"></span> <span id="status">connecting…</span></span>
-  <span class="sub" id="uptime"></span>
+<header class="top">
+  <div class="brand">
+    <h1>emtext</h1>
+    <span class="page">dashboard</span>
+  </div>
+  <span class="status"><span class="dot" id="live"></span> <span id="status">connecting…</span></span>
+  <span class="pill" id="uptime"></span>
+  <nav>
+    <a href="/">app</a>
+    <a href="/enroll.html">enrol voice</a>
+    <a href="/dashboard.html" aria-current="page">dashboard</a>
+    <a href="/remote.html">remote</a>
+  </nav>
 </header>
 
+<main>
 <div class="grid">
 
   <div class="card wide">
@@ -136,7 +224,7 @@
   </div>
 
   <div class="card wide">
-    <h2>Pipeline latency (rolling)</h2>
+    <h2>Pipeline latency, rolling</h2>
     <table id="lat"><thead><tr>
       <th>stage</th><th>last</th><th>mean</th><th>median</th><th>p95</th><th>n</th>
     </tr></thead><tbody></tbody></table>
@@ -180,9 +268,9 @@
   <div class="card">
     <h2>Tone distribution</h2>
     <div id="tones"><div class="empty">no utterances yet</div></div>
-    <h2 style="margin-top:16px">Voice emotion</h2>
+    <h2>Voice emotion</h2>
     <div id="emotions"><div class="empty">no utterances yet</div></div>
-    <h2 style="margin-top:16px">Who spoke</h2>
+    <h2>Who spoke</h2>
     <div id="speakers"><div class="empty">no utterances yet</div></div>
   </div>
 
@@ -213,6 +301,7 @@
   </div>
 
 </div>
+</main>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -423,7 +512,7 @@ function render(d) {
   } else {
     setEmpty(el("sys"), `unavailable: ${sys.reason || "?"}`);
   }
-  spark(el("spark-cpu"), (d.history || []).map((h) => h.cpu), "#3a7afe");
+  spark(el("spark-cpu"), (d.history || []).map((h) => h.cpu), getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#4d52c2");
 
   // --- gpu ---
   if (gpu.available) {
@@ -445,7 +534,7 @@ function render(d) {
     el("gpu-note").textContent =
       "Ollama's own VRAM figures below are the more useful GPU number anyway.";
   }
-  spark(el("spark-gpu"), (d.history || []).map((h) => h.gpu), "#4caf7d");
+  spark(el("spark-gpu"), (d.history || []).map((h) => h.gpu), getComputedStyle(document.documentElement).getPropertyValue("--positive").trim() || "#1f8f5f");
 
   // --- latency table ---
   const tb = el("lat").querySelector("tbody");

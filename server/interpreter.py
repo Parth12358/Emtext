@@ -77,9 +77,23 @@ label with a confidence, plus these scales:
 - valence: 0 = the voice sounds negative/unpleasant, 1 = positive/pleasant
 - arousal: 0 = calm and subdued, 1 = intense and energised (energy, not mood: \
 both rage and delight are high)
+- dominance: 0 = yielding, submissive, deflated, 1 = assertive, in control
+Valence is often absent; arousal and dominance are the axes the voice carries \
+that the words cannot, so use them even when valence is missing.
 
 Compare the voice against the words -- the MISMATCH between them is the most \
 useful signal you have:
+- Positive or agreeable words with LOW arousal and LOW dominance usually mean \
+masking, flat compliance, or a "fine" that is not fine.
+- Positive words with HIGH arousal and HIGH dominance are usually genuine \
+enthusiasm.
+- Negative or harsh words with HIGH arousal and HIGH dominance are usually a \
+real complaint or anger.
+- Negative words with LOW arousal and LOW dominance usually mean sadness or \
+resignation rather than hostility.
+- These arousal/dominance rules need BOTH axes to agree. Calm on its own is \
+how ordinary statements sound: never read masking or sadness from low arousal \
+alone, and when valence is present it decides the direction.
 - Positive or complimentary words with a low-valence voice usually mean sarcasm, \
 or someone masking that they are upset.
 - Negative or harsh words with a high-valence voice usually mean teasing, \
@@ -92,16 +106,18 @@ teasing. A confident high-valence voice is evidence AGAINST sarcasm. Do not \
 call something sarcastic just because the phrasing pattern matches, when the \
 voice clearly disagrees.
 - When the words and the voice agree, take the line literally and say so plainly.
-- High arousal mainly tells you how strongly the speaker feels, not whether it \
-is good or bad; use valence for that.
+- High arousal on its own tells you how strongly the speaker feels, not whether \
+it is good or bad; read the direction from valence when present, otherwise \
+from dominance together with the words.
 
 Weigh the voice by its confidence. Below about 0.4 the label is close to a guess, \
 so lean on the words and treat the voice as weak supporting evidence at most. \
 Never let a low-confidence voice reading alone turn a plain sentence into \
 sarcasm. The voice field is a hint from an imperfect model, not ground truth.
 
-When there is no "voice:" field you are reading text alone with no vocal tone \
-at all, so be especially careful not to over-read sarcasm into plain sentences. \
+When there is no "voice:" field, or it carries only an emotion label with no \
+scales, you are reading mostly text with little or no vocal tone, so be \
+especially careful not to over-read sarcasm into plain sentences. \
 Whenever you are unsure, prefer "neutral" rather than guessing. Use the earlier \
 lines only as context; interpret just the newest line."""
 
@@ -144,21 +160,46 @@ def _describe_voice(voice: dict | None) -> str | None:
     # model was not ignoring the voice; we were lying to it. Measure a backend
     # with `python -m eval.ser_eval --profile-valence` and set the thresholds to
     # match its actual range before trusting it.
+    scales = 0
     for name, low, mid, high, lo_t, hi_t in (
         ("valence", "negative", "neutral", "positive",
          config.VALENCE_LOW, config.VALENCE_HIGH),
         ("arousal", "calm", "moderate", "elevated",
          config.AROUSAL_LOW, config.AROUSAL_HIGH),
+        ("dominance", "yielding", "moderate", "assertive",
+         config.DOMINANCE_LOW, config.DOMINANCE_HIGH),
     ):
         value = voice.get(name)
         if isinstance(value, (int, float)):
             gloss = low if value < lo_t else (high if value > hi_t else mid)
             parts.append(f"{name} {value:.2f} ({gloss})")
+            scales += 1
+
+    # A label with no scales at all is a weak hint, and the prompt's caution
+    # paragraph keys on exactly this. Found 2026-09-05: the old emotion2vec
+    # output ("angry (conf 0.77)", nothing else) was present enough to skip
+    # the "no voice field" warning yet carried none of the numbers the rules
+    # use, so the model was handed rules it could not apply and denied the
+    # fallback. Say it inline, where it cannot be overlooked.
+    if parts and scales == 0:
+        parts.append("label only, no scales measured")
 
     return ", ".join(parts) if parts else None
 
 
 TONES = ("positive", "negative", "neutral", "sarcastic", "mixed")
+
+# Off-enum answers that have an obvious home. RESPONSE_SCHEMA constrains `tone`
+# to TONES, but only on Ollama builds that honour schemas; a model that
+# volunteers "ironic" used to be recorded as "neutral" -- the maximally wrong
+# bucket for a line that IS sarcastic. Map to the adjacent tone instead, and
+# let only genuinely unknown strings fall through to neutral. Irony is folded
+# into sarcasm on purpose (a separate tone would invalidate the eval baseline
+# and needs its own labelling effort; see TODO.md).
+_TONE_SYNONYMS = {
+    "ironic": "sarcastic", "irony": "sarcastic", "sardonic": "sarcastic",
+    "sarcasm": "sarcastic", "ambivalent": "mixed", "conflicted": "mixed",
+}
 
 # How speaker-id labels appear in the context list. "mixed" (an utterance that
 # holds a turn change) is deliberately left untagged: tagging it "speaker:"
@@ -356,9 +397,11 @@ class Interpreter:
         `who` is the optional speaker-id label ("other" / "mixed"); "user" lines
         never reach this method -- main.py routes them to remember() instead.
 
-        Note we pass emotion/valence/arousal but not dominance: dominance is
-        useful for separating emotion classes inside the model, but it adds
-        little the LLM can act on and lengthens the prompt for no gain.
+        All three dimensions are passed when present. Dominance earned its
+        place once the default backend stopped supplying valence: arousal +
+        dominance are the two genuinely paralinguistic axes, and dominance is
+        what separates anger (high) from fear or resignation (low) at the same
+        arousal.
 
         Always returns a dict; on any failure it returns a safe neutral-ish
         fallback so the caller can send *something* to the user.
@@ -394,6 +437,7 @@ class Interpreter:
             parsed = json.loads(body["response"])
             tone = str(parsed.get("tone", "neutral")).lower().strip()
             read = str(parsed.get("read", "")).strip()
+            tone = _TONE_SYNONYMS.get(tone, tone)
             if tone not in TONES:
                 tone = "neutral"
             if not read:

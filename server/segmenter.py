@@ -33,6 +33,9 @@ class Segmenter:
                   most recent frames so that when speech *does* start we can
                   prepend the PRE_ROLL that leads into it (otherwise the first
                   consonant is always clipped, which wrecks transcription).
+                  While idle we also listen to the *room*: every frame that is
+                  not speech updates a running noise floor, and the speech
+                  threshold is a margin above that floor (see `_threshold`).
 
         SPEECH -- we are inside an utterance, appending every frame. We watch a
                   trailing-silence timer: once it grows past END_SILENCE_MS the
@@ -53,10 +56,34 @@ class Segmenter:
         min_utterance_ms: int = config.MIN_UTTERANCE_MS,
         max_utterance_ms: int = config.MAX_UTTERANCE_MS,
         pre_roll_ms: int = config.PRE_ROLL_MS,
+        adaptive: bool = config.VAD_ADAPTIVE,
+        speech_rms_min: float = config.SPEECH_RMS_MIN,
+        noise_margin: float = config.NOISE_MARGIN,
+        noise_floor_rise: float = config.NOISE_FLOOR_RISE,
+        noise_floor_fall: float = config.NOISE_FLOOR_FALL,
+        noise_floor_init: float | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
+        # `speech_rms_max` is the configured SPEECH_RMS: the ceiling of the
+        # adaptive threshold, and the whole threshold when adaptive is off.
+        # `speech_rms` is the EFFECTIVE threshold for the most recent frame --
+        # kept as a plain attribute (not a property) so main.py's telemetry and
+        # the eval scripts keep reading it exactly as they did before.
+        self.speech_rms_max = speech_rms
         self.speech_rms = speech_rms
+        self.adaptive = adaptive
+        self.speech_rms_min = min(speech_rms_min, speech_rms)
+        self.noise_margin = noise_margin
+        self.noise_floor_rise = noise_floor_rise
+        self.noise_floor_fall = noise_floor_fall
+        # Start the floor where the OLD constant threshold would put it, so the
+        # first few hundred milliseconds behave like before rather than like a
+        # silent room (a live mic is never silent, and assuming so would open an
+        # utterance on the first breath).
+        if noise_floor_init is None:
+            noise_floor_init = config.NOISE_FLOOR_INIT if adaptive else 0.0
+        self.noise_floor: float = float(noise_floor_init)
         self.end_silence_ms = end_silence_ms
         self.min_utterance_ms = min_utterance_ms
         self.max_utterance_ms = max_utterance_ms
@@ -147,7 +174,22 @@ class Segmenter:
         """Advance the state machine by one frame; return an utterance if one
         just finished, otherwise None."""
         rms = self._rms(frame)
-        is_speech = rms >= self.speech_rms
+        is_speech = rms >= self._threshold()
+
+        # --- noise floor ----------------------------------------------------
+        # Learn the room from frames that are NOT speech, and only those: a
+        # sentence must never lift the floor under itself, or a long loud line
+        # would raise the bar mid-utterance and cut its own tail. The floor is
+        # an exponential moving average with two rates. It FALLS fast (a quiet
+        # room should be trusted within a few frames, and that is what lets
+        # quiet speech through) and RISES slowly (a door slam or a cough is a
+        # transient, not a new room, and the threshold should not jump for it).
+        # The decision above used the floor from the previous frame on purpose:
+        # this frame's classification must not depend on itself.
+        if self.adaptive and not is_speech:
+            alpha = self.noise_floor_fall if rms < self.noise_floor else self.noise_floor_rise
+            self.noise_floor += alpha * (rms - self.noise_floor)
+        self.speech_rms = self._threshold()
 
         # --- observability -------------------------------------------------
         # Recorded, never acted on: the state machine below is unchanged. This
@@ -200,6 +242,31 @@ class Segmenter:
             return self._finalize()
 
         return None
+
+    def _threshold(self) -> float:
+        """The RMS a frame must reach to count as speech, right now.
+
+        With adaptation off this is simply SPEECH_RMS, byte for byte the old
+        behaviour. With it on, the threshold is a fixed ratio above the measured
+        noise floor, clamped from both sides:
+
+          * the CEILING is SPEECH_RMS (500): a loud room asks for no more than
+            the old constant did, so nothing that used to segment stops
+            segmenting;
+          * the FLOOR is SPEECH_RMS_MIN (150): digital silence -- a studio clip,
+            a muted line -- must not drive the threshold to zero and open an
+            utterance on the first bit of dither. 150 is where RAVDESS measured
+            5/10 dropped clips becoming 1/10 (TODO.md).
+
+        Between those, a quiet room with a floor of 30 asks for 150, a normal
+        room at 100 asks for 300, and an air-conditioned office at 200 asks for
+        the full 500 -- which is the point: one number that means "a margin
+        above whatever this microphone hears when nobody is talking".
+        """
+        if not self.adaptive:
+            return self.speech_rms_max
+        wanted = self.noise_floor * self.noise_margin
+        return float(min(self.speech_rms_max, max(self.speech_rms_min, wanted)))
 
     def _finalize(self) -> np.ndarray | None:
         """Close the current utterance and reset to IDLE.
@@ -271,5 +338,56 @@ if __name__ == "__main__":
     got2 = [u for u in seg2.feed(blip) if u is not None]
     assert len(got2) == 0, f"expected blip to be discarded, got {len(got2)}"
     print("case 2 OK: 200 ms blip discarded")
+
+    # Case 3: QUIET speech. A tone at amp 300 has RMS ~212 -- below the old
+    # constant threshold of 500 (it was silently dropped, which is the bug in
+    # TODO.md) but above SPEECH_RMS_MIN. After leading silence the adaptive
+    # threshold settles at the floor, so the tone must now segment; with
+    # adaptation off it must still be dropped, proving the old path is intact.
+    quiet = _silence(500) + _tone(1000, amp=300) + _silence(1000)
+    seg3 = Segmenter(adaptive=True)   # explicit: the self-test must not depend on VAD_ADAPTIVE
+    got3 = seg3.feed(quiet)
+    assert len(got3) == 1, f"adaptive: expected quiet tone to segment, got {len(got3)}"
+    assert seg3.speech_rms == seg3.speech_rms_min, seg3.speech_rms
+    seg3f = Segmenter(adaptive=False)
+    got3f = seg3f.feed(quiet)
+    assert len(got3f) == 0, f"fixed: expected quiet tone dropped, got {len(got3f)}"
+    print(f"case 3 OK: RMS-212 tone segmented adaptively (threshold "
+          f"{seg3.speech_rms:.0f}), dropped at fixed {seg3f.speech_rms:.0f}")
+
+    # Case 4: a NOISY room must not false-trigger, and must still hear a loud
+    # tone over the noise. White noise at RMS ~400 wants a threshold of 1200,
+    # which clamps to the SPEECH_RMS ceiling -- so the adaptive path can never
+    # be MORE trigger-happy than the old constant in a loud room.
+    rng = np.random.default_rng(7)
+
+    def _noise(ms: int, rms: float = 400.0) -> np.ndarray:
+        n = int(config.SAMPLE_RATE * ms / 1000)
+        return (rng.standard_normal(n) * rms).astype(np.int16)
+
+    tone_arr = np.frombuffer(_tone(1000), dtype=np.int16)
+    mixed = (tone_arr.astype(np.int32) + _noise(1000).astype(np.int32))
+    noisy = np.concatenate([
+        _noise(2000),
+        mixed.clip(-32768, 32767).astype(np.int16),
+        _noise(1500),
+    ]).tobytes()
+    seg4 = Segmenter(adaptive=True)
+    got4 = seg4.feed(noisy)
+    assert seg4.speech_rms == seg4.speech_rms_max, seg4.speech_rms
+    assert len(got4) == 1, f"noisy room: expected exactly one utterance, got {len(got4)}"
+    assert seg4.discarded == 0, f"noisy room: {seg4.discarded} false trigger(s) discarded"
+    print(f"case 4 OK: noise floor {seg4.noise_floor:.0f} clamps threshold to "
+          f"{seg4.speech_rms:.0f}; one utterance, no false triggers")
+
+    # Case 5: speech must not raise the floor. A loud burst is classified as
+    # speech and therefore excluded from the floor estimate; the floor after
+    # it must be where the surrounding silence put it.
+    seg5 = Segmenter(adaptive=True)
+    seg5.feed(_silence(600))
+    before = seg5.noise_floor
+    seg5.feed(_tone(300, amp=8000) + _silence(1000))
+    assert abs(seg5.noise_floor - before) < 1.0, (before, seg5.noise_floor)
+    print(f"case 5 OK: loud burst left the noise floor at {seg5.noise_floor:.1f}")
 
     print("segmenter self-test passed")

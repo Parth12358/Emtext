@@ -107,8 +107,9 @@ before the SER swap.
 - **Whisper `base` could be better.** `distil-small.en` matches `small`'s accuracy
   for less CPU, but that was measured on clean synthetic speech, so it needs a
   real-microphone comparison first.
-- The current SER backend supplies **no valence/arousal**, only an emotion label,
-  which weakens the words-vs-voice mismatch rule the prompt is built around.
+- The current SER backend supplies **no valence**; arousal and dominance are
+  derived from its class distribution, and the mismatch rule is built on those
+  two axes (valence is left to the LLM, which reads it from the words).
 
 ## Why the voice matters
 
@@ -128,8 +129,11 @@ every bit of signal is in the delivery: `qwen3:14b` reaches 81% tone accuracy an
 48% voice sensitivity — the gap between how often it calls a happy voice positive
 versus an angry one. A model ignoring the voice field scores ~0 there.
 
-Note the default backend (emotion2vec) is **categorical only** — it returns an
-emotion label with a confidence, and no valence/arousal numbers. See
+Note the default backend (emotion2vec) has no dimensional head: `valence` is
+`null` by design, and `arousal` / `dominance` are **derived** as the
+anchor-weighted mean over its 7-class distribution (`dims_source: "derived"`).
+The prompt's mismatch rule is stated on arousal + dominance as well as on
+valence, so it works with either backend. See
 [Choosing a SER model](#choosing-a-ser-model).
 
 **SER labels are hints, not truth.** The model is guessing from acoustics and it
@@ -326,6 +330,10 @@ variable of the same name. The ones you'll actually touch:
 | `MIN_UTTERANCE_MS`  | 350     | Utterances with less voiced audio than this are discarded as blips (coughs, taps). |
 | `MAX_UTTERANCE_MS`  | 15000   | Hard cap; force-cuts run-on audio so the buffer never grows without bound. |
 | `PRE_ROLL_MS`       | 240     | Audio kept from just *before* speech starts, so the first sound isn't clipped. |
+| `VAD_ADAPTIVE`      | `true`  | Track the room: the threshold is `noise_floor × NOISE_MARGIN`, clamped to `[SPEECH_RMS_MIN, SPEECH_RMS]`, with the floor learned from non-speech frames only. `0` restores the constant `SPEECH_RMS`. |
+| `SPEECH_RMS_MIN`    | 150     | Floor of the adaptive threshold. Digital silence settles here; on RAVDESS that took VAD drops from 5/10 to 1/10 (10/10 now segment). |
+| `NOISE_MARGIN`      | 3.0     | How far above the room a frame must be to count as speech (~+9.5 dB). |
+| `NOISE_FLOOR_RISE` / `NOISE_FLOOR_FALL` | 0.02 / 0.3 | EMA rates for the floor: rises slowly (a cough is not a new room), falls fast (a quiet room is trusted within a few frames). |
 
 Example — retune for a loud room and pull a bigger Whisper model:
 
@@ -435,11 +443,15 @@ useful, and against the default gloss thresholds every clip in 1440 was describe
 to the LLM as "negative". If you enable it, run `--profile-valence` first and set
 `VALENCE_LOW`/`VALENCE_HIGH` to match.
 
-The emotion2vec models are far lighter, but they are **categorical only** — no
-dimensional head, so `valence` and `arousal` come back `null`. That is not a
-missing column so much as a missing capability: valence is the axis the
-interpreter's sarcasm rule actually keys on, so mismatch detection gets weaker.
-Treat them as a speed/quality trade, not a free win.
+The emotion2vec models are far lighter and have **no dimensional head**. Rather
+than fabricate valence, `ser.py` derives `arousal` and `dominance` from the
+class distribution (per-emotion anchors, probability-weighted) and leaves
+`valence` at `null`: acoustic valence is largely implicit linguistic content
+(see `TODO.md`), so it would agree with the transcript exactly where the
+mismatch rule needs an independent channel. The LLM reads valence from the
+words; the voice contributes the two axes the words cannot. Profile the derived
+range with `python -m eval.ser_eval --profile-valence` before changing
+`AROUSAL_*` / `DOMINANCE_*`.
 
 Their 9 classes are normalised onto the same 7 the app uses, with `other` and
 `unknown` folded into `neutral` — those mean "the model didn't commit", and
@@ -710,7 +722,7 @@ python -m eval.model_eval --models gemma3:12b   # one model
 python -m eval.model_eval --runs 3 --show-fails # variance + every miss
 ```
 
-The suite has 30 cases across eight categories, and the categories matter more
+The suite has 34 cases across eight categories, and the categories matter more
 than the headline number. Two of them exist purely as **false-positive guards**:
 
 - `literal` — plain sentences ("The train leaves at four fifteen"). Reading tone
@@ -733,13 +745,20 @@ would mostly measure agreement with whoever wrote the labels.
 
 ### Results
 
-30 cases × 3 runs, Arc B580, current system prompt:
+34 cases × 3 runs, Arc B580, current system prompt (the arousal + dominance
+revision of 2026-09-20; `mm-05`/`mm-06` are valence-free pairs in the shipped
+backend's shape):
 
 | model | size | overall | sarcasm | mismatch pairs | speed | notable weakness |
 |-------|------|---------|---------|----------------|-------|------------------|
-| `gemma3:12b` | 8.1 GB | 93% | 9/12 (75%) | **4/4** | 1.17 s | misses `sar-04` on every run |
-| `qwen3:14b` | 9.3 GB | 93% | **12/12** | 2/4 | 0.85 s | over-calls sarcasm when voice says sincere |
-| `qwen3:8b` | 5.2 GB | 83% | 9/12 (75%) | **4/4** | 0.52 s | **0% on passive aggression**, misses `sar-04` |
+| `gemma3:12b` | 8.1 GB | 85% | 9/12 (75%) | 3/6 | 1.01 s | misses `sar-04` on every run; reads a calm "it's fine" as masking |
+| `qwen3:14b` | 9.3 GB | 88% | **12/12** | 2/6 | 0.62 s | over-calls sarcasm when voice says sincere |
+| `qwen3:8b` | 5.2 GB | 76% | 9/12 (75%) | **4/6** | 0.43 s | **0% on passive aggression**, misses `sar-04` |
+
+On the 30 cases the earlier prompt was scored on, each model is 3 points
+below its old figure (93 / 93 / 83), almost entirely one case per model; the
+`literal` and `low-confidence` guard rails are 100% for all three. The full
+before/after is in `TODO.md` under the SER entry.
 
 The sarcasm column is the axis the product is named for, and it shows two
 opposite failure shapes that the overall score hides. Every sarcasm miss in
@@ -748,7 +767,7 @@ time. It's not like I have anywhere to be."*): `gemma3:12b` and `qwen3:8b` fail 
 on all three runs, so it is deterministic, not occasional, and it is the most
 conversationally common form in the set (sarcasm carried by a negation rather
 than an intensifier like "oh great"). `qwen3:14b` detects every sarcasm case and
-**over-applies** it: its 2/4 on the mismatch pairs comes from the sincere halves,
+**over-applies** it: its 2/6 on the mismatch pairs comes from the sincere halves,
 where a confidently happy voice should rule sarcasm out. For this product a false
 positive is the more damaging error, because it teaches the listener to distrust
 ordinary speech.
@@ -795,8 +814,10 @@ and ruled out. In short:
 - **Whisper `base` is untested in a real room.** The ASR comparison used clean
   synthetic speech, which cannot see noise robustness. Do not switch models on
   that evidence alone.
-- **The default SER backend has no valence**, only an emotion label — which
-  weakens the words-vs-voice mismatch rule the whole prompt is built around.
+- **The default SER backend has no measured dimensions.** Arousal and dominance
+  are derived from the label distribution, so they grade only when the model is
+  torn; valence is left to the LLM. Whether that beats a measured head on real
+  speech is untested.
 - **Sarcasm is never tested on real speech.** The mismatch pairs use hand-typed
   valence gaps far wider than any backend measures, RAVDESS has no sarcastic
   speech at all, and the default backend has no valence for those cases to

@@ -7,9 +7,43 @@ next person doesn't have to rediscover it.
 
 ## The VAD cannot hear quiet speech (`SPEECH_RMS`)
 
-**Status:** open, but now *diagnosable* · **Found:** 2026-09-03, while building
+**Status:** IMPLEMENTED 2026-09-20 (noise-floor-relative threshold); needs a
+real-microphone confirmation · **Found:** 2026-09-03, while building
 `eval/pipeline_eval.py` · **Confirmed on real hardware** during phone testing
 · **Affects:** `server/segmenter.py`, `server/config.py`
+
+### What was built (2026-09-20)
+
+The threshold now tracks the room instead of assuming a level:
+
+```
+threshold = clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)
+```
+
+`noise_floor` is an exponential moving average of frame RMS over frames the
+machine classes as NON-speech (idle frames and trailing silence), with two
+rates: it falls fast (`NOISE_FLOOR_FALL` 0.3, so a quiet room is trusted within
+a few frames) and rises slowly (`NOISE_FLOOR_RISE` 0.02, so a cough is a
+transient, not a new room). Speech frames never update it, so a sentence cannot
+lift the bar under itself. `SPEECH_RMS` (500) keeps its meaning as the ceiling,
+`SPEECH_RMS_MIN` (150) is the floor -- digital silence settles there, which is
+the measured RAVDESS workaround -- and `NOISE_MARGIN` (3.0, ~+9.5 dB) is the
+one number that means "a margin above what this mic hears when nobody talks".
+`VAD_ADAPTIVE=0` restores the constant threshold byte for byte, and
+`pipeline_eval --speech-rms N` sets that automatically, because an explicit
+number should mean a constant.
+
+Measured: `python -m eval.pipeline_eval --vad-check` with no override now
+segments **10/10** clips (was 5/10; the four sad/neutral drops included). The
+segmenter self-test gained three cases: an RMS-212 tone segments adaptively and
+is still dropped at a fixed 500; white noise at RMS ~400 clamps the threshold to
+500 and produces no false trigger; a loud burst leaves the floor unchanged.
+`remote.html`'s VAD strip shows the live floor next to the threshold.
+
+Still open: none of this has been watched on the pendant's mic in a real room.
+`MIN_UTTERANCE_MS` is unchanged -- a lower threshold makes more frames count as
+voiced, which is what that second filter needed. The analysis below is kept
+for the measurements.
 
 ### The problem
 
@@ -60,7 +94,7 @@ Two things were tested and ruled out, so they don't get re-litigated:
 So the end-to-end failure for quiet speech is: VAD emits nothing → nothing
 downstream runs. If it *did* emit, ASR would still be unreliable.
 
-### Options for a fix (none implemented)
+### Options that were considered (the first one is what was built)
 
 | approach | note |
 |---|---|
@@ -146,7 +180,75 @@ the interpreter.
 
 ## The default SER backend has no valence
 
-**Status:** accepted trade-off, worth revisiting · **Affects:** `server/ser.py`
+**Status:** PARTLY IMPLEMENTED 2026-09-20 -- arousal and dominance are now
+derived from the class distribution and the mismatch rule is rebuilt on them;
+the guard rail fires on label-only voice; valence is deliberately left to the
+LLM · **Affects:** `server/ser.py`, `server/interpreter.py`, `server/config.py`
+
+### What was built (2026-09-20)
+
+Following the "valence may be the wrong target" conclusion below:
+
+- `ser.py` (`_analyze_emotion2vec`) now returns `arousal` and `dominance` as the
+  probability-weighted mean of per-emotion anchors over the 7-class distribution
+  it already computed (`_AROUSAL_ANCHOR` / `_DOMINANCE_ANCHOR`, textbook PAD
+  placements), tagged `dims_source: "derived"`. `valence` stays `None`.
+- `interpreter.py`: the prompt gains a dominance scale and the four-row
+  arousal+dominance mismatch table (positive words + low/low = masking; +
+  high/high = genuine; negative + high/high = real anger; negative + low/low =
+  resignation), phrased to work with or without valence. `_describe_voice`
+  passes dominance and appends "label only, no scales measured" when a label
+  arrives with no numbers, and the closing caution now fires for "no voice
+  field OR label only" -- the 2026-09-05 finding below is closed.
+- `config.py`: `DOMINANCE_LOW/HIGH` (0.4/0.6). The `read` frame's `voice` object
+  carries `dominance` (additive).
+
+Profiled on 210 balanced RAVDESS clips (`python -m eval.ser_eval
+--profile-valence`, which now prints all three axes and the two separations the
+rule depends on):
+
+| emotion | arousal | dominance |
+|---|---|---|
+| angry | 0.85 | 0.80 |
+| surprised | 0.80 | 0.40 |
+| happy | 0.67 | 0.59 |
+| fearful | 0.67 | 0.24 |
+| neutral | 0.30 | 0.50 |
+| sad | 0.26 | 0.26 |
+
+angry - sad: arousal +0.60, dominance +0.55; angry - fearful dominance +0.53 (the
+axis arousal cannot see). Ranges 0.25-0.85 / 0.20-0.80, so the 0.4/0.6 glosses
+are all reachable. The caveat stands: because emotion2vec is usually confident,
+values sit at the anchors and only grade when the model is torn -- this is a
+function of the label, not an acoustic measurement. `eval/tone_cases.jsonl`
+gained two valence-free mismatch pairs (`mm-05`, `mm-06`) so the shipped shape
+is finally scoreable.
+
+`python -m eval.model_eval` on the revised prompt (34 cases x 3 runs, 3 models;
+`eval/results/model.csv` is now this run):
+
+| model | old 30 cases (was) | new mm-05/06 | literal / low-conf | mismatch pairs (of 6) |
+|---|---|---|---|---|
+| gemma3:12b | 90% (93%) | 50% | 100% / 100% | 3 |
+| qwen3:8b | 80% (83%) | 50% | 100% / 100% | 4 |
+| qwen3:14b | 90% (93%) | 75% | 100% / 100% | 2 |
+
+The over-reading guard rails held. The 3-point dip on the old cases is one
+case per model, mostly `mm-04a` ("It's fine.", neutral label, valence 0.62,
+arousal 0.35, no dominance): the new low-arousal rule reads calm as masking
+even after the prompt was tightened to require both axes and to let valence
+decide direction. On the new valence-free pairs every model gets the
+"deflated voice = masking" and "angry voice = real complaint" halves right;
+what fails is `mm-06a` (stock sarcastic wording, bright high-arousal voice),
+which all three still call sarcastic/negative -- the same over-firing shape as
+the valence-era `mm-01a`/`mm-03a`. Open: a prompt that separates "calm" from
+"deflated" without a dominance value, and whether `mm-06a`'s expectation is
+fair.
+
+Still open: the expected-value idea is only as good as the anchors, which are
+literature placements rather than fitted values; nothing has been checked on a
+real microphone; and the "does valence help over the transcript" experiment
+proposed below has still not been run.
 
 `emotion2vec_plus_base` is categorical only: it returns an emotion label and a
 confidence, and `valence`/`arousal` come back `None`. The interpreter's
@@ -417,8 +519,11 @@ lives under "Sarcasm is never tested on real speech" above.
 
 ## Irony is not modelled, and an "ironic" answer is silently lost
 
-**Status:** open, low priority · **Found:** 2026-09-05 · **Affects:**
-`server/interpreter.py`
+**Status:** the silent loss is FIXED 2026-09-20 (`_TONE_SYNONYMS` in
+`interpreter.py` maps `ironic` / `irony` / `sardonic` / `sarcasm` to `sarcastic`
+and `ambivalent` / `conflicted` to `mixed` before the enum check); a real
+`irony` tone remains deliberately unmodelled · **Found:** 2026-09-05 ·
+**Affects:** `server/interpreter.py`
 
 There is no mention of irony anywhere in the repo -- a case-insensitive search
 for `iron(y|ic)` across `.py`, `.html`, `.md`, `.jsonl` and `.txt` returns

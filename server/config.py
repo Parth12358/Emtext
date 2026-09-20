@@ -100,6 +100,34 @@ MIN_UTTERANCE_MS: int = _env_int("MIN_UTTERANCE_MS", 350)  # shorter -> discarde
 MAX_UTTERANCE_MS: int = _env_int("MAX_UTTERANCE_MS", 15_000)  # hard cap so we never buffer forever
 PRE_ROLL_MS: int = _env_int("PRE_ROLL_MS", 240)        # audio kept from just before speech began
 
+# --- Adaptive threshold ------------------------------------------------------
+# SPEECH_RMS alone was the wrong shape for this product. It is an ABSOLUTE
+# level, and RAVDESS measured a ~130x spread in peak RMS across emotions
+# (angry 13456, sad 103-168): at 500, 5 of 10 sample clips produced no segment
+# at all, and they were the sad and neutral ones -- the speech this app exists
+# to read. Lowering it to 150 took that to 1/10, but a fixed low value false-
+# triggers on room noise. So the threshold now tracks the room:
+#
+#     threshold = clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)
+#
+# SPEECH_RMS keeps its meaning as the CEILING (a loud room behaves exactly as
+# before), SPEECH_RMS_MIN is the floor (digital silence settles here, which is
+# the measured RAVDESS workaround), and in between the segmenter asks for a
+# margin above whatever the microphone hears when nobody is talking. The floor
+# is measured only on frames the machine classes as non-speech, and it rises
+# slowly but falls fast, so a sentence cannot lift it under itself.
+# VAD_ADAPTIVE=0 restores the constant-threshold behaviour byte for byte; the
+# evals pass adaptive=False whenever an explicit --speech-rms is given.
+VAD_ADAPTIVE: bool = _env_bool("VAD_ADAPTIVE", True)
+SPEECH_RMS_MIN: int = _env_int("SPEECH_RMS_MIN", 150)      # never ask for less than this
+NOISE_MARGIN: float = _env_float("NOISE_MARGIN", 3.0)      # x the floor (~+9.5 dB)
+NOISE_FLOOR_RISE: float = _env_float("NOISE_FLOOR_RISE", 0.02)   # EMA alpha when the room gets louder
+NOISE_FLOOR_FALL: float = _env_float("NOISE_FLOOR_FALL", 0.30)   # EMA alpha when it gets quieter
+# Start value for the floor. SPEECH_RMS / NOISE_MARGIN makes the very first
+# frames behave exactly like the old constant threshold until the room has
+# actually been measured. 0 = "assume silence", which is wrong for a live mic.
+NOISE_FLOOR_INIT: float = _env_float("NOISE_FLOOR_INIT", SPEECH_RMS / NOISE_MARGIN)
+
 # --- Transcriber (faster-whisper) -------------------------------------------
 # Whisper is pinned to CPU on purpose: the Intel Arc B580 is reserved for the
 # LLM, so the two heavy models never fight over the GPU.
@@ -253,6 +281,17 @@ VALENCE_LOW: float = _env_float("VALENCE_LOW", 0.4)
 VALENCE_HIGH: float = _env_float("VALENCE_HIGH", 0.6)
 AROUSAL_LOW: float = _env_float("AROUSAL_LOW", 0.4)
 AROUSAL_HIGH: float = _env_float("AROUSAL_HIGH", 0.6)
+# Dominance is now passed to the interpreter too, because on the default
+# backend arousal + dominance ARE the voice signal: emotion2vec has no
+# dimensional head, so ser.py derives both as the probability-weighted mean of
+# per-emotion anchors over its 7-class distribution (valence is deliberately
+# left to the LLM, which reads it from the words -- see TODO.md, "valence may
+# be the wrong target"). Derived values are compressed toward the middle by the
+# softmax spread, so these thresholds are a first guess: profile them with
+# `python -m eval.ser_eval --profile-valence` (it prints all three dimensions
+# by true emotion) and set them from the actual range before trusting them.
+DOMINANCE_LOW: float = _env_float("DOMINANCE_LOW", 0.4)
+DOMINANCE_HIGH: float = _env_float("DOMINANCE_HIGH", 0.6)
 
 # --- Speaker identification (server/speaker.py) -----------------------------
 # Answers one question per utterance: is this the LISTENER's own voice, someone

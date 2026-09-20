@@ -951,6 +951,11 @@ def main() -> None:
         # so the CPU subprocess inherits the same threshold.
         config.SPEECH_RMS = args.speech_rms
         os.environ["SPEECH_RMS"] = str(args.speech_rms)
+        # An explicit threshold means a CONSTANT threshold: the adaptive floor
+        # would otherwise override the number you just typed, and the whole
+        # point of the flag is to compare fixed values.
+        config.VAD_ADAPTIVE = False
+        os.environ["VAD_ADAPTIVE"] = "0"
 
     if args.evict_only:
         print("resident before:")

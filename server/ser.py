@@ -115,6 +115,44 @@ EMOTIONS: tuple[str, ...] = (
 # The dimensional head emits exactly these, in this order.
 _DIMS = ("valence", "arousal", "dominance")
 
+# Where each emotion sits on the arousal and dominance axes, on the 0-1 scale
+# the interpreter prompt describes. Used ONLY by the emotion2vec backend, which
+# has no dimensional head: it derives arousal and dominance as the probability-
+# weighted mean of these anchors over its 7-class distribution, so a hard label
+# becomes a graded signal for no extra model, download or forward pass. The
+# placements are the textbook PAD / circumplex ones (Russell; Mehrabian &
+# Russell): anger and fear are both highly aroused but sit at opposite ends of
+# dominance, which is exactly the distinction arousal alone cannot make, and
+# sadness is low on both.
+#
+# Valence is deliberately NOT derived. TODO.md ("valence may be the wrong
+# target") and RESEARCH.md 4.5-4.6: acoustic valence is largely implicit
+# linguistic content, so it tends to AGREE with the transcript -- precisely
+# where the words-vs-voice mismatch rule needs an independent channel. The LLM
+# reads valence from the words; the voice contributes the two axes text cannot.
+#
+# These are starting points, not measurements. The expectation over a softmax
+# is pulled toward the middle by the spread, so profile the real output range
+# with `python -m eval.ser_eval --profile-valence` before trusting the
+# AROUSAL_* / DOMINANCE_* thresholds in config.py.
+_AROUSAL_ANCHOR: dict[str, float] = {
+    "neutral": 0.30, "happy": 0.70, "sad": 0.25, "angry": 0.85,
+    "fearful": 0.75, "disgusted": 0.50, "surprised": 0.80,
+}
+_DOMINANCE_ANCHOR: dict[str, float] = {
+    "neutral": 0.50, "happy": 0.60, "sad": 0.25, "angry": 0.80,
+    "fearful": 0.20, "disgusted": 0.60, "surprised": 0.40,
+}
+
+
+def _expected(dist: dict[str, float], anchors: dict[str, float]) -> float | None:
+    """Probability-weighted mean of `anchors` over `dist`, or None if empty."""
+    total = sum(p for label, p in dist.items() if label in anchors)
+    if total <= 0:
+        return None
+    value = sum(p * anchors[label] for label, p in dist.items() if label in anchors) / total
+    return round(min(1.0, max(0.0, value)), 3)
+
 # Utterances shorter than this are not worth scoring: the model needs a little
 # audio to be meaningful, and the segmenter's MIN_UTTERANCE_MS already filters
 # blips. Guards against a degenerate near-empty buffer reaching the model.
@@ -429,7 +467,11 @@ def _normalise_emotion2vec_label(raw: str) -> str:
 
 
 def _analyze_emotion2vec(samples: np.ndarray) -> dict | None:
-    """FunASR path. Categorical only -- no dimensional head, so no VAD values."""
+    """FunASR path. Categorical head only; arousal and dominance are DERIVED.
+
+    See `_AROUSAL_ANCHOR` for why the derivation is done here and why valence
+    is left None.
+    """
     with _lock:
         out = _model.generate(
             samples,
@@ -461,12 +503,16 @@ def _analyze_emotion2vec(samples: np.ndarray) -> dict | None:
     return {
         "emotion": emotion,
         "confidence": round(min(1.0, max(0.0, merged[emotion])), 3),
-        # No dimensional head on this model. Explicit None (rather than a
-        # made-up 0.5) is what lets the interpreter and the web client omit the
-        # fields entirely instead of presenting a fabricated neutral reading.
+        # No dimensional head on this model, so valence stays an explicit None
+        # (rather than a made-up 0.5): that is what lets the interpreter and
+        # the web client omit it instead of presenting a fabricated neutral
+        # reading. Arousal and dominance are the expectation over the class
+        # distribution -- graded, but a function of the labels, which
+        # `dims_source` says out loud for anything downstream that cares.
         "valence": None,
-        "arousal": None,
-        "dominance": None,
+        "arousal": _expected(merged, _AROUSAL_ANCHOR),
+        "dominance": _expected(merged, _DOMINANCE_ANCHOR),
+        "dims_source": "derived",
     }
 
 

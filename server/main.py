@@ -386,6 +386,9 @@ async def _process_utterance(
             "emotion": voice.get("emotion"),
             "valence": voice.get("valence"),
             "arousal": voice.get("arousal"),
+            # Added with the derived-dimensions work: on the default backend
+            # arousal and dominance are the voice signal. Additive, like the rest.
+            "dominance": voice.get("dominance"),
         }
     await _send(ws, message)
 
@@ -598,6 +601,8 @@ async def stream(ws: WebSocket) -> None:
                         "rms": round(segmenter.last_rms, 1),
                         "peak_rms": round(segmenter.peak_rms, 1),
                         "threshold": segmenter.speech_rms,
+                        # The room, as the adaptive VAD currently hears it.
+                        "noise_floor": round(segmenter.noise_floor, 1),
                         "in_speech": segmenter._in_speech,
                         "trailing_silence_ms": segmenter._trailing_silence_ms,
                         "voiced_ms": segmenter._voiced_ms,

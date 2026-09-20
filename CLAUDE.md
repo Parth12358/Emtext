@@ -51,10 +51,12 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   model-swapping can silently offload layers to CPU, which reads as "slow model".
 - **`TODO.md` holds open issues with the measurements behind them.** Read it before
   touching the segmenter or the VAD knobs, and add to it rather than re-deriving.
-- RAVDESS is much quieter than a live mic: at the default `SPEECH_RMS=500` the VAD
-  drops ~50% of clips, and they are the QUIET emotions (sad/fearful/neutral) --
-  exactly what this app exists to interpret. Run `--vad-check` before any long run,
-  and pass `--speech-rms 150` (5/10 drops -> 1/10). The eval falls back to the raw
+- RAVDESS is much quieter than a live mic: at a FIXED `SPEECH_RMS=500` the VAD
+  dropped ~50% of clips, and they were the QUIET emotions (sad/fearful/neutral) --
+  exactly what this app exists to interpret. The adaptive threshold now segments
+  10/10 with no override; still run `--vad-check` before any long run. Passing
+  `--speech-rms N` switches adaptation OFF (an explicit number means a constant),
+  which is how to reproduce the old fixed-threshold results. The eval falls back to the raw
   clip and flags `vad_dropped=1`, so SER and WER stay usable, but those rows carry
   garbled transcripts -- filter them out of TONE accuracy. Do NOT loudness-normalise
   to work around it: loudness is an emotional cue and flattening it corrupts SER.
@@ -87,8 +89,12 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
 - `server/config.py` — every tunable, each overridable by an env var of the same name. New
   knobs go here, never hardcoded elsewhere.
 - `server/segmenter.py` — **pure logic, zero I/O.** Energy-based VAD state machine: PCM
-  bytes in → float32 utterances out. Must stay importable and testable without network,
-  files, or async. Keep the `__main__` self-test passing.
+  bytes in → float32 utterances out. The speech threshold is **noise-floor-relative**:
+  `clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)`, with the floor learned
+  only from non-speech frames (falls fast, rises slowly). `SPEECH_RMS` is the ceiling, not
+  the threshold; `VAD_ADAPTIVE=0` restores the constant. Must stay importable and
+  testable without network, files, or async. Keep the `__main__` self-test (five cases)
+  passing.
 - `server/transcriber.py` — speech-to-text behind one `transcribe(audio) -> str`. A
   **catalogue** of backends (`whisper:<name>` via faster-whisper; `parakeet:v2/v3`,
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under
@@ -104,7 +110,9 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   only `ser.analyze()` and `ser.available()` — swapping the model must not touch any
   other file. Must **never** raise: a load or inference failure returns None and the
   pipeline runs as if SER didn't exist. Blocking CPU call, ~0.17s per utterance on
-  the default backend; valence/arousal/dominance are None there.
+  the default backend. There `valence` is None **by design** (the LLM reads it from the
+  words) and `arousal`/`dominance` are **derived** as the anchor-weighted mean over the
+  7-class distribution (`dims_source: "derived"`); MERaLiON measures all three.
 - `server/speaker.py` — speaker identification: is this utterance the **listener's own
   voice**? CAM++ embeddings via funasr (needs `kaldi-native-fbank`), CPU, loaded once,
   **never raises**; the rest of the codebase knows only `available()`, `identify()`,
@@ -159,10 +167,15 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   answered by `saved`; the older `{"id":n}` form still works as `from == to`);
   anything else is ignored, never fatal.
 - **Interpreter prompt**'s `voice sounded like: X` slot is now filled by `ser.py`.
-  The prompt must keep explaining the words-vs-voice **mismatch** rule (positive
-  words + low valence = sarcasm/masking; negative words + high valence = teasing;
-  agreement = literal), keep downweighting readings below `SER_MIN_CONFIDENCE`,
-  and keep working with the slot absent — SER is optional and often off.
+  The prompt must keep explaining the words-vs-voice **mismatch** rule in both forms:
+  on valence (positive words + low valence = sarcasm/masking; negative words + high
+  valence = teasing; agreement = literal) AND on arousal+dominance (positive words +
+  low/low = masking; negative + high/high = real anger; negative + low/low =
+  resignation), because the default backend supplies only the latter. It must keep
+  downweighting readings below `SER_MIN_CONFIDENCE`, keep the caution paragraph firing
+  for BOTH "no voice field" and "label only, no scales", and keep working with the
+  slot absent — SER is optional and often off. Off-enum tones go through
+  `_TONE_SYNONYMS` (ironic → sarcastic) before falling to neutral.
 
 ## Exposure / deployment
 

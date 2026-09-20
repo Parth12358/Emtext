@@ -441,23 +441,59 @@ def summarise(result: dict) -> None:
     # the interpreter's sarcasm rule compares valence against the words, so
     # valence failing to separate angry from happy would break mismatch
     # detection even with a perfect categorical head.
-    with_val = [r for r in rows if isinstance(r["valence"], (int, float))]
-    if not with_val:
-        print("\n  (no dimensional head on this backend -- valence/arousal unavailable,")
-        print("   so the interpreter has only the categorical label to work with)")
-        return
+    # Valence is measured only on MERaLiON. On the default emotion2vec backend
+    # arousal and dominance are DERIVED from the class distribution (ser.py
+    # anchors) and valence is deliberately None, so this table has to work
+    # from whichever dimensions exist rather than keying on valence alone.
+    def _num(r, k):
+        return isinstance(r.get(k), (int, float))
 
-    print(f"\n  mean valence / arousal by true emotion (expected direction in parens)")
-    print(f"  {'emotion':<12}{'valence':>9}{'arousal':>9}   expected valence")
-    print("  " + "-" * 52)
+    with_dim = [r for r in rows if _num(r, "valence") or _num(r, "arousal")]
+    if not with_dim:
+        print("\n  (no dimensions on this backend -- valence/arousal/dominance are all")
+        print("   None, so the interpreter has only the categorical label to work with)")
+        return
+    with_val = [r for r in with_dim if _num(r, "valence")]
+    # The per-clip rows do not carry ser.py's `dims_source`; on this project
+    # "arousal without valence" is exactly the derived emotion2vec shape.
+    derived = not with_val
+
+    def _mean(subset, k):
+        vals = [r[k] for r in subset if _num(r, k)]
+        return f"{statistics.mean(vals):>10.3f}" if vals else f"{'-':>10}"
+
+    label = "derived from the class distribution" if derived else "measured"
+    print(f"\n  mean valence / arousal / dominance by true emotion ({label})")
+    print(f"  {'emotion':<12}{'valence':>10}{'arousal':>10}{'dominance':>10}   expected valence")
+    print("  " + "-" * 64)
     for cls in classes:
-        subset = [r for r in with_val if r["true_emotion"] == cls]
+        subset = [r for r in with_dim if r["true_emotion"] == cls]
         if not subset:
             continue
-        mv = statistics.mean(r["valence"] for r in subset)
-        ma = statistics.mean(r["arousal"] for r in subset
-                             if isinstance(r["arousal"], (int, float)))
-        print(f"  {cls:<12}{mv:>9.3f}{ma:>9.3f}   {EXPECTED_VALENCE.get(cls, '?')}")
+        print(f"  {cls:<12}{_mean(subset, 'valence')}{_mean(subset, 'arousal')}"
+              f"{_mean(subset, 'dominance')}   {EXPECTED_VALENCE.get(cls, '?')}")
+
+    # The arousal/dominance checks the interpreter's mismatch rule relies on:
+    # anger and sadness must sit at opposite corners, and fear must split from
+    # anger on dominance while matching it on arousal.
+    def _cls_mean(cls, k):
+        vals = [r[k] for r in with_dim if r["true_emotion"] == cls and _num(r, k)]
+        return statistics.mean(vals) if vals else None
+    aa, sa = _cls_mean("angry", "arousal"), _cls_mean("sad", "arousal")
+    ad, sd, fd = (_cls_mean("angry", "dominance"), _cls_mean("sad", "dominance"),
+                  _cls_mean("fearful", "dominance"))
+    if None not in (aa, sa, ad, sd, fd):
+        print(f"\n  arousal   angry - sad     : {aa - sa:+.3f}   (should be clearly positive)")
+        print(f"  dominance angry - sad     : {ad - sd:+.3f}   (should be clearly positive)")
+        print(f"  dominance angry - fearful : {ad - fd:+.3f}   (the axis arousal cannot see)")
+        if min(aa - sa, ad - sd, ad - fd) < 0.1:
+            print("  WARNING: a dimension the mismatch rule keys on barely separates its")
+            print("  anchor emotions here; re-profile before trusting AROUSAL_*/DOMINANCE_*.")
+
+    if not with_val:
+        print("\n  (valence is None on this backend by design: the LLM reads valence from")
+        print("   the words, the voice contributes arousal and dominance -- see TODO.md)")
+        return
 
     pos = [r["valence"] for r in with_val
            if EXPECTED_VALENCE.get(r["true_emotion"]) == "high"]
@@ -490,9 +526,28 @@ def profile_valence(result: dict) -> None:
 
     rows = [r for r in result["rows"] if isinstance(r.get("valence"), (int, float))]
     if not rows:
-        print(f"\n  {result['model']}: no dimensional head -- valence/arousal are")
-        print("  None, so the interpreter reasons from the emotion label alone.")
-        print("  Nothing to calibrate, but the mismatch rule loses its main axis.")
+        dim_rows = [r for r in result["rows"] if isinstance(r.get("arousal"), (int, float))]
+        if not dim_rows:
+            print(f"\n  {result['model']}: no dimensions at all -- the interpreter reasons")
+            print("  from the emotion label alone.")
+            return
+        # emotion2vec: arousal/dominance derived, valence absent by design.
+        # Profile the two axes the interpreter actually gets, so the
+        # AROUSAL_* / DOMINANCE_* thresholds can be checked the same way.
+        print("\n" + "=" * 78)
+        print(f"AROUSAL / DOMINANCE PROFILE -- {result['model']} (derived; valence None by design)")
+        print("=" * 78)
+        for dim, lo_t, hi_t in (("arousal", config.AROUSAL_LOW, config.AROUSAL_HIGH),
+                                ("dominance", config.DOMINANCE_LOW, config.DOMINANCE_HIGH)):
+            vals = sorted(r[dim] for r in dim_rows if isinstance(r.get(dim), (int, float)))
+            if not vals:
+                continue
+            low = sum(v < lo_t for v in vals); high = sum(v > hi_t for v in vals)
+            mid = len(vals) - low - high
+            print(f"  {dim:<10} range {vals[0]:.2f}-{vals[-1]:.2f}  mean {statistics.mean(vals):.3f}"
+                  f"   glosses at {lo_t}/{hi_t}: low {low}  mid {mid}  high {high}")
+            if low == 0 or high == 0:
+                print(f"    WARNING: one {dim} gloss is unreachable at these thresholds.")
         return
 
     print("\n" + "=" * 78)

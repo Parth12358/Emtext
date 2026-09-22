@@ -1,0 +1,7 @@
+id,transcript,hint,p_sarc_words,p_sarc_voice,delta,tone_words,tone_voice,tone_changed,correct_words,correct_voice
+mm-01b,Oh wonderful. That is just perfect.,"angry (conf 0.77), valence 0.13 (negative), arousal 0.68 (elevated)",0.075,0.227,0.152,positive,positive,0,0,0
+mm-02b,I'm so happy for you.,"sad (conf 0.74), valence 0.18 (negative), arousal 0.24 (calm)",0.044,0.102,0.057,positive,positive,0,0,0
+mm-03b,"You are unbelievable, you know that?","angry (conf 0.83), valence 0.11 (negative), arousal 0.81 (elevated)",0.206,0.25,0.044,sarcastic,negative,1,0,1
+mm-04b,It's fine.,"angry (conf 0.71), valence 0.15 (negative), arousal 0.58 (moderate)",0.061,0.111,0.05,neutral,negative,1,0,1
+mm-05b,"No, go ahead, I really don't mind.","sad (conf 0.72), arousal 0.27 (calm), dominance 0.24 (yielding)",0.159,0.117,-0.042,neutral,neutral,0,0,0
+mm-06b,"Great, another meeting.","angry (conf 0.76), arousal 0.80 (elevated), dominance 0.78 (assertive)",0.09,0.189,0.099,neutral,neutral,0,0,0

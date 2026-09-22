@@ -380,6 +380,94 @@ parameters -- slower than the MERaLiON already rejected.
 
 ---
 
+## A typed classifier between SER and the LLM does not help (Laya)
+
+**Status:** measured 2026-09-21, NOT adopted; kept as a test bed · **Affects:**
+nothing in `server/`; `experiments/laya/` (worker, bench, results, `report.md`)
+
+Tried `convaiinnovations/laya` (Apache-2.0, ModernBERT-large + decision head,
+421M, one non-autoregressive pass, typed answers with probabilities, no
+generation) in three roles between `ser.py` and `interpreter.py`: a words-only
+polarity channel fused with SER arousal/dominance by a fixed table, an arbiter
+that vetoes the LLM's tone, and a gate that skips the LLM on lines with no
+subtext. Seven runs over `eval/tone_cases.jsonl`, `eval/results/model.csv` and
+`eval/results/pipeline.csv`; the voice hint shown to Laya is
+`interpreter._describe_voice`'s text, byte-identical to the LLM's. Full
+write-up with method and per-row findings: `experiments/laya/report.md`.
+Reproduce: `.venv/Scripts/python experiments/laya/bench.py` (Laya needs
+transformers 5 and lives in its own `.venv-laya/`, gitignored, driven as a
+subprocess).
+
+### What was measured
+
+Tone cases (34; 6 mismatch pairs):
+
+| run | acc | pairs | literal | low-conf | mismatch | sarcasm | PA |
+|---|---|---|---|---|---|---|---|
+| words only, Laya tone | 0.559 | 0/6 | 5/5 | 2/2 | 5/12 | 0/4 | 0/4 |
+| words polarity x SER table | 0.735 | 4/6 | 5/5 | 2/2 | 10/12 | 1/4 | 0/4 |
+| words + voice hint, Laya tone | 0.588 | 2/6 | 5/5 | **0/2** | 8/12 | 0/4 | 0/4 |
+
+p(sarcastic) never exceeds 0.24 on any case (ECE 0.29; 31/34 answers in the
+0-0.2 bin, where 39% are sarcastic). "Wow, you actually showed up on time
+today" is `positive` 0.62. The hint breaks the low-confidence guard: "angry
+(conf 0.22) -- low confidence" makes a meeting reschedule `negative` 0.64 --
+Laya reads the label and ignores the caveat.
+
+Veto over `model.csv` (rule a: LLM says sarcastic, Laya p(sarc) < theta ->
+Laya's tone; rule b: LLM says neutral, Laya says negative/sarcastic/mixed >
+theta -> Laya's tone):
+
+| model | before | theta 0.3 | 0.5 | 0.7 | sarcasm before -> 0.7 | pairs before -> 0.7 |
+|---|---|---|---|---|---|---|
+| gemma3:12b | 0.853 | 0.676 | 0.706 | 0.735 | 9/12 -> 0/12 | 3/6 -> 2/6 |
+| qwen3:14b | 0.882 | 0.765 | 0.794 | 0.824 | 12/12 -> 3/12 | 2/6 -> 4/6 |
+| qwen3:8b | 0.765 | 0.647 | 0.676 | 0.706 | 9/12 -> 6/12 | 4/6 -> 3/6 |
+
+Every theta lowers every model. Because p(sarc) is always low, rule (a) fires
+on every LLM `sarcastic` answer and deletes true sarcasm; theta <= 0.6 also
+zeroes the low-confidence guard through rule (b). The qwen3:14b pair gain
+(the over-calling this was meant to fix) costs 9 sarcasm cases.
+
+Pipeline (RAVDESS, 872 rows, theta 0.7, majority-class baseline 0.57): fused
+== LLM in every cell, no rule ever fires (neutral text, so the LLM never says
+sarcastic; Laya never crosses 0.7). Laya alone: 0.25 on the three emotion2vec
+cells (LLM 0.405 / 0.795 / 0.312) -- it answers `sarcastic` on 100/259 rows,
+"Kids are talking by the door" with an angry/fearful/sad hint, the exact
+over-reading the prompt guards against. The 0.703 on meralion+qwen3:8b (LLM
+0.242) is mostly majority class: 90/91 hints gloss valence "(negative)"
+(MERaLiON range 0.12-0.41), Laya says `negative` 60/91, right on 48/51 true
+negatives and 6/14 happy.
+
+Gate on p(worth_reading): lost tracks skip ~1:1 on every source (tone cases
+with voice theta 0.3: skip 0.676 / lost 0.75; pipeline theta 0.5: 0.273 /
+0.179, theta 0.7: 0.716 / 0.685) -- near random at separating subtext from
+plain speech, and a missed sarcastic line is the product's worst error.
+
+Cost (CPU, warm, n = 100): one question p50 189 ms; three p50 449 / p95 582
+ms; three while Whisper base transcribes concurrently p50 625 / p95 727 ms.
+The whole audio stage is 0.30 s and the LLM 0.6-0.9 s, so Laya would be the
+long pole of the audio stage or +50% on the serial path. 1991 MB RSS, 846 MB
+fp32 download, 16.5 s cold load, second venv (transformers 5 vs the server's
+`<5` pin). Deterministic across calls -- the one property the LLM lacks.
+
+### What is open
+
+- The two problems this targeted are unchanged: `qwen3:14b` over-calls
+  sarcasm on a confidently happy voice (2/6 pairs), gemma / qwen3:8b miss
+  `sar-04`. Both remain prompt and data work, not arbiter work.
+- Zero-shot only. A fine-tuned tone/sarcasm head on our labels was not tried
+  because there are 34 labelled lines and no real sarcastic speech; more
+  labelled mismatch pairs are the prerequisite (see "Sarcasm is never tested
+  on real speech").
+- If a words-polarity channel is ever wanted (the fixed table did recover
+  4/6 pairs), a ~20-60M sentiment model at ~10x less CPU in the server venv
+  is the right shape, not a 421M zero-shot QA model. Any candidate must
+  clear p(sarcastic) > 0.5 on `sar-01..04` before the veto run
+  (`bench.py --runs 3,4`) is worth repeating.
+
+---
+
 ## Sarcasm is never tested on real speech
 
 **Status:** open, undocumented until now · **Found:** 2026-09-05, auditing what

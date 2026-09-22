@@ -263,6 +263,10 @@ No auth beyond the token, no database, no Docker, no `tests/` folder.
 
 ## Style
 
+- **Commits are attributed to the author only.** No `Co-Authored-By` or other AI attribution
+  trailers on commits, PRs, release notes or mirror commits; the public firmware repo's
+  contributors must be people. The mirror workflow authors its commit as the shipping commit's
+  author for the same reason.
 Type hints, docstrings that explain the **why** of non-obvious choices. The
 segmenter state machine, the executor pattern, and the worklet/downsampling are commented
 generously on purpose (the author is learning from them) — preserve that when editing.

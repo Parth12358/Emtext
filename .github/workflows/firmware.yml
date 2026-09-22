@@ -1,0 +1,206 @@
+name: firmware
+
+# One pipeline for the pendant firmware.
+#
+#   pull request / push to main  -> compile check only
+#   push to prod                 -> compile, mirror to the public repo, release
+#   manual run                   -> same as prod (with an optional fqbn override)
+#
+# Releases are versioned by firmware/VERSION: a prod push releases fw-v<VERSION>.
+# If that tag already exists on the public repo (VERSION was not bumped), the
+# push still releases, as fw-v<VERSION>-<yyyymmdd>.<sha>, so prod is always
+# published and a clean tag only needs a one-line bump.
+#
+# The public repo (Parth12358/emtext-firmware) is a read-only mirror: each
+# release force-pushes ONE orphan commit built by .github/scripts/stage_firmware.sh,
+# so the public history never contains anything from server/. Needs the
+# FIRMWARE_MIRROR_TOKEN secret: a fine-grained PAT scoped to the public repo
+# with Contents + Workflows read/write.
+
+on:
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+      - ".github/actions/arduino-toolchain/**"
+      - ".github/scripts/stage_firmware.sh"
+  push:
+    branches: [main, prod]
+    paths:
+      - "firmware/**"
+      - "docs/guides/firmware.md"
+      - "docs/design/firmware-ui-ux.md"
+      - "docs/design/firmware-requirements.md"
+      - ".github/workflows/firmware.yml"
+      - ".github/actions/arduino-toolchain/**"
+      - ".github/scripts/stage_firmware.sh"
+  workflow_dispatch:
+    inputs:
+      fqbn:
+        description: Board (override only if the IDE build relies on a menu option)
+        required: false
+        default: m5stack:esp32:m5stack_sticks3
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MIRROR_REPO: Parth12358/emtext-firmware
+  FQBN: ${{ inputs.fqbn || 'm5stack:esp32:m5stack_sticks3' }}
+  # Publish (mirror + release) only from prod or a manual run.
+  PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/prod') || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # release notes walk commits
+
+      - uses: ./.github/actions/arduino-toolchain
+        with:
+          fqbn: ${{ env.FQBN }}
+
+      - name: compile
+        run: |
+          set -euo pipefail
+          # secrets.h is gitignored and absent here on purpose: config.cpp falls
+          # back to compiled-in defaults, which is the shape a release ships in.
+          arduino-cli compile --fqbn "$FQBN" --warnings default --export-binaries firmware/emtext
+          find firmware/emtext/build -maxdepth 2 -name '*.bin' -print
+
+      # ------------------------------------------------------------------
+      # Everything below runs only for prod / manual.
+      # ------------------------------------------------------------------
+      - name: resolve release tag
+        if: env.PUBLISH == 'true'
+        id: v
+        env:
+          GH_TOKEN: ${{ secrets.FIRMWARE_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "FIRMWARE_MIRROR_TOKEN is not set" >&2; exit 1; }
+          version="$(tr -d ' \r\n' < firmware/VERSION)"
+          case "$version" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "firmware/VERSION must be X.Y.Z, got '$version'" >&2; exit 1;; esac
+          tag="fw-v${version}"
+          if gh release view "$tag" --repo "$MIRROR_REPO" >/dev/null 2>&1; then
+            # VERSION was not bumped since the last release: still publish this
+            # prod push, but under a build-stamped tag so nothing is overwritten.
+            tag="${tag}-$(date -u +%Y%m%d).$(git rev-parse --short HEAD)"
+            echo "::notice::fw-v${version} already released; using ${tag}. Bump firmware/VERSION for a clean tag."
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: stage public tree
+        if: env.PUBLISH == 'true'
+        run: bash .github/scripts/stage_firmware.sh "$RUNNER_TEMP/mirror"
+
+      - name: package
+        if: env.PUBLISH == 'true'
+        id: pkg
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/dist"; mkdir -p "$out"
+          bdir="$(find firmware/emtext/build -maxdepth 1 -mindepth 1 -type d | head -1)"
+          cp "$bdir/emtext.ino.merged.bin"     "$out/emtext-firmware-${TAG}.merged.bin"
+          cp "$bdir/emtext.ino.bin"            "$out/emtext-firmware-${TAG}.app.bin"
+          cp "$bdir/emtext.ino.bootloader.bin" "$out/emtext-firmware-${TAG}.bootloader.bin"
+          cp "$bdir/emtext.ino.partitions.bin" "$out/emtext-firmware-${TAG}.partitions.bin"
+          ( cd "$RUNNER_TEMP/mirror" && zip -qr "$out/emtext-firmware-${TAG}-source.zip" . )
+          cat > "$out/FLASHING.md" <<EOF
+          # Flashing emtext firmware ${TAG}
+
+          Board: M5StickS3 (ESP32-S3, 8 MB flash, 8 MB PSRAM). Built with fqbn \`${FQBN}\`.
+
+          ## Whole image (easiest)
+
+              pip install esptool
+              esptool.py --chip esp32s3 --port <COM/tty> write_flash 0x0 emtext-firmware-${TAG}.merged.bin
+
+          The merged image contains bootloader + partition table + app at their correct offsets.
+
+          ## App only (keeps an existing bootloader/partition table)
+
+              esptool.py --chip esp32s3 --port <COM/tty> write_flash 0x10000 emtext-firmware-${TAG}.app.bin
+
+          ## First boot
+
+          The release ships with no Wi-Fi credentials or server token. Either hold the button at
+          boot to open the captive portal (\`emtext-setup\` network) and enter them there, or
+          build from \`emtext-firmware-${TAG}-source.zip\` after copying \`secrets.example.h\`
+          to \`secrets.h\` in the sketch folder.
+
+          Verify downloads against \`SHA256SUMS.txt\`.
+          EOF
+          ( cd "$out" && sha256sum * > SHA256SUMS.txt )
+          ls -la "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: release notes
+        if: env.PUBLISH == 'true'
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          paths="firmware/ docs/guides/firmware.md docs/design/firmware-ui-ux.md docs/design/firmware-requirements.md"
+          {
+            echo "Firmware for the emtext pendant (M5StickS3). Flash \`emtext-firmware-${TAG}.merged.bin\` at 0x0; see FLASHING.md."
+            echo
+            # On a prod push, github.event.before is the previous prod head, i.e.
+            # the last thing released. Otherwise (manual run, first push) list
+            # the recent firmware commits.
+            if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+              echo "## Firmware changes since the previous prod release"
+              git log --format='- %s (%h)' "${BEFORE}..HEAD" -- $paths || true
+            else
+              echo "## Recent firmware changes"
+              git log -n 20 --format='- %s (%h)' -- $paths || true
+            fi
+            echo
+            echo "Source: Emtext@$(git rev-parse --short HEAD) (branch ${GITHUB_REF_NAME}). Built with \`${FQBN}\`."
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      # Mirror first, so the public repo's main is the exact source of the
+      # release and the tag gh creates there points at it.
+      - name: mirror to the public repo
+        if: env.PUBLISH == 'true'
+        env:
+          TOKEN: ${{ secrets.FIRMWARE_MIRROR_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          subject="$(git log -1 --format=%s)"; sha="$(git rev-parse --short HEAD)"
+          cd "$RUNNER_TEMP/mirror"
+          git init -q -b main
+          git config user.name  "emtext-mirror[bot]"
+          git config user.email "emtext-mirror@users.noreply.github.com"
+          git add -A
+          git commit -q -m "mirror: Emtext@${sha} ${subject} (release ${TAG})"
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${MIRROR_REPO}.git"
+          git push --force origin main
+          echo "mirrored Emtext@${sha} -> ${MIRROR_REPO}:main"
+
+      - name: publish release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FIRMWARE_MIRROR_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$MIRROR_REPO" \
+            --target main \
+            --title "emtext firmware $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "${{ steps.pkg.outputs.dir }}"/*
+          echo "::notice::released https://github.com/$MIRROR_REPO/releases/tag/$TAG"

@@ -216,12 +216,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   (see the `_fence` docstring for the numbers). `SYSTEM_PROMPT` is byte-identical
   to its pre-hardening form on purpose.
 - **The firmware is public, the server is not.** `Parth12358/emtext-firmware` is a
-  generated, read-only mirror: `.github/scripts/stage_firmware.sh` builds the public tree
-  (sketch, the three firmware docs, `firmware/mirror/README.md`) and `firmware-mirror.yml`
-  force-pushes it as one orphan commit; `firmware-release.yml` cuts releases there on
-  `fw-v*` tags. Never edit the mirror; never let anything from `server/` into the staging
-  script; `secrets.h` stays gitignored AND is excluded by the script. Both need the
-  `FIRMWARE_MIRROR_TOKEN` secret (fine-grained PAT: Contents + Workflows read/write). Details: `docs/guides/firmware.md`, "Releases".
+  generated, read-only mirror. One workflow, `.github/workflows/firmware.yml`: PRs and
+  `main` get a compile check; a push to **`prod`** compiles, mirrors and releases
+  (`fw-v<firmware/VERSION>`, or a build-stamped tag if that one exists). The public tree
+  comes from `.github/scripts/stage_firmware.sh` (sketch, the three firmware docs,
+  `firmware/mirror/README.md`, `VERSION`) force-pushed as one orphan commit. Never edit the
+  mirror; never let anything from `server/` into the staging script; `secrets.h` stays
+  gitignored AND is excluded by the script. Needs `FIRMWARE_MIRROR_TOKEN` (fine-grained
+  PAT: Contents + Workflows read/write). Details: `docs/guides/firmware.md`, "Releases".
 - Cloudflare **quick tunnel** is the documented path out (`docs/guides/tunnel.md`):
   `cloudflared tunnel --url http://localhost:8000`, random hostname, changes every
   restart. The server stays unaware of it -- no tunnel code, no config.

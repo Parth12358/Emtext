@@ -62,6 +62,7 @@ done
 
 # --- landing page, licence, public-repo CI --------------------------------
 cp "$root/firmware/mirror/README.md" "$out/README.md"
+cp "$root/firmware/VERSION"          "$out/VERSION"
 [ -f "$root/firmware/LICENSE" ] && cp "$root/firmware/LICENSE" "$out/LICENSE"
 cp "$root"/firmware/mirror/.github/workflows/*.yml "$out/.github/workflows/"
 

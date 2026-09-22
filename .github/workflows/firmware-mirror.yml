@@ -7,7 +7,8 @@ name: firmware mirror
 # the mirror directly (changes land here and flow out).
 #
 # Needs the FIRMWARE_MIRROR_TOKEN secret: a fine-grained PAT scoped to the
-# public repo with Contents: read/write.
+# public repo with Contents: read/write AND Workflows: read/write (the tree
+# contains a .github/workflows/ci.yml; GitHub refuses that push otherwise).
 
 on:
   push:

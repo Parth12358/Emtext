@@ -221,7 +221,7 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   force-pushes it as one orphan commit; `firmware-release.yml` cuts releases there on
   `fw-v*` tags. Never edit the mirror; never let anything from `server/` into the staging
   script; `secrets.h` stays gitignored AND is excluded by the script. Both need the
-  `FIRMWARE_MIRROR_TOKEN` secret. Details: `docs/guides/firmware.md`, "Releases".
+  `FIRMWARE_MIRROR_TOKEN` secret (fine-grained PAT: Contents + Workflows read/write). Details: `docs/guides/firmware.md`, "Releases".
 - Cloudflare **quick tunnel** is the documented path out (`docs/guides/tunnel.md`):
   `cloudflared tunnel --url http://localhost:8000`, random hostname, changes every
   restart. The server stays unaware of it -- no tunnel code, no config.

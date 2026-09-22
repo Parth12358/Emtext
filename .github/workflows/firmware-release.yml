@@ -5,8 +5,8 @@ name: firmware release
 # the release exactly, and publishes a GitHub Release ON THE PUBLIC REPO
 # (Parth12358/emtext-firmware). Nothing is written to this repo.
 #
-# Needs FIRMWARE_MIRROR_TOKEN (fine-grained PAT, Contents: read/write on the
-# public repo) -- the same secret the mirror uses.
+# Needs FIRMWARE_MIRROR_TOKEN (fine-grained PAT, Contents + Workflows:
+# read/write on the public repo) -- the same secret the mirror uses.
 
 on:
   push:

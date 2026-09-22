@@ -396,7 +396,9 @@ workflows in this repo feed. Nobody edits the mirror; everything lands here and 
   since the previous `fw-v*` tag.
 
 Both publishing workflows need the `FIRMWARE_MIRROR_TOKEN` secret: a fine-grained PAT
-scoped to the public repo with Contents read/write. The board is
+scoped to the public repo with **Contents: read/write** and **Workflows: read/write** (the
+mirror pushes a `.github/workflows/ci.yml`, and GitHub rejects that from a token without the
+Workflows permission). The board is
 `m5stack:esp32:m5stack_sticks3`; if your IDE build relies on a menu option (partition
 scheme, PSRAM mode, USB CDC), pass the full fqbn to the workflow's `fqbn` input and, once it
 is known to matter, make it the default in the toolchain action.

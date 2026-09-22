@@ -183,12 +183,16 @@ jobs:
         run: |
           set -euo pipefail
           subject="$(git log -1 --format=%s)"; sha="$(git rev-parse --short HEAD)"
+          # Author the mirror commit as the person whose commit shipped, so the
+          # public repo's contributors graph credits them (GitHub attributes by
+          # author email). The bot stays as committer, which is what it is.
+          author="$(git log -1 --format='%an <%ae>')"
           cd "$RUNNER_TEMP/mirror"
           git init -q -b main
           git config user.name  "emtext-mirror[bot]"
           git config user.email "emtext-mirror@users.noreply.github.com"
           git add -A
-          git commit -q -m "mirror: Emtext@${sha} ${subject} (release ${TAG})"
+          git commit -q --author="$author" -m "mirror: Emtext@${sha} ${subject} (release ${TAG})"
           git remote add origin "https://x-access-token:${TOKEN}@github.com/${MIRROR_REPO}.git"
           git push --force origin main
           echo "mirrored Emtext@${sha} -> ${MIRROR_REPO}:main"

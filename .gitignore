@@ -53,3 +53,6 @@ firmware/emtext/secrets.h
 # Saved clips: retained third-party audio, user-initiated (README.md, wire protocol). Never commit.
 clips/
 experiments/spk/
+
+# arduino-cli --export-binaries output (CI and local compile checks)
+firmware/emtext/build/

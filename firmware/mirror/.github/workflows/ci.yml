@@ -1,0 +1,37 @@
+name: ci
+
+# Compile check for the public mirror, so a pull request here gets a build
+# signal. Releases are NOT cut from this repository -- they are produced
+# upstream and published here.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: toolchain
+        run: |
+          set -euo pipefail
+          arduino-cli config init --overwrite \
+            --additional-urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json
+          arduino-cli core update-index
+          arduino-cli core install m5stack:esp32
+          arduino-cli lib install "M5Unified" "ArduinoJson" "WebSockets" "ArduinoHttpClient"
+      - name: compile
+        run: arduino-cli compile --fqbn m5stack:esp32:m5stack_sticks3 --warnings default emtext

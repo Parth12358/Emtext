@@ -28,6 +28,8 @@ emtext is two codebases in one repo, joined only by the websocket **wire protoco
   segmenter → Whisper + SER → Ollama pipeline, the dashboard, the eval suite, and the
   Cloudflare tunnel. Runs on a workstation with a GPU.
 - **The pendant firmware** — `firmware/`, documented in **[docs/guides/firmware.md](docs/guides/firmware.md)**.
+  Public mirror and flashable releases: **[Parth12358/emtext-firmware](https://github.com/Parth12358/emtext-firmware)**
+  (this repository is private; the firmware is not).
   An ESP32-S3 (M5StickS3) worn as a pendant that replaces the browser: a mic + a small
   display that streams 16 kHz PCM over the same `wss://…/stream` contract and renders the
   server's `read` frames. All transcription/interpretation stays on the server — the device

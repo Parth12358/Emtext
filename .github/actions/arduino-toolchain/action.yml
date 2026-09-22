@@ -1,0 +1,40 @@
+name: arduino toolchain
+description: >-
+  Install arduino-cli, the M5Stack ESP32 core and the four libraries the
+  firmware needs, with the board core and libraries cached. Used by every
+  firmware workflow so all three build the sketch identically.
+inputs:
+  fqbn:
+    description: Fully qualified board name (M5StickS3 by default)
+    required: false
+    default: m5stack:esp32:m5stack_sticks3
+outputs:
+  fqbn:
+    description: The fqbn actually used (echoed for later steps)
+    value: ${{ inputs.fqbn }}
+runs:
+  using: composite
+  steps:
+    - uses: arduino/setup-arduino-cli@v2
+
+    # The M5Stack core is a ~400 MB download; cache it on the action file's
+    # hash so a change to the library list invalidates it and nothing else does.
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.arduino15
+          ~/Arduino/libraries
+        key: arduino-${{ runner.os }}-${{ hashFiles('.github/actions/arduino-toolchain/action.yml') }}
+
+    - shell: bash
+      run: |
+        set -euo pipefail
+        arduino-cli config init --overwrite \
+          --additional-urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json
+        arduino-cli core update-index
+        arduino-cli core install m5stack:esp32
+        # The sketch's five external dependencies (see docs/guides/firmware.md).
+        # ArduinoJson must be v7: proto.cpp uses the v7 JsonDocument API.
+        arduino-cli lib install "M5Unified" "ArduinoJson" "WebSockets" "ArduinoHttpClient"
+        arduino-cli core list
+        arduino-cli lib list

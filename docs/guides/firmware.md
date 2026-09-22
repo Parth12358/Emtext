@@ -370,6 +370,43 @@ are callbacks, an unfinished upper module is just an unwired callback, never a c
 - **9 — acceptance + compliance** ⬜ outage recovery visible on screen, capture externally
   visible, no third-party retention, 2.5 h runtime (else press-to-listen default).
 
+## Releases and the public mirror
+
+The server repository is private; the firmware is public. GitHub visibility is per repo,
+so the firmware lives in a **read-only mirror**, `Parth12358/emtext-firmware`, that two
+workflows in this repo feed. Nobody edits the mirror; everything lands here and flows out.
+
+- **`firmware ci`** (`.github/workflows/firmware-ci.yml`) compiles the sketch with
+  `arduino-cli` on every PR or push touching `firmware/`, using the shared toolchain action
+  (`.github/actions/arduino-toolchain`: M5Stack core + `M5Unified`, `ArduinoJson`,
+  `WebSockets`, `ArduinoHttpClient`, cached). `secrets.h` is absent in CI on purpose; the
+  sketch compiles with its defaults.
+- **`firmware mirror`** (`firmware-mirror.yml`) runs on pushes to `main` that touch the
+  firmware or its three docs. `.github/scripts/stage_firmware.sh` builds the public tree
+  (`emtext/` sketch, `docs/` flattened with links rewritten, `README.md` from
+  `firmware/mirror/README.md`, `LICENSE` if present, a `ci.yml`, and `SOURCE.txt` naming the
+  upstream commit) and force-pushes it as ONE orphan commit. The mirror therefore has no
+  history and never contains anything from `server/`.
+- **`firmware release`** (`firmware-release.yml`) runs on a tag `fw-vMAJOR.MINOR.PATCH`
+  (or by hand with a version input). It compiles with `--export-binaries`, packages
+  `emtext-firmware-<tag>.merged.bin` (flash at `0x0`), `.app.bin`, bootloader and partition
+  images, `emtext-firmware-<tag>-source.zip` (the same staged tree), `FLASHING.md` and
+  `SHA256SUMS.txt`, refreshes the mirror so its `main` is exactly this source, and creates
+  the GitHub Release **on the public repo** with release notes from the firmware commits
+  since the previous `fw-v*` tag.
+
+Both publishing workflows need the `FIRMWARE_MIRROR_TOKEN` secret: a fine-grained PAT
+scoped to the public repo with Contents read/write. The board is
+`m5stack:esp32:m5stack_sticks3`; if your IDE build relies on a menu option (partition
+scheme, PSRAM mode, USB CDC), pass the full fqbn to the workflow's `fqbn` input and, once it
+is known to matter, make it the default in the toolchain action.
+
+To cut a release:
+
+```
+git tag fw-v0.1.0 && git push origin fw-v0.1.0
+```
+
 ## Out of scope for v1
 
 On-device segmentation, OTA, certificate pinning (a CA **bundle** is used instead), network

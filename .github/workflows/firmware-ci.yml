@@ -1,0 +1,47 @@
+name: firmware ci
+
+# Compile the pendant sketch on every change that could break it, so a broken
+# build is caught here -- before the mirror copies it to the public repo and
+# before anyone cuts a release from it.
+
+on:
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
+      - ".github/actions/arduino-toolchain/**"
+  push:
+    branches: [main, prod]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
+      - ".github/actions/arduino-toolchain/**"
+  workflow_dispatch:
+    inputs:
+      fqbn:
+        description: Board (override if the IDE build uses options, e.g. m5stack:esp32:m5stack_sticks3:PartitionScheme=default)
+        required: false
+        default: m5stack:esp32:m5stack_sticks3
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/arduino-toolchain
+        with:
+          fqbn: ${{ inputs.fqbn || 'm5stack:esp32:m5stack_sticks3' }}
+      - name: compile
+        run: |
+          set -euo pipefail
+          # secrets.h is gitignored and absent here on purpose: config.cpp
+          # falls back to compiled-in defaults, which is the shape a release
+          # ships in (users configure through the captive portal or their own
+          # secrets.h).
+          arduino-cli compile \
+            --fqbn "${{ inputs.fqbn || 'm5stack:esp32:m5stack_sticks3' }}" \
+            --warnings default \
+            firmware/emtext

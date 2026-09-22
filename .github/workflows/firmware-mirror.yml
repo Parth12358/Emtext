@@ -1,0 +1,61 @@
+name: firmware mirror
+
+# Publish the firmware (sketch + its docs) to the read-only public repo
+# Parth12358/emtext-firmware. This repo is private; the pendant firmware is
+# not. The mirror is a snapshot: each run force-pushes ONE orphan commit, so
+# the public history never contains anything from server/, and nobody edits
+# the mirror directly (changes land here and flow out).
+#
+# Needs the FIRMWARE_MIRROR_TOKEN secret: a fine-grained PAT scoped to the
+# public repo with Contents: read/write.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - "docs/guides/firmware.md"
+      - "docs/design/firmware-ui-ux.md"
+      - "docs/design/firmware-requirements.md"
+      - ".github/workflows/firmware-mirror.yml"
+      - ".github/scripts/stage_firmware.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-mirror
+  cancel-in-progress: false
+
+env:
+  MIRROR_REPO: Parth12358/emtext-firmware
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: stage the public tree
+        run: bash .github/scripts/stage_firmware.sh "$RUNNER_TEMP/mirror"
+
+      - name: push snapshot
+        env:
+          TOKEN: ${{ secrets.FIRMWARE_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOKEN" ]; then
+            echo "FIRMWARE_MIRROR_TOKEN is not set; nothing pushed" >&2; exit 1
+          fi
+          subject="$(git log -1 --format=%s)"
+          sha="$(git rev-parse --short HEAD)"
+          cd "$RUNNER_TEMP/mirror"
+          git init -q -b main
+          git config user.name  "emtext-mirror[bot]"
+          git config user.email "emtext-mirror@users.noreply.github.com"
+          git add -A
+          git commit -q -m "mirror: Emtext@${sha} ${subject}"
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${MIRROR_REPO}.git"
+          git push --force origin main
+          echo "pushed mirror: Emtext@${sha} -> ${MIRROR_REPO}:main"

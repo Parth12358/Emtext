@@ -379,8 +379,9 @@ everything lands here and flows out.
 
 | event | what runs |
 |---|---|
-| pull request, push to `main` (touching `firmware/` or its docs) | compile check only |
-| **push to `prod`** | compile → mirror → release |
+| pull request into `prod` (touching `firmware/` or its docs) | compile check only: the gate |
+| **push to `prod`** (the merged PR) | compile → mirror → release |
+| push to `main` | nothing; `main` is the dev branch |
 | manual run (Actions → firmware → Run workflow) | same as prod; optional `fqbn` override |
 
 - **Compile** uses the shared toolchain action (`.github/actions/arduino-toolchain`: M5Stack
@@ -406,11 +407,8 @@ Needs the `FIRMWARE_MIRROR_TOKEN` secret: a fine-grained PAT scoped to the publi
 **Contents: read/write** and **Workflows: read/write** (the mirror pushes a
 `.github/workflows/ci.yml`; GitHub rejects that from a token without Workflows).
 
-To release: bump `firmware/VERSION` on `main` if you want a clean tag, then
-
-```
-git checkout prod && git merge --ff-only main && git push origin prod
-```
+To release: bump `firmware/VERSION` on `main` if you want a clean tag, then open a PR from
+`main` into `prod`. The compile check runs on the PR; merging it runs the whole pipeline.
 
 ## Out of scope for v1
 

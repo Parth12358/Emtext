@@ -2,9 +2,12 @@ name: firmware
 
 # One pipeline for the pendant firmware.
 #
-#   pull request / push to main  -> compile check only
-#   push to prod                 -> compile, mirror to the public repo, release
+#   pull request (into prod)     -> compile check only: the gate before shipping
+#   push to prod (merged PR)     -> compile, mirror to the public repo, release
 #   manual run                   -> same as prod (with an optional fqbn override)
+#
+# main is the dev branch and runs nothing here; work lands on main freely and
+# a PR from main into prod is what ships.
 #
 # Releases are versioned by firmware/VERSION: a prod push releases fw-v<VERSION>.
 # If that tag already exists on the public repo (VERSION was not bumped), the
@@ -25,7 +28,7 @@ on:
       - ".github/actions/arduino-toolchain/**"
       - ".github/scripts/stage_firmware.sh"
   push:
-    branches: [main, prod]
+    branches: [prod]
     paths:
       - "firmware/**"
       - "docs/guides/firmware.md"
@@ -180,12 +183,16 @@ jobs:
         run: |
           set -euo pipefail
           subject="$(git log -1 --format=%s)"; sha="$(git rev-parse --short HEAD)"
+          # Author the mirror commit as the person whose commit shipped, so the
+          # public repo's contributors graph credits them (GitHub attributes by
+          # author email). The bot stays as committer, which is what it is.
+          author="$(git log -1 --format='%an <%ae>')"
           cd "$RUNNER_TEMP/mirror"
           git init -q -b main
           git config user.name  "emtext-mirror[bot]"
           git config user.email "emtext-mirror@users.noreply.github.com"
           git add -A
-          git commit -q -m "mirror: Emtext@${sha} ${subject} (release ${TAG})"
+          git commit -q --author="$author" -m "mirror: Emtext@${sha} ${subject} (release ${TAG})"
           git remote add origin "https://x-access-token:${TOKEN}@github.com/${MIRROR_REPO}.git"
           git push --force origin main
           echo "mirrored Emtext@${sha} -> ${MIRROR_REPO}:main"

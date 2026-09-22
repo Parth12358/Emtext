@@ -216,8 +216,9 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   (see the `_fence` docstring for the numbers). `SYSTEM_PROMPT` is byte-identical
   to its pre-hardening form on purpose.
 - **The firmware is public, the server is not.** `Parth12358/emtext-firmware` is a
-  generated, read-only mirror. One workflow, `.github/workflows/firmware.yml`: PRs and
-  `main` get a compile check; a push to **`prod`** compiles, mirrors and releases
+  generated, read-only mirror. One workflow, `.github/workflows/firmware.yml`: `main` is the dev
+  branch and runs nothing; a PR into `prod` gets the compile check; merging it (a push to
+  **`prod`**) compiles, mirrors and releases
   (`fw-v<firmware/VERSION>`, or a build-stamped tag if that one exists). The public tree
   comes from `.github/scripts/stage_firmware.sh` (sketch, the three firmware docs,
   `firmware/mirror/README.md`, `VERSION`) force-pushed as one orphan commit. Never edit the
@@ -262,6 +263,10 @@ No auth beyond the token, no database, no Docker, no `tests/` folder.
 
 ## Style
 
+- **Commits are attributed to the author only.** No `Co-Authored-By` or other AI attribution
+  trailers on commits, PRs, release notes or mirror commits; the public firmware repo's
+  contributors must be people. The mirror workflow authors its commit as the shipping commit's
+  author for the same reason.
 Type hints, docstrings that explain the **why** of non-obvious choices. The
 segmenter state machine, the executor pattern, and the worklet/downsampling are commented
 generously on purpose (the author is learning from them) — preserve that when editing.

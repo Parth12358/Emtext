@@ -90,6 +90,38 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   pairs (identical text, opposite voice) are the only check that the SER signal
   is actually being used; a model ignoring `voice` scores 0 there.
 
+## Branches, CI and releases (how work ships)
+
+- **`main` is the dev branch; `prod` is the release branch.** Commit and push day-to-day work
+  to `main`. Nothing runs on a `main` push (no server CI exists; the only assert test is
+  `python -m server.segmenter`, run it by hand). Never push straight to `prod`: ship by
+  opening a PR from `main` into `prod` and merging it (merge or fast-forward, not squash, so
+  `prod` stays identical to `main`). Open PRs via the compare link
+  `https://github.com/Parth12358/Emtext/compare/prod...main?quick_pull=1` when `gh` is absent.
+- **The one CI check** is `.github/workflows/firmware.yml`. On a PR into `prod` it compiles
+  `firmware/emtext` with `arduino-cli` (`m5stack:esp32:m5stack_sticks3`, no `secrets.h`) and
+  stops. It only triggers when the PR touches `firmware/**`, the three firmware docs
+  (`docs/guides/firmware.md`, `docs/design/firmware-*.md`), the workflow, the toolchain
+  action or `.github/scripts/stage_firmware.sh`; a server-only PR shows no check at all.
+  The check is not yet required by branch protection, so red does not block the merge.
+- **Merging into `prod` releases.** The same workflow, now with `PUBLISH` true, compiles with
+  exported binaries, runs `stage_firmware.sh`, force-pushes the public tree as one orphan
+  commit to `Parth12358/emtext-firmware` (authored as the shipping commit's author), and
+  creates the GitHub Release there with the merged/app/bootloader/partition images, a
+  source zip, `FLASHING.md`, `SHA256SUMS.txt` and notes listing the firmware commits since
+  the previous `prod` head.
+- **Release versioning is `firmware/VERSION`** (`X.Y.Z`). The release tag is
+  `fw-v<VERSION>`. Bump it on `main`, in the same PR as the change it describes, BEFORE
+  merging into `prod`: patch for fixes, minor for features, major for wire-protocol or
+  flashing changes. If a `prod` merge lands without a bump and `fw-v<VERSION>` already
+  exists on the public repo, the run still publishes, tagged `fw-v<VERSION>-<yyyymmdd>.<sha>`,
+  which is noise rather than an error; the next bump makes a clean tag again.
+- **Secrets and scope.** Publishing needs `FIRMWARE_MIRROR_TOKEN` (fine-grained PAT on the
+  public repo: Contents + Workflows read/write). Only firmware, its three docs,
+  `firmware/mirror/README.md`, `firmware/VERSION` and `firmware/LICENSE` (PolyForm
+  Noncommercial 1.0.0) ever reach the public repo; nothing under `server/` may be added to
+  the staging script. Never edit the mirror repo directly.
+
 ## Architecture & module boundaries (respect these)
 
 - `server/config.py` — every tunable, each overridable by an env var of the same name. New

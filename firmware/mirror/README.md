@@ -47,3 +47,9 @@ Equivalent command line: `arduino-cli compile --fqbn m5stack:esp32:m5stack_stick
 - [`docs/firmware-requirements.md`](docs/firmware-requirements.md) — the requirements the device is built against.
 
 `SOURCE.txt` records the upstream commit each snapshot came from.
+
+## Licence
+
+[PolyForm Noncommercial 1.0.0](LICENSE). You may use, modify and share this firmware for
+noncommercial purposes; commercial use needs the copyright holder's permission.
+Copyright © 2026 Parth Kshirsagar.

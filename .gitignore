@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
-.venv-laya/
 experiments/*.wav
 experiments/prosody/
 experiments/asr/

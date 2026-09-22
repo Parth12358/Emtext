@@ -394,9 +394,9 @@ subtext. Seven runs over `eval/tone_cases.jsonl`, `eval/results/model.csv` and
 `eval/results/pipeline.csv`; the voice hint shown to Laya is
 `interpreter._describe_voice`'s text, byte-identical to the LLM's. Full
 write-up with method and per-row findings: `experiments/laya/report.md`.
-Reproduce: `.venv/Scripts/python experiments/laya/bench.py` (Laya needs
-transformers 5 and lives in its own `.venv-laya/`, gitignored, driven as a
-subprocess).
+The harness (worker + bench + per-row CSVs) was removed after the decision
+(commit `e04d440` has it, if a fine-tuned checkpoint or a smaller sentiment
+model ever needs scoring the same way); the report is what stays.
 
 ### What was measured
 
@@ -463,8 +463,8 @@ fp32 download, 16.5 s cold load, second venv (transformers 5 vs the server's
 - If a words-polarity channel is ever wanted (the fixed table did recover
   4/6 pairs), a ~20-60M sentiment model at ~10x less CPU in the server venv
   is the right shape, not a 421M zero-shot QA model. Any candidate must
-  clear p(sarcastic) > 0.5 on `sar-01..04` before the veto run
-  (`bench.py --runs 3,4`) is worth repeating.
+  clear p(sarcastic) > 0.5 on `sar-01..04` before the veto run is worth
+  repeating (restore the harness from `e04d440`).
 
 ---
 

@@ -1,7 +1,11 @@
 # Laya as a middle stage between SER and the interpreter
 
 **Date:** 2026-09-21 -- **Status:** measured, not adopted -- **Touches:** nothing
-in `server/` (`experiments/laya/bench.py` imports from it read-only)
+in `server/`
+
+> The test bed this report describes (`worker.py`, `bench.py`, `results/`,
+> `.venv-laya/`) was removed once the decision was made. It exists intact in
+> commit `e04d440` and can be restored from there to score another candidate.
 
 ## Verdict
 
@@ -228,13 +232,13 @@ drops 18% of them to save 27% of LLM calls is not a trade.
   LLM deciding, which the prompt already does at 85-88%.
 - **A sarcasm head that actually fires.** Any replacement must beat
   p(sarcastic) > 0.5 on sar-01..04 before a veto rule is worth re-running;
-  `bench.py --runs 3,4` is the check.
+  `bench.py --runs 3,4` (from `e04d440`) is the check.
 
 ## Recommendation
 
-Do not integrate. Keep `experiments/laya/` as the measurement (the worker
-protocol and `bench.py` are reusable for any typed classifier), leave
-`.venv-laya/` gitignored and deletable, and record the numbers in `TODO.md`.
+Do not integrate. This report is the record; the measurement harness lives
+in git history (`e04d440`) rather than in the tree, and the numbers are in
+`TODO.md`.
 The open problems Laya was aimed at -- qwen3:14b over-calling sarcasm on a
 confidently happy voice, gemma / qwen3:8b missing sar-04 -- remain prompt and
 data problems, not arbiter problems.

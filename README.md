@@ -10,7 +10,7 @@ server slices the audio into utterances and then, for each one, works out both
 *what* was said (Whisper, on CPU) and *how it sounded* (a speech emotion model,
 also on CPU) before asking a local LLM (via Ollama, on the GPU) what the line
 really means. An ESP32 pendant is now being built to replace the browser over the
-exact same wire protocol — see **[firmware/README.md](firmware/README.md)**.
+exact same wire protocol — see **[docs/guides/firmware.md](docs/guides/firmware.md)**.
 
 ```
 mic ─► browser (AudioWorklet, 16k int16) ─websocket─► server
@@ -27,7 +27,7 @@ emtext is two codebases in one repo, joined only by the websocket **wire protoco
 - **The server** — everything documented in *this* README: the browser test client, the
   segmenter → Whisper + SER → Ollama pipeline, the dashboard, the eval suite, and the
   Cloudflare tunnel. Runs on a workstation with a GPU.
-- **The pendant firmware** — `firmware/`, documented in **[firmware/README.md](firmware/README.md)**.
+- **The pendant firmware** — `firmware/`, documented in **[docs/guides/firmware.md](docs/guides/firmware.md)**.
   An ESP32-S3 (M5StickS3) worn as a pendant that replaces the browser: a mic + a small
   display that streams 16 kHz PCM over the same `wss://…/stream` contract and renders the
   server's `read` frames. All transcription/interpretation stays on the server — the device
@@ -50,7 +50,7 @@ no firmware power-off gesture: on the M5StickS3 the PWR button is a hardware off
 on-hardware validation of Stage 8 (incl. the ≥2.5 h runtime target) and acceptance/compliance
 (Stage 9). (Audio cues, the former Stage 7, are dropped — the pendant
 has no speaker; the emotional signal is visual only.) Full module architecture and the
-staged plan live in [firmware/README.md](firmware/README.md).
+staged plan live in [docs/guides/firmware.md](docs/guides/firmware.md).
 
 Everything below documents the **server half**.
 
@@ -103,7 +103,7 @@ before the SER swap.
   label. (It scores 93% on `eval/tone_cases.jsonl`, where the hint carries
   *numeric* valence. Different inputs, both results real.)
 
-**Known rough edges** — see [TODO.md](TODO.md) for the detail:
+**Known rough edges** — see [docs/status/TODO.md](docs/status/TODO.md) for the detail:
 
 - **Segmentation needs tuning for real rooms.** `SPEECH_RMS` is an absolute
   threshold; quiet speech is dropped and sentences split at soft consonants. The
@@ -451,7 +451,7 @@ The emotion2vec models are far lighter and have **no dimensional head**. Rather
 than fabricate valence, `ser.py` derives `arousal` and `dominance` from the
 class distribution (per-emotion anchors, probability-weighted) and leaves
 `valence` at `null`: acoustic valence is largely implicit linguistic content
-(see `TODO.md`), so it would agree with the transcript exactly where the
+(see `docs/status/TODO.md`), so it would agree with the transcript exactly where the
 mismatch rule needs an independent channel. The LLM reads valence from the
 words; the voice contributes the two axes the words cannot. Profile the derived
 range with `python -m eval.ser_eval --profile-valence` before changing
@@ -762,7 +762,7 @@ backend's shape):
 On the 30 cases the earlier prompt was scored on, each model is 3 points
 below its old figure (93 / 93 / 83), almost entirely one case per model; the
 `literal` and `low-confidence` guard rails are 100% for all three. The full
-before/after is in `TODO.md` under the SER entry.
+before/after is in `docs/status/TODO.md` under the SER entry.
 
 The sarcasm column is the axis the product is named for, and it shows two
 opposite failure shapes that the overall score hides. Every sarcasm miss in
@@ -806,7 +806,7 @@ Two findings from building this suite are baked back into the code:
 
 ## Known limitations
 
-See [TODO.md](TODO.md) for the full write-up of each, including what was tested
+See [docs/status/TODO.md](docs/status/TODO.md) for the full write-up of each, including what was tested
 and ruled out. In short:
 
 - **The VAD cannot hear quiet speech.** `SPEECH_RMS` is an absolute threshold, so
@@ -839,7 +839,7 @@ and ruled out. In short:
 The server can be reached from outside the LAN through a **Cloudflare quick
 tunnel** — one command, no account, no domain, no port forwarding, works behind
 NAT/CGNAT. Full instructions and troubleshooting are in
-**[tunnel/README.md](tunnel/README.md)**.
+**[docs/guides/tunnel.md](docs/guides/tunnel.md)**.
 
 ```powershell
 $env:AUTH_TOKEN = (python -c "import secrets; print(secrets.token_urlsafe(32))")
@@ -922,8 +922,12 @@ responsive, and a timestamped log of every frame.
 ## Layout
 
 ```
-TODO.md           open issues, with the measurements behind them
-tunnel/           Cloudflare quick-tunnel docs + start scripts
+docs/             everything except this file and CLAUDE.md (index: docs/README.md)
+  status/TODO.md          open issues, with the measurements behind them
+  design/                 RESEARCH.md, firmware UI/UX + requirements, website brief
+  guides/                 firmware.md, tunnel.md, website.md
+  reports/                one-off measurements (laya.md)
+tunnel/           Cloudflare quick-tunnel start scripts + token helper
 server/
   main.py         FastAPI app + websocket route (wiring only)
   config.py       all tunables, env-overridable

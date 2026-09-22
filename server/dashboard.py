@@ -452,7 +452,7 @@ async def enroll(request: Request,
     found, added, total = await loop.run_in_executor(None, _enrol_blocking, audio)
     log.info("speaker enrol: %d utterances found, %d added, %d total", found, added, total)
     if found == 0:
-        # The most likely cause is the same one TODO.md documents for the VAD:
+        # The most likely cause is the same one docs/status/TODO.md documents for the VAD:
         # a mic quieter than SPEECH_RMS assumes. Say so rather than "0 added".
         raise HTTPException(
             status_code=422,

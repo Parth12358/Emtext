@@ -256,7 +256,7 @@ class Segmenter:
           * the FLOOR is SPEECH_RMS_MIN (150): digital silence -- a studio clip,
             a muted line -- must not drive the threshold to zero and open an
             utterance on the first bit of dither. 150 is where RAVDESS measured
-            5/10 dropped clips becoming 1/10 (TODO.md).
+            5/10 dropped clips becoming 1/10 (docs/status/TODO.md).
 
         Between those, a quiet room with a floor of 30 asks for 150, a normal
         room at 100 asks for 300, and an air-conditioned office at 200 asks for
@@ -341,7 +341,7 @@ if __name__ == "__main__":
 
     # Case 3: QUIET speech. A tone at amp 300 has RMS ~212 -- below the old
     # constant threshold of 500 (it was silently dropped, which is the bug in
-    # TODO.md) but above SPEECH_RMS_MIN. After leading silence the adaptive
+    # docs/status/TODO.md) but above SPEECH_RMS_MIN. After leading silence the adaptive
     # threshold settles at the floor, so the tone must now segment; with
     # adaptation off it must still be dropped, proving the old path is intact.
     quiet = _silence(500) + _tone(1000, amp=300) + _silence(1000)

@@ -1,6 +1,6 @@
 # What the literature actually says about reading emotion from speech
 
-A survey done in September 2026, aimed squarely at emtext's design decisions. `TODO.md`
+A survey done in September 2026, aimed squarely at emtext's design decisions. `docs/status/TODO.md`
 records what is broken *in this codebase*; this file records what is known *in the field*,
 so the next design argument starts from evidence rather than intuition.
 
@@ -235,7 +235,7 @@ Kreuz & Glucksberg's echoic reminder theory
 ([JEP:General 118](https://psycnet.apa.org/doiLanding?doi=10.1037%2F0096-3445.118.4.374)).
 
 **[GAP]** No study acoustically separates ridicule-bearing sarcasm from victimless irony.
-Treat any claim that "sarcasm sounds different from irony" as unsupported. `TODO.md`'s entry
+Treat any claim that "sarcasm sounds different from irony" as unsupported. `docs/status/TODO.md`'s entry
 on irony should stay a low priority: the distinction is real pragmatically and undetectable
 acoustically.
 
@@ -393,7 +393,7 @@ interpreter LLM *also* receives the transcript, the mismatch rule would be compa
 against itself, producing confident agreement rather than information. **A dedicated
 acoustic-only SER model is architecturally correct precisely because it cannot cheat.**
 
-It is also a direct argument against the `TODO.md` entry proposing an audio-native LLM to
+It is also a direct argument against the `docs/status/TODO.md` entry proposing an audio-native LLM to
 replace Whisper: that change would collapse two independent channels into one.
 
 ### 4.4 Where voice genuinely adds information over the transcript
@@ -646,7 +646,7 @@ are running statistics over RMS — no model.
 
 ### 6.2 Change — stop chasing valence, key the mismatch rule on arousal and dominance
 
-**This supersedes the "restore a valence signal" plan in `TODO.md`.** The evidence in §4.5–4.6
+**This supersedes the "restore a valence signal" plan in `docs/status/TODO.md`.** The evidence in §4.5–4.6
 says acoustic valence is substantially implicit lexical sentiment — so an acoustic valence
 model spends CPU re-deriving, worse, a signal the interpreter LLM already has from the
 transcript. And because a partly-lexical valence head tends to *agree* with the text, it will

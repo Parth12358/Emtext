@@ -202,7 +202,7 @@ drops 18% of them to save 27% of LLM calls is not a trade.
   audio stage it becomes the long pole and slows Whisper.
 - **Memory:** 1991 MB RSS for the worker alone, on a server whose own budget
   was just fought down (see "The server's memory is dominated by one
-  checkpoint" in `TODO.md`). fp32 weights; no int8 export was tried.
+  checkpoint" in `docs/status/TODO.md`). fp32 weights; no int8 export was tried.
 - **Dependency conflict:** Laya needs transformers 5.x; the server venv pins
   `<5` for MERaLiON's remote code. The subprocess worker is the only way to
   run both, and it is a second Python, a second torch, and a process to
@@ -222,7 +222,7 @@ drops 18% of them to save 27% of LLM calls is not a trade.
   for a sarcasm/tone head, but `tone_cases.jsonl` is 34 lines and the RAVDESS
   text is null, so there is nothing to fine-tune on yet. More labelled
   mismatch pairs on real speech (see "Sarcasm is never tested on real
-  speech" in `TODO.md`) are the prerequisite for this and for every other
+  speech" in `docs/status/TODO.md`) are the prerequisite for this and for every other
   approach.
 - **A smaller sentiment model for the words channel.** If a polarity-only
   signal is ever wanted (R1's table did recover 4/6 pairs), a ~20-60M
@@ -238,7 +238,7 @@ drops 18% of them to save 27% of LLM calls is not a trade.
 
 Do not integrate. This report is the record; the measurement harness lives
 in git history (`e04d440`) rather than in the tree, and the numbers are in
-`TODO.md`.
+`docs/status/TODO.md`.
 The open problems Laya was aimed at -- qwen3:14b over-calling sarcasm on a
 confidently happy voice, gemma / qwen3:8b missing sar-04 -- remain prompt and
 data problems, not arbiter problems.

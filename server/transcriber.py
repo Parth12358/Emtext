@@ -200,8 +200,8 @@ class _Sherpa:
         if self.family == "sense_voice":
             # SenseVoice's side channels. Logged only: the interpreter's
             # mismatch rule needs an acoustic-only SER channel, and this one is
-            # entangled with the transcript (RESEARCH.md §4.3). Recorded in
-            # TODO.md as a candidate cross-check for laughter/crying events.
+            # entangled with the transcript (docs/design/RESEARCH.md §4.3). Recorded in
+            # docs/status/TODO.md as a candidate cross-check for laughter/crying events.
             extra = {k: getattr(result, k, "") for k in ("lang", "emotion", "event")}
             if any(extra.values()):
                 log.debug("sensevoice tags: %s", extra)

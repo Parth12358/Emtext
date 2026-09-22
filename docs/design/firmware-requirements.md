@@ -127,7 +127,7 @@ is a microphone and a display.
   live ping stands in as the link-quality indicator.)*
 - Tone shall be conveyed by colour. **Deviation, deliberate:** the shipped design
   uses five tone colours (positive, negative, sarcastic, mixed, neutral) on a
-  single heart shape, so colour *is* the sole tone cue -- see `UI_UX.md` §6 for
+  single heart shape, so colour *is* the sole tone cue -- see `docs/design/firmware-ui-ux.md` §6 for
   the rationale. The original requirement (no more than four values, never
   colour alone) is recorded here as superseded, not met.
 - Low-confidence interpretations shall be rendered with visibly reduced

@@ -12,6 +12,12 @@ listener's own lines get no read. A hold on the pendant's button saves the momen
 clip for later review. A browser page is the test client; an **M5StickS3 pendant
 (ESP32) speaks the exact same wire protocol** and is the real client.
 
+Documentation lives in `docs/` (index: `docs/README.md`), organised by kind: `status/`
+(TODO with measurements), `design/` (research, firmware UI/UX and requirements, website
+brief), `guides/` (firmware, tunnel, website how-tos), `reports/` (one-off measurements).
+Only `README.md` and this file stay at the root; `firmware/`, `tunnel/` and `website/` keep a
+three-line README stub pointing into `docs/`. New docs go under `docs/`, not next to code.
+
 ## Running things
 
 - Run all commands from the **project root** (the directory containing `server/`), not a
@@ -49,7 +55,7 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   **It always evicts the LLM from VRAM on exit** -- `interpreter.py` sends
   `keep_alive: -1`, so without that a run leaves 8-9GB pinned forever and
   model-swapping can silently offload layers to CPU, which reads as "slow model".
-- **`TODO.md` holds open issues with the measurements behind them.** Read it before
+- **`docs/status/TODO.md` holds open issues with the measurements behind them.** Read it before
   touching the segmenter or the VAD knobs, and add to it rather than re-deriving.
 - RAVDESS is much quieter than a live mic: at a FIXED `SPEECH_RMS=500` the VAD
   dropped ~50% of clips, and they were the QUIET emotions (sad/fearful/neutral) --
@@ -60,7 +66,7 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   clip and flags `vad_dropped=1`, so SER and WER stay usable, but those rows carry
   garbled transcripts -- filter them out of TONE accuracy. Do NOT loudness-normalise
   to work around it: loudness is an emotional cue and flattening it corrupts SER.
-  Full write-up, including what was ruled out, is in `TODO.md`.
+  Full write-up, including what was ruled out, is in `docs/status/TODO.md`.
 - `python -m eval.spk_eval` scores speaker id against RAVDESS (same clips, silence-
   trimmed at RMS 150): `--eer`, `--pairs`, `--label`, and `--real me.wav conv.wav` for
   the day a real two-person recording exists -- every RAVDESS number is studio audio
@@ -119,7 +125,7 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   `profile` (the user's enrolled voiceprint, embeddings-only JSON under `models/`) and
   `Session` (the per-connection online partner centroid). It **labels, never cuts**:
   the label comes from the fraction of 1 s windows matching the user (`user` / `other` /
-  `mixed` / `unknown`); splitting a glued utterance was measured and rejected (TODO.md).
+  `mixed` / `unknown`); splitting a glued utterance was measured and rejected (docs/status/TODO.md).
   A `user` line is transcribed into the interpreter's context but **gets no read** --
   explaining the listener's own feelings back to them is the one output this product
   must not produce. Enrolment is `/enroll.html` -> `POST /api/enroll`; forget with
@@ -209,7 +215,7 @@ clip for later review. A browser page is the test client; an **M5StickS3 pendant
   **mechanical**: three prompt-text variants were measured and all scored worse
   (see the `_fence` docstring for the numbers). `SYSTEM_PROMPT` is byte-identical
   to its pre-hardening form on purpose.
-- Cloudflare **quick tunnel** is the documented path out (`tunnel/README.md`):
+- Cloudflare **quick tunnel** is the documented path out (`docs/guides/tunnel.md`):
   `cloudflared tunnel --url http://localhost:8000`, random hostname, changes every
   restart. The server stays unaware of it -- no tunnel code, no config.
 - Keepalives: uvicorn pings every 20s, AND `stream()` sends `{"type":"ping"}` after

@@ -7,7 +7,7 @@ conversational partner's, and anything else in the room arrive as one stream.
 Without this module the interpreter is regularly handed the user's own words and
 asked what "the speaker" meant by them -- it explains the user's feelings back to
 them, which is the single worst output this product can produce (and, per
-RESEARCH.md §1.5, the acoustic channel is exactly where bias against an autistic
+docs/design/RESEARCH.md §1.5, the acoustic channel is exactly where bias against an autistic
 speaker lives, so the user's voice should not be scored at all).
 
 So the question here is narrow. Not "who is everyone in the room" (that is
@@ -16,7 +16,7 @@ one person I have a voiceprint for". One enrolled profile, one decision per
 utterance, three answers: ``user`` / ``other`` / ``mixed`` -- plus ``unknown``
 when there is no profile yet, which is today's behaviour.
 
-How the decision is made (all numbers from TODO.md, "No diarization")
+How the decision is made (all numbers from docs/status/TODO.md, "No diarization")
 --------------------------------------------------------------------
 CAM++ (via funasr, already a dependency for emotion2vec SER) turns any stretch
 of speech into a 192-d embedding whose cosine similarity is speaker identity.
@@ -339,7 +339,7 @@ class Session:
 
     A running mean of the window embeddings from utterances labelled ``other``.
     Once it exists, windows are scored nearest-centroid (user vs partner)
-    instead of against a bare threshold -- the ~7-point win from TODO.md. It is
+    instead of against a bare threshold -- the ~7-point win from docs/status/TODO.md. It is
     a property of the conversation, not of the user, so it is never persisted
     and resets with the connection.
     """

@@ -338,7 +338,7 @@ async def _process_utterance(
         # other person is about to reply to -- but it gets NO read, and its
         # voice result is dropped rather than sent: explaining the user's own
         # feelings back to them is the one output this product must not
-        # produce, and RESEARCH.md §1.5 says the acoustic channel is exactly
+        # produce, and docs/design/RESEARCH.md §1.5 says the acoustic channel is exactly
         # where a model misreads an autistic speaker. No `read` frame follows,
         # so the client must not wait for one on a `user` utterance.
         interpreter.remember(transcript, who="user")

@@ -90,7 +90,7 @@ fi
 
 # --- 3. tunnel --------------------------------------------------------------
 command -v cloudflared >/dev/null 2>&1 \
-  || { echo "cloudflared not on PATH -- see tunnel/README.md" >&2; exit 1; }
+  || { echo "cloudflared not on PATH -- see docs/guides/tunnel.md" >&2; exit 1; }
 
 # Find config.yml without doing path translation by hand. On Git Bash for
 # Windows $USERPROFILE is backslashed and $HOME is not, and they can point at

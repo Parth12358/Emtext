@@ -324,7 +324,7 @@ argue for measuring rather than adopting:
 So the experiment worth running is not "does valence help" but **"does valence help
 *over the transcript the interpreter already has*"**. `eval/model_eval` can answer
 this directly: the `mm-*` pairs hold text constant and vary only voice. See
-`RESEARCH.md` §4.2 and §4.4.
+`docs/design/RESEARCH.md` §4.2 and §4.4.
 
 ### STRONGER: valence may be the wrong target entirely (2026-09-10)
 
@@ -370,7 +370,7 @@ and 0.655, genuinely paralinguistic, and unavailable from text:
 
 The expected-valence-from-distribution idea above is still the cheapest way to get
 a graded signal, but it should now target **arousal and dominance anchors**, not
-valence. Full argument and ranked alternatives in `RESEARCH.md` §4.5-4.6 and §6.2.
+valence. Full argument and ranked alternatives in `docs/design/RESEARCH.md` §4.5-4.6 and §6.2.
 
 Licence note for whoever evaluates `audeering/...-msp-dim`: it is
 **CC-BY-NC-SA-4.0, research only**. Fine as an offline measurement instrument,
@@ -383,7 +383,7 @@ parameters -- slower than the MERaLiON already rejected.
 ## A typed classifier between SER and the LLM does not help (Laya)
 
 **Status:** measured 2026-09-21, NOT adopted; kept as a test bed · **Affects:**
-nothing in `server/`; `experiments/laya/` (worker, bench, results, `report.md`)
+nothing in `server/`; `experiments/laya/` (worker, bench, results, `docs/reports/laya.md`)
 
 Tried `convaiinnovations/laya` (Apache-2.0, ModernBERT-large + decision head,
 421M, one non-autoregressive pass, typed answers with probabilities, no
@@ -393,7 +393,7 @@ that vetoes the LLM's tone, and a gate that skips the LLM on lines with no
 subtext. Seven runs over `eval/tone_cases.jsonl`, `eval/results/model.csv` and
 `eval/results/pipeline.csv`; the voice hint shown to Laya is
 `interpreter._describe_voice`'s text, byte-identical to the LLM's. Full
-write-up with method and per-row findings: `experiments/laya/report.md`.
+write-up with method and per-row findings: `docs/reports/laya.md`.
 The harness (worker + bench + per-row CSVs) was removed after the decision
 (commit `e04d440` has it, if a fine-tuned checkpoint or a smaller sentiment
 model ever needs scoring the same way); the report is what stays.
@@ -563,7 +563,7 @@ That last point names a failure emtext already exhibits: `qwen3:14b` scores 100%
 on the sarcasm category and 2/4 on mismatch pairs **because it fails the sincere
 halves**. That is sarcasm over-firing, which for this product is the more damaging
 error -- it teaches the listener to distrust ordinary speech. Full citations in
-`RESEARCH.md` §2.
+`docs/design/RESEARCH.md` §2.
 
 ---
 
@@ -747,7 +747,7 @@ is architecturally correct *because it cannot cheat*.
 
 Revised status: **not a cost/latency question, a signal-independence question.**
 If this is ever spiked, the thing to measure first is whether the audio path
-disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §4.3.
+disagrees with the transcript when the transcript is wrong. See `docs/design/RESEARCH.md` §4.3.
 
 ---
 
@@ -757,15 +757,15 @@ disagrees with the transcript when the transcript is wrong. See `RESEARCH.md` §
 labelling; user lines get no read; `/enroll.html` -> `POST /api/enroll`,
 `DELETE /api/speaker`; scored by `python -m eval.spk_eval`) -- see "What was
 built" below. What remains open is measurement, not code: the four questions at
-the end still stand and none has been attempted · **Found:** 2026-09-10, investigating `RESEARCH.md` §5.2 · **Affects:**
+the end still stand and none has been attempted · **Found:** 2026-09-10, investigating `docs/design/RESEARCH.md` §5.2 · **Affects:**
 `server/speaker.py`, `server/main.py`, `server/interpreter.py`, the `utterance`
-and `read` frames, and every conversational-dynamics feature `RESEARCH.md` §6.3
+and `read` frames, and every conversational-dynamics feature `docs/design/RESEARCH.md` §6.3
 gates on diarization
 
 emtext currently interprets the microphone, not a speaker. The user's own voice,
 their conversational partner's, and a television are one undifferentiated stream,
 so the interpreter is regularly handed the user's own words and asked what the
-"speaker" meant by them. `RESEARCH.md` §1.5 says pointing the interpreter at the
+"speaker" meant by them. `docs/design/RESEARCH.md` §1.5 says pointing the interpreter at the
 speaker rather than the user is the thing emtext gets *right*; without speaker
 identity that is true only by luck.
 

@@ -18,7 +18,7 @@ httpx
 torch
 # transformers/omegaconf/peft serve the OPT-IN MERaLiON SER backend only; the
 # default emotion2vec path never imports them directly (funasr pulls transformers
-# in transitively regardless, see TODO.md).
+# in transitively regardless, see docs/status/TODO.md).
 # Pinned below 5: MERaLiON-SER-v1 ships custom modelling code (trust_remote_code)
 # that builds layers from torch.logspace(...).item() in __init__. transformers 5
 # constructs models on the meta device, where .item() raises, so the model cannot

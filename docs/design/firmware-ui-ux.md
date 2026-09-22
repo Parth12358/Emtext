@@ -219,7 +219,7 @@ are **BtnA** (turn the portal off) or **PWR** (→Dark). This is the "no nav dur
 
 ## 5. Setup-AP portal UX (Stage 4P) ✅
 
-Reconfigure Wi-Fi/host/token from a phone — no cable, no app. Module notes in `firmware/README.md`.
+Reconfigure Wi-Fi/host/token from a phone — no cable, no app. Module notes in `docs/guides/firmware.md`.
 
 1. **Enter from Settings** (the Wifi SSID row).
 2. **AP comes up** — `net` brings up the `emtext-setup` WPA2 hotspot (default pass `emtextsetup`)
@@ -240,7 +240,7 @@ Reconfigure Wi-Fi/host/token from a phone — no cable, no app. Module notes in 
   captive sheet doesn't pop.
 
 ⚠️ **TLS is currently insecure** on the active WebSocket backend (documented debt in
-`firmware/README.md`) — unrelated to the portal, but must be fixed before real deployment.
+`docs/guides/firmware.md`) — unrelated to the portal, but must be fixed before real deployment.
 
 ---
 

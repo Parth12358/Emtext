@@ -50,6 +50,6 @@ id_ed25519*
 .env.*
 firmware/emtext/secrets.h
 
-# Saved clips: retained third-party audio, user-initiated (clips.md). Never commit.
+# Saved clips: retained third-party audio, user-initiated (README.md, wire protocol). Never commit.
 clips/
 experiments/spk/

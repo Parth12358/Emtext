@@ -18,7 +18,7 @@ What it is not: a real room. One voice per file, studio mic, no reverb and no
 overlap. Every number here is a ceiling, and `--real` exists so a real
 two-person recording can be scored the moment one exists.
 
-The three checks map onto the three claims in TODO.md ("No diarization"):
+The three checks map onto the three claims in docs/status/TODO.md ("No diarization"):
 
   --eer    verification, one clip vs one profile. Shows the enrolment-spread
            effect (calm-only ~14.8% EER vs all-emotion ~11.8%).
@@ -30,7 +30,7 @@ The three checks map onto the three claims in TODO.md ("No diarization"):
            dropped -- which should stay near 1%.
 
 Clips are silence-trimmed at SPEECH_RMS=150 first (RAVDESS is much quieter than
-a live mic; see TODO.md), which is what the segmenter would have handed the
+a live mic; see docs/status/TODO.md), which is what the segmenter would have handed the
 server. Embeddings are cached in eval/results/_cache_spk.jsonl so re-runs with
 different thresholds are instant.
 """
@@ -56,7 +56,7 @@ RESULTS = ROOT / "eval" / "results"
 CACHE = RESULTS / "_cache_spk.jsonl"
 CSV = RESULTS / "spk.csv"
 
-TRIM_RMS = 150.0   # RAVDESS-appropriate VAD level (TODO.md)
+TRIM_RMS = 150.0   # RAVDESS-appropriate VAD level (docs/status/TODO.md)
 GAP_S = 0.2        # response gap inside a glued utterance: the cross-language mode
 
 

@@ -1,43 +1,5 @@
-# emtext — product website
+# website
 
-A single-page marketing site for **emtext**, the live conversation interpreter.
-Built with **Vite** and plain ES modules — no framework. The only runtime
-dependencies are the bundled variable fonts and **three.js** (`three`), which
-renders the pendant in the hardware section and is loaded lazily from
-`lib/device3d.js` so the rest of the page never pays for it.
-
-## Develop
-
-```bash
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # → dist/
-npm run preview  # serve the production build
-```
-
-## How it's organized
-
-The page is composed from independent section modules, each owning one
-`.js` (markup + any interactivity) and one `.css` (scoped styles):
-
-```
-src/
-  main.js              assembles the sections in order + the scroll-reveal observer
-  styles/
-    tokens.css         the whole design system: color, type, spacing, motion
-    base.css           reset, fonts, shared primitives (.section .wrap .btn .tone-chip …)
-  lib/dom.js           tiny helpers (fromHTML, tone metadata)
-  lib/device3d.js      three.js render of the M5StickS3 pendant (dynamic import from pendant)
-  sections/
-    nav · hero · mismatch · pipeline · performance · pendant · privacy · footer
-```
-
-Every color, type step and spacing value comes from `styles/tokens.css`. The five
-tone colors (green positive, red negative, grey neutral, purple sarcastic, amber
-mixed) are load-bearing brand — they mean the same thing here as in the app.
-
-`DESIGN_BRIEF.md` is the contract each section was built against; keep it in sync
-if the design system changes.
-
-Every figure on the site (latency budget, model accuracy, per-stage cost) is taken
-verbatim from the project README and its measured evals — nothing is invented.
+The project site (Vite + plain ES modules + a three.js pendant render). `npm install && npm run dev`.
+Structure and conventions are in [`docs/guides/website.md`](../docs/guides/website.md); the design
+brief it was built to is [`docs/design/website-design-brief.md`](../docs/design/website-design-brief.md).

@@ -195,7 +195,7 @@ TONES = ("positive", "negative", "neutral", "sarcastic", "mixed")
 # bucket for a line that IS sarcastic. Map to the adjacent tone instead, and
 # let only genuinely unknown strings fall through to neutral. Irony is folded
 # into sarcasm on purpose (a separate tone would invalidate the eval baseline
-# and needs its own labelling effort; see TODO.md).
+# and needs its own labelling effort; see docs/status/TODO.md).
 _TONE_SYNONYMS = {
     "ironic": "sarcastic", "irony": "sarcastic", "sardonic": "sarcastic",
     "sarcasm": "sarcastic", "ambivalent": "mixed", "conflicted": "mixed",

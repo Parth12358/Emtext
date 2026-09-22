@@ -125,8 +125,8 @@ _DIMS = ("valence", "arousal", "dominance")
 # dominance, which is exactly the distinction arousal alone cannot make, and
 # sadness is low on both.
 #
-# Valence is deliberately NOT derived. TODO.md ("valence may be the wrong
-# target") and RESEARCH.md 4.5-4.6: acoustic valence is largely implicit
+# Valence is deliberately NOT derived. docs/status/TODO.md ("valence may be the wrong
+# target") and docs/design/RESEARCH.md 4.5-4.6: acoustic valence is largely implicit
 # linguistic content, so it tends to AGREE with the transcript -- precisely
 # where the words-vs-voice mismatch rule needs an independent channel. The LLM
 # reads valence from the words; the voice contributes the two axes text cannot.

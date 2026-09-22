@@ -66,7 +66,7 @@ def _env_token(name: str) -> str | None:
 # --- Server -----------------------------------------------------------------
 PORT: int = _env_int("PORT", 8000)
 # Bind address. Loopback by default: cloudflared reaches the server over
-# 127.0.0.1 (see tunnel/README.md), so binding every interface buys the tunnel
+# 127.0.0.1 (see docs/guides/tunnel.md), so binding every interface buys the tunnel
 # nothing while putting the server on whatever LAN the machine is attached to.
 # On a public network -- a cafe, a campus, a conference -- that is a second
 # entrance that bypasses Cloudflare and anything you put in front of it.
@@ -285,7 +285,7 @@ AROUSAL_HIGH: float = _env_float("AROUSAL_HIGH", 0.6)
 # backend arousal + dominance ARE the voice signal: emotion2vec has no
 # dimensional head, so ser.py derives both as the probability-weighted mean of
 # per-emotion anchors over its 7-class distribution (valence is deliberately
-# left to the LLM, which reads it from the words -- see TODO.md, "valence may
+# left to the LLM, which reads it from the words -- see docs/status/TODO.md, "valence may
 # be the wrong target"). Derived values are compressed toward the middle by the
 # softmax spread, so these thresholds are a first guess: profile them with
 # `python -m eval.ser_eval --profile-valence` (it prints all three dimensions
@@ -301,7 +301,7 @@ DOMINANCE_HIGH: float = _env_float("DOMINANCE_HIGH", 0.6)
 # produce. With it, the user's lines are transcribed (they are the context the
 # partner is replying to) but never interpreted.
 #
-# Numbers below are from TODO.md ("No diarization"), measured on RAVDESS (24
+# Numbers below are from docs/status/TODO.md ("No diarization"), measured on RAVDESS (24
 # actors, same two sentences, so any separation is speaker identity, not words).
 # CAM++ via funasr: ~20 ms per utterance on CPU, no measurable RSS increase on
 # top of SER, 192-d embeddings. Set SPEAKER_ENABLED=0 to skip loading it; the

@@ -47,7 +47,7 @@ from pathlib import Path
 MB = 1024 * 1024
 
 # Where ModelScope puts the model. `master` is a branch, not a commit -- upstream
-# publishes no immutable ref for this model (see TODO.md), so this is what it is.
+# publishes no immutable ref for this model (see docs/status/TODO.md), so this is what it is.
 SRC_DIR = (Path(os.path.expanduser("~")) / ".cache" / "modelscope" / "models"
            / "iic--emotion2vec_plus_base" / "snapshots" / "master")
 DST_DIR = Path(__file__).resolve().parent.parent / "models" / "emotion2vec_plus_base_slim"

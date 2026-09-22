@@ -133,7 +133,7 @@ try {
 
   # --- 3. tunnel -----------------------------------------------------------
   if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
-    throw 'cloudflared not on PATH -- see tunnel/README.md'
+    throw 'cloudflared not on PATH -- see docs/guides/tunnel.md'
   }
 
   $cfConfig = Join-Path $env:USERPROFILE '.cloudflared\config.yml'

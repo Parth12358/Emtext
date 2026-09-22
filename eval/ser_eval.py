@@ -492,7 +492,7 @@ def summarise(result: dict) -> None:
 
     if not with_val:
         print("\n  (valence is None on this backend by design: the LLM reads valence from")
-        print("   the words, the voice contributes arousal and dominance -- see TODO.md)")
+        print("   the words, the voice contributes arousal and dominance -- see docs/status/TODO.md)")
         return
 
     pos = [r["valence"] for r in with_val

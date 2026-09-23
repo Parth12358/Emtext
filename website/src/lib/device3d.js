@@ -1,6 +1,14 @@
-// A three.js render of the M5StickS3 pendant (the real hardware C-ontext runs on:
-// 48x24x15 mm, a 1.14" 135x240 LCD, orange body). Its screen is a live canvas
-// texture that plays the same tone-read demo the site is built around.
+// A three.js render of the emtext pendant: the M5StickS3 form factor (48x24x15
+// mm, R3 corners, a 1.14" 135x240 LCD, one accent-coloured front key) as it would ship as
+// a product rather than a dev kit -- no header, no Grove socket, no pinout
+// label; just the screen, the three keys, a USB-C for charging and the mic. Dimensions and key placements are from M5Stack's StickS3
+// drawing, https://docs.m5stack.com/en/core/StickS3. Its screen is a live canvas
+// texture that plays the firmware's GLANCE screen (firmware/emtext/src/display/
+// display.cpp, drawGlance + drawTopBar + drawIndicators) over the site's demo
+// examples: a 12 px status strip, the 16x16 Undertale heart coloured by tone,
+// a bold five-word read, and the button-press bars along the bottom edge. The
+// transcript is deliberately NOT on the glance -- the heart and the read are
+// the whole screen, exactly as on the device.
 //
 // Everything is procedural geometry — no external model file, no image assets —
 // so it stays self-contained and ships in the JS bundle. Falls back to a static
@@ -15,13 +23,38 @@ const W = 24 * MM
 const H = 48 * MM
 const D = 14 * MM
 
-const TONE_HEX = {
-  positive: '#1f8f4d',
-  negative: '#e0301e',
-  neutral: '#6f6c61',
-  sarcastic: '#7a45c9',
-  mixed: '#b26a00',
+// Undertale soul colours, verbatim from display.cpp toneBar() (fw 0.2.0). One
+// shape for every emotion; the emotion is the colour. Neutral is a dim gray
+// heart. The key is the server's headline `emotion.label`, the voice model's
+// seven labels; the older five tone names still resolve for old servers.
+const TONE_RGB = {
+  angry: 'rgb(255,0,40)',       // Determination
+  surprised: 'rgb(255,140,0)',  // Bravery
+  happy: 'rgb(255,216,0)',      // Justice
+  disgusted: 'rgb(0,192,0)',    // Kindness
+  fearful: 'rgb(66,255,255)',   // Patience
+  sad: 'rgb(0,120,255)',        // Integrity
+  neutral: 'rgb(120,120,120)',
+  positive: 'rgb(255,0,40)',
+  negative: 'rgb(0,120,255)',
+  sarcastic: 'rgb(190,30,255)',
+  mixed: 'rgb(255,216,0)',
 }
+// UI-chrome colours from display.cpp (cPos / cMis / cDim / cFaint, top-bar bg,
+// resting indicator navy).
+const C = {
+  pos: 'rgb(90,170,90)',
+  mis: 'rgb(220,160,40)',
+  dim: 'rgb(150,150,150)',
+  faint: 'rgb(90,90,90)',
+  bar: 'rgb(12,22,28)',
+  rest: 'rgb(2,8,46)',
+}
+// display.cpp HEART16: 16 rows, MSB = column 0.
+const HEART16 = [
+  0x300c, 0x7c3e, 0xfe7f, 0xfe7f, 0xffff, 0xffff, 0xffff, 0xffff,
+  0xffff, 0xffff, 0x3ffc, 0x3ffc, 0x0ff0, 0x0ff0, 0x03c0, 0x03c0,
+]
 
 const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3)
 
@@ -50,52 +83,58 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
   const { renderer, scene, camera, group, texture, resize, setVisible } = webgl
 
   // --- demo state machine (drives the screen canvas) -------------------------
-  const CHAR_S = 0.026 // seconds per character while "typing"
-  const PHASE = { RESET: 0, TYPING: 1, THINKING: 2, READING: 3 }
+  // Mirrors what the device does between reads: the glance keeps the LAST heart
+  // up while listening, shows the amber "..." while the server thinks, then
+  // repaints with the new tone and read. There is no typing phase because the
+  // transcript never appears on the glance.
+  const PHASE = { LISTENING: 0, THINKING: 1, READING: 2 }
   let idx = 0
-  let phase = PHASE.RESET
+  let phase = PHASE.LISTENING
   let t = 0 // seconds elapsed in current phase
-  let typed = 0
   let dirty = true
+  let blink = false // the listening dot on the status strip
 
   function current() {
     return examples[idx % examples.length]
   }
+  function previous() {
+    return examples[(idx + examples.length - 1) % examples.length]
+  }
+
+  // Tap / click: skip straight to the next line (the server has "heard" you).
+  function next() {
+    if (phase === PHASE.READING) {
+      phase = PHASE.LISTENING
+      idx++
+    } else {
+      phase = PHASE.THINKING
+    }
+    t = 0
+    dirty = true
+  }
 
   function step(dt) {
     t += dt
-    const ex = current()
-    if (phase === PHASE.RESET) {
-      if (t > (reduceMotion ? 0.25 : 0.5)) {
-        phase = PHASE.TYPING
-        t = 0
-        typed = reduceMotion ? ex.text.length : 0
-        dirty = true
-      }
-    } else if (phase === PHASE.TYPING) {
-      if (reduceMotion) {
+    const b = Math.floor(t * 3) % 2 === 0
+    if (b !== blink && phase !== PHASE.READING) {
+      blink = b
+      dirty = true
+    }
+    if (phase === PHASE.LISTENING) {
+      if (t > (reduceMotion ? 0.6 : 1.1)) {
         phase = PHASE.THINKING
         t = 0
-      } else {
-        const want = Math.min(ex.text.length, Math.floor(t / CHAR_S))
-        if (want !== typed) {
-          typed = want
-          dirty = true
-        }
-        if (typed >= ex.text.length) {
-          phase = PHASE.THINKING
-          t = 0
-        }
+        dirty = true
       }
     } else if (phase === PHASE.THINKING) {
-      if (t > (reduceMotion ? 0.5 : 0.75)) {
+      if (t > (reduceMotion ? 0.5 : 0.8)) {
         phase = PHASE.READING
         t = 0
         dirty = true
       }
     } else if (phase === PHASE.READING) {
-      if (t > (reduceMotion ? 3.8 : 3.3)) {
-        phase = PHASE.RESET
+      if (t > (reduceMotion ? 4.2 : 3.6)) {
+        phase = PHASE.LISTENING
         t = 0
         idx++
         dirty = true
@@ -105,15 +144,13 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
 
   function render() {
     if (dirty) {
+      // Before a read lands the glance still shows the previous heart, as the
+      // real device does; the very first cycle starts from a neutral heart.
+      const shown = phase === PHASE.READING ? current() : (idx === 0 ? null : previous())
       drawScreen(ctx, canvas, {
-        ex: current(),
-        typed,
-        stateLabel:
-          phase === PHASE.RESET ? 'listening'
-          : phase === PHASE.TYPING ? 'heard'
-          : phase === PHASE.THINKING ? 'thinking'
-          : 'read',
-        showRead: phase === PHASE.READING,
+        ex: shown,
+        listening: phase === PHASE.LISTENING && blink,
+        thinking: phase === PHASE.THINKING,
       })
       texture.needsUpdate = true
       dirty = false
@@ -125,6 +162,7 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
   let running = true
   let last = 0
   const restTilt = -0.14
+  const drag = { active: false, x: 0, y: 0, vx: 0, vy: 0, lx: 0, ly: 0, moved: 0 }
   const INTRO = 1.5 // seconds — the "float up and settle" intro
   let introT = reduceMotion ? 1 : 0
 
@@ -142,8 +180,19 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
     const swayY = Math.sin(s * 0.32) * 0.16
     const floatY = Math.sin(s * 0.8) * 0.04
 
+    // The drag offset decays back to the resting sway once released, so the
+    // device always drifts home and never gets stuck showing its back.
+    if (!drag.active) {
+      drag.vx *= 0.92
+      drag.vy *= 0.92
+      drag.x += drag.vx
+      drag.y += drag.vy
+      drag.x *= 0.96
+      drag.y *= 0.96
+    }
+
     if (reduceMotion) {
-      group.rotation.set(restTilt, -0.3, 0)
+      group.rotation.set(restTilt + drag.y, -0.3 + drag.x, 0)
       group.scale.setScalar(1)
       group.position.y = 0
       renderer.domElement.style.opacity = '1'
@@ -153,8 +202,8 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
       // Blend from an intro pose (small, low, turned away, faded) into the
       // resting gentle sway — Apple-style product reveal.
       group.rotation.set(
-        -0.05 * (1 - e) + (restTilt + swayX) * e,
-        -1.15 * (1 - e) + (-0.3 + swayY) * e,
+        -0.05 * (1 - e) + (restTilt + swayX) * e + drag.y,
+        -1.15 * (1 - e) + (-0.3 + swayY) * e + drag.x,
         0,
       )
       group.position.y = -0.95 * (1 - e) + floatY * e
@@ -164,6 +213,49 @@ export function mountDevice(container, { examples, reduceMotion = false }) {
     renderer.render(scene, camera)
   }
   raf = requestAnimationFrame(loop)
+
+  // --- pointer: drag to turn, tap for the next line ---------------------------
+  const el = renderer.domElement
+  el.style.cursor = 'grab'
+  el.style.touchAction = 'pan-y'
+  el.addEventListener('pointerdown', (e) => {
+    drag.active = true
+    drag.moved = 0
+    drag.lx = e.clientX
+    drag.ly = e.clientY
+    drag.vx = drag.vy = 0
+    el.setPointerCapture(e.pointerId)
+    el.style.cursor = 'grabbing'
+  })
+  el.addEventListener('pointermove', (e) => {
+    if (!drag.active) return
+    const dx = e.clientX - drag.lx
+    const dy = e.clientY - drag.ly
+    drag.lx = e.clientX
+    drag.ly = e.clientY
+    drag.moved += Math.abs(dx) + Math.abs(dy)
+    drag.vx = dx * 0.006
+    drag.vy = dy * 0.004
+    drag.x = Math.max(-1.3, Math.min(1.3, drag.x + drag.vx))
+    drag.y = Math.max(-0.5, Math.min(0.5, drag.y + drag.vy))
+  })
+  const release = (e) => {
+    if (!drag.active) return
+    drag.active = false
+    el.style.cursor = 'grab'
+    if (drag.moved < 6) next() // a tap, not a drag
+  }
+  el.addEventListener('pointerup', release)
+  el.addEventListener('pointercancel', release)
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      next()
+    }
+  })
+  el.tabIndex = 0
+  el.setAttribute('role', 'button')
+  el.setAttribute('aria-label', 'The pendant. Drag to turn it; press to hear the next line.')
 
   // Pause when offscreen or tab hidden — no point spinning a hidden canvas.
   const io = new IntersectionObserver(
@@ -224,38 +316,50 @@ function buildScene(container, canvas) {
   group.rotation.set(-0.14, -0.32, 0)
   scene.add(group)
 
-  // Body — orange rounded stick.
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color('#f24d0d'),
-    roughness: 0.42,
-    metalness: 0.05,
+  // --- the body ---------------------------------------------------------------
+  // The product version of the StickS3 shell. Placements (mm from the top of
+  // the device) come from M5Stack's outline drawing; everything a wearer never
+  // touches -- the HAT header, Grove socket, screws, pinout label -- is gone,
+  // leaving a plain shell.
+  //   shell   48 x 24 x 15, R3 corners, warm ivory
+  //   screen  window 16 x 26 at 5..31; LCD active ~15 x 25
+  //   KEY1    the accent pill on the front, 12 x 2.5 at 37..39.5 (hold = record)
+  //   KEY2    square key on the LEFT side at 18..24
+  //   power   small key on the RIGHT side at 36..40
+  //   USB-C   bottom end, centred (charging only)
+  //   mic     a single hole on the front, bottom-left
+  const mm = (n) => n * MM
+  const fromTop = (n) => H / 2 - mm(n)
+
+  // Warm ivory shell (the page's own paper tone, so the device sits in the
+  // site rather than on it), a black screen plate, and the front key in the
+  // site accent so the one control the wearer uses is the one thing in colour.
+  const shellMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#ece6da'),
+    roughness: 0.5,
+    metalness: 0.0,
+    clearcoat: 0.35,
+    clearcoatRoughness: 0.35,
   })
-  const body = new THREE.Mesh(new RoundedBoxGeometry(W, H, D, 6, 0.3), bodyMat)
+  const darkMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#1a1b1e'), roughness: 0.8 })
+  const keyMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#e3ddd0'), roughness: 0.5, clearcoat: 0.3, clearcoatRoughness: 0.35,
+  })
+
+  const body = new THREE.Mesh(new RoundedBoxGeometry(W, H, D, 18, mm(3)), shellMat)
   group.add(body)
 
-  // Black front faceplate, slightly proud of the orange body.
-  const faceMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color('#141519'),
-    roughness: 0.5,
-    metalness: 0.1,
-  })
-  const face = new THREE.Mesh(new RoundedBoxGeometry(W * 0.92, H * 0.95, 0.06, 5, 0.16), faceMat)
-  face.position.set(0, 0, D / 2 - 0.0)
-  group.add(face)
+  // Screen window: a recess with a black floor, the LCD (canvas texture), and
+  // a faint cover-glass sheen.
+  const winW = mm(16)
+  const winH = mm(26)
+  const winY = fromTop(18)
+  const window_ = new THREE.Mesh(new RoundedBoxGeometry(winW, winH, 0.06, 6, 0.06), darkMat)
+  window_.position.set(0, winY, D / 2 - 0.012)
+  group.add(window_)
 
-  // Screen bezel (dark) + the emissive LCD showing the canvas texture.
-  // Real device: a 1.14" 135x240 panel (~14x25mm) set in the UPPER portion of
-  // the 24x48mm face, with a wide black bezel around it.
-  const screenW = W * 0.58
-  const screenH = screenW * (240 / 135)
-  const screenY = H * 0.16
-  const bezel = new THREE.Mesh(
-    new THREE.PlaneGeometry(screenW + 0.13, screenH + 0.13),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color('#050609') }),
-  )
-  bezel.position.set(0, screenY, D / 2 + 0.031)
-  group.add(bezel)
-
+  const screenW = mm(14.9)
+  const screenH = mm(24.9)
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = renderer.capabilities.getMaxAnisotropy()
@@ -263,63 +367,74 @@ function buildScene(container, canvas) {
     new THREE.PlaneGeometry(screenW, screenH),
     new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }),
   )
-  screen.position.set(0, screenY, D / 2 + 0.034)
+  screen.position.set(0, winY, D / 2 + 0.022)
   group.add(screen)
-
-  // Front button — a small horizontal pill below the screen (BtnA), not a
-  // round home button. Matches the StickS3 front face.
-  const btnMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#24262c'), roughness: 0.62 })
-  const btn = new THREE.Mesh(new RoundedBoxGeometry(W * 0.34, 0.2, 0.08, 4, 0.09), btnMat)
-  btn.position.set(0, -H * 0.24, D / 2 + 0.028)
-  group.add(btn)
-
-  // Tiny status LED just under the screen.
-  const led = new THREE.Mesh(
-    new THREE.CircleGeometry(0.025, 20),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color('#8fe36b') }),
+  const sheen = new THREE.Mesh(
+    new THREE.PlaneGeometry(winW, winH),
+    new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color('#ffffff'), transparent: true, opacity: 0.06,
+      roughness: 0.05, metalness: 0.4, clearcoat: 1, depthWrite: false,
+    }),
   )
-  led.position.set(W * 0.3, -H * 0.24, D / 2 + 0.033)
-  group.add(led)
+  sheen.position.set(0, winY, D / 2 + 0.024)
+  group.add(sheen)
 
-  // Side power button (red) on the left edge, upper-middle.
-  const sideBtn = new THREE.Mesh(
-    new THREE.BoxGeometry(0.05, 0.3, 0.3),
-    new THREE.MeshStandardMaterial({ color: new THREE.Color('#c62b1c'), roughness: 0.5 }),
+  // KEY1: the accent-coloured pill below the screen. On the pendant this is the one key
+  // the wearer uses: hold it to save the moment as a clip.
+  const accent = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#ff4d00'), roughness: 0.32, clearcoat: 0.9, clearcoatRoughness: 0.15,
+  })
+  const key1 = new THREE.Mesh(new RoundedBoxGeometry(mm(12), mm(2.6), 0.07, 8, mm(1.25)), accent)
+  key1.position.set(0, fromTop(38.3), D / 2 + 0.03)
+  group.add(key1)
+  const key1Well = new THREE.Mesh(new RoundedBoxGeometry(mm(13), mm(3.6), 0.02, 8, mm(1.75)), new THREE.MeshStandardMaterial({ color: new THREE.Color("#d6cfc1"), roughness: 0.7 }))  // a soft shadow ring, not a black cut-out
+  key1Well.position.set(0, fromTop(38.3), D / 2 + 0.006)
+  group.add(key1Well)
+
+  // Side keys: KEY2 on the left at mid-height, power on the right near the
+  // bottom, both shell-coloured and only just proud.
+  const key2 = new THREE.Mesh(new RoundedBoxGeometry(0.06, mm(6), mm(6), 6, 0.05), keyMat)
+  key2.position.set(-W / 2 - 0.012, fromTop(21), 0.06)
+  group.add(key2)
+  const pwr = new THREE.Mesh(new RoundedBoxGeometry(0.06, mm(4), mm(4.5), 6, 0.05), keyMat)
+  pwr.position.set(W / 2 + 0.012, fromTop(38), 0.06)
+  group.add(pwr)
+
+  // Mic hole, front bottom-left.
+  const mic = new THREE.Mesh(new THREE.CircleGeometry(mm(0.6), 16), new THREE.MeshBasicMaterial({ color: 0x000000 }))
+  mic.position.set(-mm(8), fromTop(44), D / 2 + 0.003)
+  group.add(mic)
+
+  // USB-C, centred on the bottom end: the only port a product needs.
+  const usbRim = new THREE.Mesh(
+    new RoundedBoxGeometry(mm(8.9), 0.04, mm(3.2), 6, mm(1.5)),
+    new THREE.MeshStandardMaterial({ color: new THREE.Color('#9a9da6'), roughness: 0.35, metalness: 0.9 }),
   )
-  sideBtn.position.set(-W / 2 - 0.015, H * 0.1, 0)
-  group.add(sideBtn)
+  usbRim.position.set(0, -H / 2 - 0.006, 0)
+  group.add(usbRim)
+  const usbCavity = new THREE.Mesh(new RoundedBoxGeometry(mm(8.2), 0.06, mm(2.5), 6, mm(1.2)), darkMat)
+  usbCavity.position.set(0, -H / 2 - 0.004, 0)
+  group.add(usbCavity)
 
-  // USB-C port on the top edge.
-  const portMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#0a0b0e'), roughness: 0.6, metalness: 0.4 })
-  const usbc = new THREE.Mesh(new RoundedBoxGeometry(W * 0.34, 0.16, 0.3, 3, 0.07), portMat)
-  usbc.position.set(0, H / 2 - 0.01, 0)
-  group.add(usbc)
 
-  // Bottom pin-header block (the HAT connector).
-  const header = new THREE.Mesh(
-    new THREE.BoxGeometry(W * 0.62, 0.16, 0.34),
-    new THREE.MeshStandardMaterial({ color: new THREE.Color('#101114'), roughness: 0.85 }),
-  )
-  header.position.set(0, -H / 2 + 0.03, 0)
-  group.add(header)
-
-  // Dimension callouts — a scale reference, so you can tell it's a 48x24mm
-  // pendant, not a phone. Technical-drawing style: thin leader lines with end
-  // ticks and camera-facing labels. Added to the group so they frame the
-  // device as it turns.
   group.add(buildDimensions())
 
-  // Lighting — warm key, cool fill, rim to catch the rounded edges.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.72))
-  const key = new THREE.DirectionalLight(0xfff3e6, 1.5)
-  key.position.set(-3, 5, 6)
+  // Lighting — a warm sky/ground pair for soft plastic shading, a warm key
+  // from upper-left so the clearcoat picks up one clean highlight, a cool
+  // fill from the right, and a rim from behind to separate the shell from
+  // the page.
+  scene.add(new THREE.HemisphereLight(0xfff6ea, 0xd9d3c6, 1.1))
+  // A warm key from upper-left, a cool fill from the right and a rim from
+  // behind, so the pale shell keeps its edges against the pale page.
+  const key = new THREE.DirectionalLight(0xfff1e0, 1.7)
+  key.position.set(-3.5, 5, 6)
   scene.add(key)
-  const fill = new THREE.DirectionalLight(0xdfe6ff, 0.5)
-  fill.position.set(4, -1, 4)
+  const fill = new THREE.DirectionalLight(0xdfe8ff, 0.7)
+  fill.position.set(4, -2, 4)
   scene.add(fill)
-  const rim = new THREE.DirectionalLight(0xffffff, 0.8)
-  rim.position.set(2, 3, -5)
-  scene.add(rim)
+  const back = new THREE.DirectionalLight(0xffffff, 1.1)
+  back.position.set(2, 3, -5)
+  scene.add(back)
 
   function resize() {
     const cw = container.clientWidth || w
@@ -399,147 +514,122 @@ function makeLabel(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Screen drawing (the live tone-read demo, rendered to the canvas texture)
+// Screen drawing: the firmware glance, in portrait, at 135x240 design units.
+// Positions are the ones in display.cpp so the render matches the device.
 // ---------------------------------------------------------------------------
-function drawScreen(ctx, canvas, { ex, typed, stateLabel, showRead }) {
+export function drawScreen(ctx, canvas, { ex, listening, thinking }) {
   const W = canvas.width
   const H = canvas.height
-  const S = W / 135 // scale factor from design units
+  const S = W / 135 // design px -> canvas px
+  const px = (n) => Math.round(n * S)
+  const STRIP = 12 // top bar and indicator bar thickness (display.cpp STRIP)
+  const mono = '"JetBrains Mono Variable", "JetBrains Mono", monospace'
+  const sans = '"Inter Variable", "Inter", "Helvetica Neue", Arial, sans-serif'
 
-  // background
-  const g = ctx.createLinearGradient(0, 0, 0, H)
-  g.addColorStop(0, '#0b0e14')
-  g.addColorStop(1, '#05060a')
-  ctx.fillStyle = g
+  ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, W, H)
 
-  const pad = 9 * S
-  const mono = '"JetBrains Mono Variable", "JetBrains Mono", monospace'
-  const serif = '"Fraunces Variable", "Fraunces", Georgia, serif'
-
-  // header: mic → server   ·   state
-  ctx.textBaseline = 'alphabetic'
-  ctx.font = `500 ${6.5 * S}px ${mono}`
-  ctx.fillStyle = '#7b8394'
-  ctx.textAlign = 'left'
-  ctx.fillText('mic → server', pad, pad + 7 * S)
-  ctx.textAlign = 'right'
-  ctx.fillStyle = showRead ? '#ff6a2b' : '#7b8394'
-  ctx.fillText(stateLabel, W - pad, pad + 7 * S)
-
-  // divider
-  ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-  ctx.lineWidth = Math.max(1, S)
+  // --- top bar (drawTopBar, portrait) ---------------------------------------
+  ctx.fillStyle = C.bar
+  ctx.fillRect(0, 0, W, px(STRIP))
+  const cy = px(STRIP / 2)
+  // connectivity glyph: filled disc = ready (colour is only the second cue)
+  ctx.fillStyle = C.pos
   ctx.beginPath()
-  ctx.moveTo(pad, pad + 13 * S)
-  ctx.lineTo(W - pad, pad + 13 * S)
-  ctx.stroke()
-
-  // transcript (mono, wrapped), with a typing caret
-  const shown = ex.text.slice(0, typed)
-  ctx.font = `500 ${8.6 * S}px ${mono}`
-  ctx.fillStyle = '#eef1f6'
+  ctx.arc(px(6), cy, px(3), 0, Math.PI * 2)
+  ctx.fill()
+  // live ping, left of centre; battery %, right. Font0 is a 6x8 pixel font.
+  ctx.font = `500 ${px(7.5)}px ${mono}`
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = C.dim
   ctx.textAlign = 'left'
-  const lh = 12 * S
-  let y = pad + 27 * S
-  const maxW = W - pad * 2
-  const caretY = drawWrapped(ctx, shown, pad, y, maxW, lh)
-  if (typed < ex.text.length) {
-    // blinking-ish caret block at the end
-    ctx.fillStyle = '#ff6a2b'
-    ctx.fillRect(caretY.x + 1 * S, caretY.y - 8 * S, 4 * S, 10 * S)
+  ctx.fillText('41ms', px(14), cy)
+  ctx.textAlign = 'right'
+  ctx.fillText('87%', W - px(2), cy)
+  // dev activity cluster, centre: the listening dot while the mic hears voice
+  if (listening) {
+    ctx.fillStyle = '#fff'
+    ctx.beginPath()
+    ctx.arc(px(135 / 2 - 14), cy, px(2), 0, Math.PI * 2)
+    ctx.fill()
   }
 
-  if (!showRead) return
+  // --- the heart (drawHeart at W/2, 69; 16 cells of 6 px) --------------------
+  const tone = ex ? (ex.emotion || ex.tone) : 'neutral'
+  const col = TONE_RGB[tone] || TONE_RGB.neutral
+  const cell = 6
+  const ox = 135 / 2 - 8 * cell
+  const oy = 69 - 8 * cell
+  ctx.fillStyle = col
+  for (let r = 0; r < 16; r++) {
+    const bits = HEART16[r]
+    for (let c = 0; c < 16; c++) {
+      if (bits & (0x8000 >> c)) ctx.fillRect(px(ox + c * cell), px(oy + r * cell), px(cell), px(cell))
+    }
+  }
 
-  // read block: tone rule + chip + voice + serif read text
-  const tone = ex.tone
-  const hex = TONE_HEX[tone] || '#9aa'
-  const readTop = H * 0.52
-  ctx.strokeStyle = hex
-  ctx.lineWidth = 2 * S
-  ctx.beginPath()
-  ctx.moveTo(pad, readTop)
-  ctx.lineTo(pad, H - pad)
-  ctx.stroke()
+  // --- the read (FreeSansBold9pt, white; faint when the server was not sure) -
+  if (ex) {
+    const text = capWords(ex.glance || ex.read, 5)
+    ctx.font = `700 ${px(12.5)}px ${sans}`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = ex.conf === 'low' ? C.faint : '#fff'
+    const lh = px(17)
+    const lines = wrapLines(ctx, text, W - px(6), 5)
+    const y0 = px(172) - (lines.length * lh) / 2
+    lines.forEach((l, k) => ctx.fillText(l, W / 2, y0 + k * lh))
+  }
 
-  const cx = pad + 6 * S
-  // tone chip
-  ctx.font = `600 ${6.5 * S}px ${mono}`
-  const chipText = tone
-  const chipW = ctx.measureText(chipText).width + 14 * S
-  const chipH = 12 * S
-  const chipY = readTop + 2 * S
-  roundRect(ctx, cx, chipY, chipW, chipH, 6 * S)
-  ctx.fillStyle = hexA(hex, 0.18)
-  ctx.fill()
-  ctx.strokeStyle = hexA(hex, 0.55)
-  ctx.lineWidth = Math.max(1, S)
-  ctx.stroke()
-  ctx.fillStyle = hex
-  ctx.textBaseline = 'middle'
-  ctx.fillText(chipText, cx + 7 * S, chipY + chipH / 2 + 0.5 * S)
-  ctx.textBaseline = 'alphabetic'
+  // --- "..." while a read is pending (amber, clear of the top bar) ----------
+  if (thinking) {
+    ctx.font = `600 ${px(9)}px ${mono}`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = C.mis
+    ctx.fillText('...', px(14), px(13))
+  }
 
-  // voice line
-  ctx.font = `500 ${6 * S}px ${mono}`
-  ctx.fillStyle = '#8b93a1'
-  ctx.fillText(`voice: ${ex.voice}`, cx, chipY + chipH + 11 * S)
-
-  // read text (serif)
-  ctx.font = `450 ${9.6 * S}px ${serif}`
-  ctx.fillStyle = '#f3f5f9'
-  drawWrapped(ctx, ex.read, cx, chipY + chipH + 26 * S, maxW - 6 * S, 11.5 * S)
+  // --- button-press indicators (drawIndicators, portrait "U") ----------------
+  ctx.fillStyle = C.rest
+  ctx.fillRect(0, H - px(35), px(STRIP), px(35))                          // PWR, left
+  ctx.fillRect(W - px(STRIP), H - px(35), px(STRIP), px(35))              // B, right
+  ctx.fillRect(px(STRIP), H - px(STRIP), W - 2 * px(STRIP), px(STRIP))   // A, bottom
 }
 
-function drawWrapped(ctx, text, x, y, maxW, lh) {
+// display.cpp capWords: keep the first `max` words, append "..." if more.
+function capWords(s, max) {
+  const w = s.trim().split(/\s+/)
+  return w.length <= max ? w.join(' ') : w.slice(0, max).join(' ') + '...'
+}
+
+// Greedy word wrap into at most `maxLines` lines (display.cpp wrapN).
+function wrapLines(ctx, text, maxW, maxLines) {
   const words = text.split(' ')
+  const lines = []
   let line = ''
-  let cx = x
-  let cy = y
-  for (let i = 0; i < words.length; i++) {
-    const test = line ? line + ' ' + words[i] : words[i]
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w
     if (ctx.measureText(test).width > maxW && line) {
-      ctx.fillText(line, x, cy)
-      line = words[i]
-      cy += lh
+      lines.push(line)
+      line = w
     } else {
       line = test
     }
+    if (lines.length === maxLines) break
   }
-  if (line) {
-    ctx.fillText(line, x, cy)
-    cx = x + ctx.measureText(line).width
-  }
-  return { x: cx, y: cy }
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
-}
-
-function hexA(hex, a) {
-  const n = parseInt(hex.slice(1), 16)
-  const r = (n >> 16) & 255
-  const g = (n >> 8) & 255
-  const b = n & 255
-  return `rgba(${r},${g},${b},${a})`
+  if (line && lines.length < maxLines) lines.push(line)
+  return lines
 }
 
 // ---------------------------------------------------------------------------
 // Fallback (no WebGL): a static screen card so the hero still says something.
 // ---------------------------------------------------------------------------
 function staticFallback(container, ex, ctx, canvas, draw) {
-  draw(ctx, canvas, { ex, typed: ex.text.length, stateLabel: 'read', showRead: true })
+  draw(ctx, canvas, { ex, listening: false, thinking: false })
   const img = document.createElement('img')
   img.src = canvas.toDataURL()
-  img.alt = 'C-ontext pendant screen showing a live tone read'
+  img.alt = 'emtext pendant glance: a pixel heart coloured by tone above a short read'
   img.style.cssText = 'width:min(60%,240px);border-radius:14px;box-shadow:var(--shadow-2);display:block;margin:auto;'
   container.appendChild(img)
   return { dispose() { img.remove() } }

@@ -396,3 +396,23 @@
 @media (prefers-reduced-motion: reduce) {
   .pendant-live-dot { animation: none; }
 }
+
+/* built = code-complete, hardware validation pending: filled like done, tinted amber */
+.pendant-stage.is-built .pendant-stage-mark {
+  background: color-mix(in oklab, var(--mixed) 22%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--mixed) 60%, var(--edge));
+  color: var(--text);
+}
+.pendant-stage.is-built .pendant-stage-name { color: var(--text); }
+.pendant-stage.is-built .pendant-stage-state { color: color-mix(in oklab, var(--mixed) 80%, var(--text-dim)); }
+/* dropped = removed from scope on purpose: struck through, not merely unfinished */
+.pendant-stage.is-dropped .pendant-stage-name { text-decoration: line-through; color: var(--faint); }
+.pendant-stage.is-dropped .pendant-stage-state { color: var(--faint); }
+.pendant-link { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-dim); }
+.pendant-link:hover { color: var(--accent-hi); border-bottom-color: var(--accent); }
+.pendant-since {
+  margin-top: var(--sp-4);
+  font-size: var(--step--1);
+  color: var(--text-dim);
+  line-height: 1.55;
+}

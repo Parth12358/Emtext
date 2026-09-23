@@ -281,3 +281,22 @@
   .mismatch-demo::before, .mismatch-emotion, .mismatch-arrow,
   .mismatch-meter-val, .mismatch-read { transition: none; }
 }
+
+/* how sure the server was, shown the way the app shows it: a small chip after the tone */
+.mismatch-conf {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-dim);
+  padding: .1rem .5rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-pill);
+}
+.mismatch-conf[data-level="high"] { color: color-mix(in oklab, var(--positive) 80%, var(--text-dim)); border-color: color-mix(in oklab, var(--positive) 40%, var(--edge)); }
+.mismatch-conf[data-level="medium"] { color: color-mix(in oklab, var(--mixed) 80%, var(--text-dim)); border-color: color-mix(in oklab, var(--mixed) 40%, var(--edge)); }
+.mismatch-conf[data-level="low"] { color: var(--faint); border-style: dashed; }
+.mismatch-backend {
+  margin-top: .9rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+  line-height: 1.5;
+}

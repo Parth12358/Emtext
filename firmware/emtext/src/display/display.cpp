@@ -301,10 +301,10 @@ namespace {
       d.setTextColor((i <= stage) ? TFT_WHITE : cFaint(), TFT_BLACK);
       d.drawString(rows[i], gx + 14, gcy);
     }
-    if (failed) {
-      d.setTextDatum(bottom_center); d.setTextColor(cMis(), TFT_BLACK);
-      d.drawString("retrying...", W / 2, d.height() - 6);
-    }
+    // Always advertise the escape hatch: a Wi-Fi mis-config would otherwise strand the
+    // device on this screen. Holding B during boot opens the setup portal (emtext.ino).
+    d.setTextDatum(bottom_center); d.setTextColor(cFaint(), TFT_BLACK);
+    d.drawString("hold B: Wi-Fi setup", W / 2, d.height() - 6);
   }
 
   // Pre-sleep grace: dim full-screen crescent (a moon = sleeping) + a big countdown. The

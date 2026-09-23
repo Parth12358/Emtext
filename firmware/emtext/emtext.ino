@@ -12,14 +12,25 @@
 #include "src/portal/portal.h"
 
 // ---- semantic button callbacks (wiring only) ----
-// Setup AP toggle (pressed from the Status screen).
+// Setup AP portal. `net` owns the AP radio; `portal` serves the page; `display` shows the
+// credentials panel (Status screen, nav locked). Reachable from the Status row AND from boot
+// (auto on Wi-Fi failure, or a BtnB hold) -- see setup().
 static bool g_ap = false;
+static void enablePortal() {
+  g_ap = true;
+  net::setPortal(true);
+  portal::setActive(true);
+  display::setPortal(true, config::get().apSsid, config::get().apPass, "192.168.4.1");
+  display::setState(display::State::Status);   // show the credentials panel (nav locks while up)
+  LOG_INFO("setup AP enabled");
+}
 static void onToggleAp() {
-  g_ap = !g_ap;
-  net::setPortal(g_ap);
-  portal::setActive(g_ap);
-  display::setPortal(g_ap, config::get().apSsid, config::get().apPass, "192.168.4.1");
-  LOG_INFO("setup AP %s", g_ap ? "enabled" : "disabled");
+  if (!g_ap) { enablePortal(); return; }
+  g_ap = false;
+  net::setPortal(false);
+  portal::setActive(false);
+  display::setPortal(false, config::get().apSsid, config::get().apPass, "192.168.4.1");
+  LOG_INFO("setup AP disabled");
 }
 
 static void onWake() {
@@ -203,9 +214,17 @@ void setup() {
   display::setBoot(0);                 // network (in progress)
   net::begin();
   net::onFrame(onNetFrame);
+  portal::begin();                     // register early so a boot-time portal can serve
+
+  // Boot-stage wait. Stays responsive (M5.update every pass) so a BtnB HOLD can open the
+  // setup portal even before we're connected -- otherwise a mis-configured device would sit
+  // on a stuck "network" screen with dead buttons. If Wi-Fi never comes up in the window, the
+  // portal opens automatically (below). The on-screen "hold B: Wi-Fi setup" hint advertises it.
   uint32_t bootStart = millis();
   int lastStage = -1; bool lastFail = false;
+  bool bootPortal = false;
   while (millis() - bootStart < 20000) {
+    M5.update();                       // keep buttons live during boot
     net::loop();                       // drain frames so `ready` is seen here
     net::State s = net::state();
     int stage; bool fail = false;
@@ -223,8 +242,21 @@ void setup() {
       display::setBoot(stage, fail); lastStage = stage; lastFail = fail;
     }
     if (s == net::State::Ready) break;
-    if (s == net::State::Halted) { M5.delay(1500); break; }  // show the failure, then carry on
+    if (M5.BtnB.wasHold()) {           // hold B during boot -> open the setup portal now
+      LOG_INFO("boot: BtnB hold -> setup portal");
+      enablePortal(); bootPortal = true; break;
+    }
+    if (s == net::State::Halted) { M5.delay(1500); break; }  // auth rejected -> portal below
     M5.delay(50);
+  }
+  // Auto-open the portal if Wi-Fi never came up (or auth was rejected) -- a wrong/changed
+  // network would otherwise strand the device. (Wi-Fi up but server-only outage does NOT
+  // open it: that keeps retrying in the background, and Settings->wifi is still reachable.)
+  if (!bootPortal) {
+    net::State s = net::state();
+    bool wifiUp = (s == net::State::Connected || s == net::State::SocketConnecting
+                || s == net::State::Ready || s == net::State::Degraded);
+    if (!wifiUp) { LOG_WARN("boot: no Wi-Fi in window -> setup portal"); enablePortal(); bootPortal = true; }
   }
 
   // Stage 5.2: gated mic chunks -> network (cross-core handoff). Wired after boot so no
@@ -236,13 +268,12 @@ void setup() {
   // Stage 8: low-power config (CPU clock + Wi-Fi modem sleep) + start the idle timer.
   power::begin();
 
-  // Stage 4P: setup AP portal (toggled from the Status screen; serves the config page).
-  portal::begin();
-
   // Leave the boot screen: dev keeps the screen on (never auto-dims); otherwise go Dark
-  // and let real reads / a lift wake the glance.
+  // and let real reads / a lift wake the glance. But if a boot portal came up, stay on its
+  // credentials panel (Status) instead of blanking it.
   display::setConnection(net::state() == net::State::Ready ? "ready" : "searching");
-  display::setState(config::get().devMode ? display::State::Glance : display::State::Dark);
+  if (!bootPortal)
+    display::setState(config::get().devMode ? display::State::Glance : display::State::Dark);
 }
 
 void loop() {

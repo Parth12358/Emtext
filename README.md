@@ -306,11 +306,22 @@ to load, or when that utterance couldn't be scored):
 
 ```jsonc
 {"type":"read","id":1,"tone":"sarcastic","read":"one line",
- "voice":{"emotion":"angry","valence":0.21,"arousal":0.65}}
+ "voice":{"emotion":"angry","confidence":0.77,"valence":0.21,"arousal":0.65,"dominance":0.7},
+ "speaker":{"label":"other","score":0.0},
+ "confidence":{"score":0.47,"level":"medium","reasons":["too short to read the voice"]}}
 ```
 
 `valence` runs 0 (negative) to 1 (positive); `arousal` runs 0 (calm) to 1
-(intense). Clients must treat `voice` — and each field inside it — as optional:
+(intense); `voice.confidence` is the emotion model's own probability for its
+label. `confidence` is **how sure the server is of the whole read**
+(`server/confidence.py`): a 0-1 score, a `level` clients render as weight (`high`
+as normal, `medium` de-emphasised, `low` suppressed behind a "not sure" marker in
+the browser and drawn faint on the pendant), and plain-language `reasons` for
+anything below high. The score starts from the interpreter's own token
+probability for the tone it chose and is knocked down for a short utterance, an
+unclear voice, a doubtful transcript, two voices in one line, or a `mixed` tone;
+`(interpreter offline)` is always score 0. Clients must treat `voice`, `speaker`
+and `confidence` — and each field inside them — as optional:
 existing clients and firmware that ignore the key keep working unchanged, which
 is why it was added this way rather than as a new frame type.
 
@@ -433,7 +444,12 @@ transcript. It runs on CPU, like Whisper — the GPU stays reserved for the LLM.
 | `SER_MODEL`          | `emotion2vec/emotion2vec_plus_base` | Model id — see the table below. |
 | `SER_BACKEND`        | `auto`  | `auto` infers from the model name; force with `meralion` or `emotion2vec`. |
 | `SER_DEVICE`         | `cpu`   | Leave it — the Arc B580 is for Ollama. |
-| `SER_MIN_CONFIDENCE` | `0.4`   | Below this the interpreter is told the voice signal is weak and to trust the words instead. |
+| `SER_MIN_CONFIDENCE` | `0.4`   | Below this the interpreter is told the voice signal is weak and to trust the words instead, and the read's confidence is knocked down ("voice unclear"). The prompt text hardcodes "about 0.4"; change both together. |
+| `CONFIDENCE_HIGH` / `CONFIDENCE_LOW` | `0.9` / `0.6` | Level cut-offs for the read's confidence: at or above HIGH renders as normal, below LOW is suppressed. Measured on 280 RAVDESS clips: high 97% accurate, medium 83%, low 17%. Set them from `python -m eval.confidence_eval`, not by hand. |
+| `CONFIDENCE_PLATT_A` / `_B` | `1.0` / `0.0` | Platt scaling of the interpreter's tone probability. The fitted values gained nothing on RAVDESS (ECE 0.187 to 0.186), so the identity is shipped. |
+| `CONFIDENCE_PENALTY` | `0.7` | Multiplier applied per weak input (short utterance, unclear voice, doubtful transcript, two voices, mixed tone). |
+| `CONFIDENCE_MIN_VOICE_S` / `CONFIDENCE_MIN_ASR` | `1.5` / `0.35` | Voiced seconds below which the voice reading is distrusted; transcriber confidence below which the words are (0.35 is Whisper's own "failed segment" line). |
+| `OLLAMA_LOGPROBS` | `1` | Ask Ollama for token probabilities (needs 0.12.11+); off, the confidence score loses its base signal and says so. |
 | `SER_TORCH_THREADS`  | `0`     | `0` = torch's default. Raising it to your logical core count speeds up one SER pass but competes with Whisper; measure before changing. |
 | `SER_MODEL_DIR`      | `models/emotion2vec_plus_base_slim` | If this directory exists, load the slimmed checkpoint from it instead of the ModelScope cache. Build it with `python -m eval.slim_ser_ckpt`; worth ~1.4 GB of RAM, bit-identical output. |
 | `SER_REVISION`       | *(empty)* | Pin the MERaLiON backend to a hub commit (it executes downloaded code). Empty = the vetted revision in `ser.py`. |
@@ -968,6 +984,7 @@ models/                 slimmed SER checkpoint + speaker profile (gitignored)
 eval/results/           committed eval output (the evidence behind config)
 eval/run_all.py         run every stage, one CSV each
 eval/pipeline_eval.py   full workflow over RAVDESS (the matrix runner)
+eval/confidence_eval.py does the read's confidence track correctness? AUROC per signal, ECE, Platt fit -> CONFIDENCE_* values
 eval/pipeline_child.py    its CPU half: Segmenter -> whisper + SER
 eval/pipeline_wire.py     the same, over the real websocket (spot check)
 eval/ser_eval.py        SER accuracy vs RAVDESS (real emotional speech)

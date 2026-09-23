@@ -65,7 +65,13 @@ async def run(path: str, url: str, token: str, realtime: bool) -> int:
                     reads[msg["id"]] = msg
                     # Reads arrive out of order -- one asyncio task per
                     # utterance -- so echo the id to keep them correlated.
-                    print(f"    -> [{msg['id']}] ({msg['tone']}) {msg['read']}")
+                    # "confidence" is optional too: score, level and the
+                    # reasons the server gave for anything below high.
+                    c = msg.get("confidence") or {}
+                    ctag = (f"  conf {c.get('score')} {c.get('level')}"
+                            + (f" ({'; '.join(c['reasons'])})" if c.get("reasons") else "")
+                            if c.get("level") else "")
+                    print(f"    -> [{msg['id']}] ({msg['tone']}) {msg['read']}{ctag}")
                     # "voice" is optional: present only when SER is available.
                     v = msg.get("voice")
                     if v:

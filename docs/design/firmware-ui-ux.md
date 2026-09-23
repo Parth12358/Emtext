@@ -258,7 +258,9 @@ rendered as the hero at glance centre. **One shape for every tone — the emotio
 | mixed | heart | yellow `(255,210,40)` — Justice | yellow |
 | neutral | heart | dim gray `(120,120,120)` | *none* |
 
-Low-confidence reads render the caption in a fainter gray. Neutral = dim gray heart + no tick
+Low-confidence reads render the caption in a fainter gray — driven, since fw 0.1.2, by the
+server's `read.confidence.level == "low"` (`server/confidence.py`; absent on older servers, in
+which case the caption draws at full weight). Neutral = dim gray heart + no tick
 (quiet is the message). This visual mapping is the **only** channel for the emotional signal —
 the device has no speaker (audio cues removed). Note: since every tone is the same heart, **colour
 is the sole cue** — chosen deliberately, mirroring Undertale (not colour-blind redundant).

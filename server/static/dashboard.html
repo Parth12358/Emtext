@@ -284,6 +284,8 @@
     <div id="emotions"><div class="empty">no utterances yet</div></div>
     <h2>Who spoke</h2>
     <div id="speakers"><div class="empty">no utterances yet</div></div>
+    <h2>Confidence of reads <span class="badge" id="confidence-mean"></span></h2>
+    <div id="confidence"><div class="empty">no reads yet</div></div>
   </div>
 
   <div class="card wide">
@@ -612,6 +614,9 @@ function render(d) {
     neutral: "--neutral", sarcastic: "--sarcastic", mixed: "--mixed"});
   dist(el("emotions"), p.emotions, {});
   dist(el("speakers"), p.speakers, {user: "--neutral", other: "--positive", mixed: "--mixed"});
+  dist(el("confidence"), (p.confidence || {}).levels, {high: "--positive", medium: "--mixed", low: "--negative"});
+  el("confidence-mean").textContent = p.confidence && p.confidence.n
+    ? `mean ${p.confidence.mean} over ${p.confidence.n}` : "";
 
   // --- recent ---
   const r = el("recent");
@@ -625,6 +630,7 @@ function render(d) {
       const bits = [`${u.total_s}s total`, `w ${u.whisper_s}s`, `s ${u.ser_s}s`, `llm ${u.llm_s}s`];
       if (u.voice && u.voice.emotion) bits.push(`voice ${u.voice.emotion}`);
       if (u.speaker) bits.push(`spk ${u.speaker}`);
+      if (u.confidence && u.confidence.level) bits.push(`conf ${Number(u.confidence.score).toFixed(2)} ${u.confidence.level}`);
       if (u.offline) bits.push("LLM OFFLINE");
       d2.innerHTML =
         `<div class="txt"></div><div class="rd"></div><div class="mt">${esc(bits.join("  ·  "))}</div>`;

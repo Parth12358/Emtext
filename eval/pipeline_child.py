@@ -47,9 +47,9 @@ def main() -> None:
     import numpy as np
 
     from eval.ser_eval import read_wav_16k
-    from server import config, ser
+    from server import config, ser, speaker
     from server.segmenter import Segmenter
-    from server.transcriber import transcribe
+    from server.transcriber import transcribe_scored
 
     _emit({
         "event": "loaded",
@@ -120,11 +120,17 @@ def main() -> None:
                 return value, time.perf_counter() - start
 
             t0 = time.perf_counter()
-            fut_asr = pool.submit(timed, transcribe, speech)
+            fut_asr = pool.submit(timed, transcribe_scored, speech)
             fut_ser = pool.submit(timed, ser.analyze, speech)
 
-            transcript, asr_s = fut_asr.result()
+            (transcript, asr_conf), asr_s = fut_asr.result()
             voice, ser_s = fut_ser.result()
+            # Confidence inputs the server would have had (server/confidence.py):
+            # the ASR backend's own confidence and the seconds of voiced audio,
+            # measured with the same VAD threshold the segmenter used.
+            row["asr_conf"] = asr_conf
+            row["voiced_s"] = round(
+                speaker.voiced_fraction(speech) * (float(speech.size) / config.SAMPLE_RATE), 3)
             row["whisper_latency_s"] = round(asr_s, 3)
             row["ser_latency_s"] = round(ser_s, 3)
             # Wall time for both together. This is the number that matters --

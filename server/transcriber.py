@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import math
 import tarfile
 import threading
 import time
@@ -132,6 +133,17 @@ class _Whisper:
                                    compute_type=config.WHISPER_COMPUTE_TYPE)
 
     def transcribe(self, audio: np.ndarray) -> str:
+        return self.transcribe_scored(audio)[0]
+
+    def transcribe_scored(self, audio: np.ndarray) -> tuple[str, float | None]:
+        """(text, confidence). Confidence is exp(mean avg_logprob) over segments.
+
+        faster-whisper flags a segment as unreliable below avg_logprob -1.0
+        (that is its own temperature-fallback threshold), which is exp(-1) =
+        0.37 on this scale; a segment the model thinks is silence
+        (no_speech_prob > 0.6) forces 0, because whatever text it produced is
+        hallucinated. None when there were no segments.
+        """
         # Whisper settings, and why:
         #   beam_size=1                  greedy is fastest; utterances are short
         #   vad_filter=True              trims non-speech the energy VAD let through
@@ -145,8 +157,15 @@ class _Whisper:
             vad_filter=True,
             condition_on_previous_text=False,
         )
-        # `segments` is a lazy generator; joining forces the decode to run.
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        # `segments` is a lazy generator; listing it forces the decode to run.
+        segs = list(segments)
+        text = " ".join(seg.text.strip() for seg in segs).strip()
+        if not segs:
+            return text, None
+        if any(getattr(s, "no_speech_prob", 0.0) > 0.6 for s in segs):
+            return text, 0.0
+        lps = [float(getattr(s, "avg_logprob", 0.0)) for s in segs]
+        return text, round(min(1.0, math.exp(sum(lps) / len(lps))), 3)
 
 
 class _Sherpa:
@@ -190,6 +209,19 @@ class _Sherpa:
         self._lock = threading.Lock()
 
     def transcribe(self, audio: np.ndarray) -> str:
+        return self.transcribe_scored(audio)[0]
+
+    def transcribe_scored(self, audio: np.ndarray) -> tuple[str, float | None]:
+        """(text, confidence). Confidence is exp(min per-token log-prob).
+
+        sherpa-onnx's NeMo transducer decoder (Parakeet) fills
+        `result.ys_log_probs` with the log-softmax value of each chosen token.
+        A greedy transducer's posteriors are overconfident by construction (the
+        token was chosen because it was the max), so the MINIMUM over tokens is
+        the informative statistic: one badly uncertain token is what makes a
+        transcript wrong. Moonshine and SenseVoice leave the list empty and get
+        None.
+        """
         samples = np.ascontiguousarray(np.asarray(audio, dtype=np.float32).reshape(-1))
         with self._lock:
             stream = self._rec.create_stream()
@@ -197,6 +229,10 @@ class _Sherpa:
             self._rec.decode_stream(stream)
             result = stream.result
         text = (result.text or "").strip()
+        conf: float | None = None
+        lps = list(getattr(result, "ys_log_probs", None) or [])
+        if lps:
+            conf = round(min(1.0, math.exp(float(min(lps)))), 3)
         if self.family == "sense_voice":
             # SenseVoice's side channels. Logged only: the interpreter's
             # mismatch rule needs an acoustic-only SER channel, and this one is
@@ -205,7 +241,7 @@ class _Sherpa:
             extra = {k: getattr(result, k, "") for k in ("lang", "emotion", "event")}
             if any(extra.values()):
                 log.debug("sensevoice tags: %s", extra)
-        return text
+        return text, conf
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +422,20 @@ def transcribe(audio: np.ndarray) -> str:
     so audio ingest never stalls. Returns "" when no model is resident, which
     main.py already treats as "Whisper heard nothing".
     """
+    return transcribe_scored(audio)[0]
+
+
+def transcribe_scored(audio: np.ndarray) -> tuple[str, float | None]:
+    """Like transcribe(), plus the backend's confidence in [0, 1] or None.
+
+    The confidence scale is backend-specific (see each backend's docstring),
+    which is why it feeds server/confidence.py through a threshold that
+    eval.confidence_eval profiles rather than being shown raw.
+    """
     backend = _current          # one read: a swap mid-call cannot affect us
     if backend is None:
-        return ""
-    return backend.transcribe(audio)
+        return "", None
+    return backend.transcribe_scored(audio)
 
 
 def _load_default() -> None:
@@ -445,5 +491,6 @@ if __name__ == "__main__":
             print(f"warning: {path} is {rate} Hz, expected {config.SAMPLE_RATE}")
         backend.transcribe(x[: config.SAMPLE_RATE])   # warm
         t0 = time.perf_counter()
-        text = backend.transcribe(x)
-        print(f"{key}  {time.perf_counter() - t0:.3f}s  {x.size / rate:.2f}s audio  -> {text!r}")
+        text, conf = backend.transcribe_scored(x)
+        print(f"{key}  {time.perf_counter() - t0:.3f}s  {x.size / rate:.2f}s audio  "
+              f"conf {conf}  -> {text!r}")

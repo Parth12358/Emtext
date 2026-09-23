@@ -56,6 +56,10 @@ _emotions: Counter[str] = Counter()
 # Speaker-id labels (user / other / mixed / unknown). "user" lines never reach
 # record_utterance -- they get no read -- so they are counted here instead.
 _speakers: Counter[str] = Counter()
+# Confidence of the reads (server/confidence.py): how many landed in each
+# level, and a rolling window of scores for the mean the dashboard shows.
+_confidence_levels: Counter[str] = Counter()
+_confidence_scores: deque[float] = deque(maxlen=_WINDOW)
 _recent: deque[dict] = deque(maxlen=40)
 _connections_active = 0
 
@@ -163,10 +167,15 @@ def record_utterance(
     voice: dict | None,
     offline: bool,
     speaker: str | None = None,
+    confidence: dict | None = None,
 ) -> None:
     """One completed utterance, start to finish."""
     with _lock:
         _counters["utterances"] += 1
+        if confidence:
+            _confidence_levels[confidence.get("level") or "?"] += 1
+            if isinstance(confidence.get("score"), (int, float)):
+                _confidence_scores.append(float(confidence["score"]))
         if offline:
             _counters["llm_offline"] += 1
         _latencies["whisper"].append(whisper_s)
@@ -185,6 +194,7 @@ def record_utterance(
             "read": read,
             "voice": voice,
             "speaker": speaker,
+            "confidence": confidence,
             "whisper_s": round(whisper_s, 3),
             "ser_s": round(ser_s, 3),
             "cpu_stage_s": round(cpu_stage_s, 3),
@@ -235,6 +245,11 @@ def pipeline_stats() -> dict:
             "tones": dict(_tones),
             "emotions": dict(_emotions),
             "speakers": dict(_speakers),
+            "confidence": {
+                "levels": dict(_confidence_levels),
+                "mean": round(statistics.mean(_confidence_scores), 3) if _confidence_scores else None,
+                "n": len(_confidence_scores),
+            },
             "recent": list(_recent),
         }
 

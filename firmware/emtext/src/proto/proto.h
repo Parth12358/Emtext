@@ -17,6 +17,11 @@ namespace proto {
     char  emotion[24]    = {0};   // read.voice (optional)
     float valence = -1.0f;        // -1 = absent
     float arousal = -1.0f;
+    // read.confidence (optional, additive): how sure the server was. The glance
+    // renders "low" in the faint grey (display::setGlance's lowConfidence);
+    // an older server sends no field and the read renders as before.
+    char  confLevel[8]   = {0};   // "high" / "medium" / "low", or empty = absent
+    float confidence = -1.0f;     // 0..1, -1 = absent
     double t = 0;                 // ping/pong timestamp
     bool  ok = false;             // saved reply: did the clip save succeed
   };

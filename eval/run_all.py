@@ -53,6 +53,14 @@ STAGES = [
         "RAVDESS in data/ravdess + Ollama with the models pulled",
     ),
     (
+        "confidence", "eval.confidence_eval",
+        # Reads the pipeline stage's rows; --fit prints the CONFIDENCE_* values
+        # for config.py. No models, no Ollama: seconds.
+        ["--fit"],
+        ["--fit"],
+        "the pipeline stage's CSV (needs its tone_prob / asr_conf columns, i.e. a run since 2026-09-22)",
+    ),
+    (
         "ser", "eval.ser_eval",
         ["--limit", "0", "--quiet", "--csv", str(CSV_DIR / "ser.csv")],
         ["--limit", "56", "--quiet", "--csv", str(CSV_DIR / "ser.csv")],

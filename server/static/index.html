@@ -154,6 +154,19 @@
   }
   .read-text { font-weight: 600; color: var(--tone, var(--ink)); }
   .read .pending { color: var(--ink-3); font-weight: 400; font-style: italic; }
+  /* Confidence as weight. medium: quieter tint and type. low: the read is
+     hidden behind the chip until clicked, then shown at medium weight. */
+  .read.c-medium { background: color-mix(in srgb, var(--tone, var(--neutral)) 4%, var(--surface)); }
+  .read.c-medium .read-text { font-weight: 500; opacity: .8; }
+  .read.c-low { background: var(--surface); cursor: pointer; }
+  .read.c-low .read-text { font-weight: 500; opacity: .7; }
+  .read.c-low.hidden .read-text { display: none; }
+  .read.c-low .tone-dot { opacity: .5; }
+  .conf {
+    font-size: 11px; font-weight: 600; padding: 1px 9px; border-radius: 999px;
+    color: var(--ink-2); box-shadow: var(--press-sm); flex: 0 0 auto;
+  }
+  .conf.low { color: var(--mixed); }
   .t-neutral .read-text { color: var(--ink); }
   /* Tone modifiers set one variable; the well, bead and text read it. */
   .t-positive  { --tone: var(--positive); }
@@ -231,7 +244,9 @@
       <b>“Oh wonderful, that's just perfect.”</b> — once brightly, once flatly.<br>
       <b>“You are unbelievable, you know that?”</b> — once warmly, once angrily.</p>
     <p class="try-note">Pause for about a second between sentences: that silence is
-    how the app knows a sentence ended. A read takes a few seconds to arrive.</p>
+    how the app knows a sentence ended. A read takes a few seconds to arrive.
+    Reads the app is less sure of come fainter, and ones it is not sure of stay
+    behind a “not sure” chip until you click them.</p>
   </div></div>
 </main>
 
@@ -314,7 +329,7 @@ function handleMessage(msg) {
       addTranscript(msg.id, msg.transcript, msg.speaker);
       break;
     case "read":
-      addRead(msg.id, msg.tone, msg.read, msg.voice, msg.speaker);
+      addRead(msg.id, msg.tone, msg.read, msg.voice, msg.speaker, msg.confidence);
       setState("listening");
       break;
     case "saved":
@@ -385,7 +400,34 @@ function addTranscript(id, transcript, speaker) {
   entries.set(id, node);
 }
 
-function addRead(id, tone, read, voice, speaker) {
+// How sure the server was, rendered as weight rather than as a number the
+// listener has to interpret: high reads as before; medium is de-emphasised;
+// low is suppressed behind a "not sure" chip and revealed on click. The
+// research behind this (RESEARCH.md §6.5): a hedged reading is followed less
+// anyway, so omission at least does not spend the listener's attention.
+const CONF_TEXT = {medium: "less sure", low: "not sure"};
+
+function applyConfidence(node, confidence) {
+  const well = node.querySelector(".read");
+  if (!well || !confidence || !confidence.level) return;
+  const lvl = confidence.level;
+  well.classList.add(`c-${lvl}`);
+  if (lvl === "high") return;
+  const chip = document.createElement("span");
+  chip.className = "conf " + lvl;
+  chip.textContent = CONF_TEXT[lvl] || lvl;
+  const why = (confidence.reasons || []).join("; ");
+  chip.title = why ? `${why} (${Number(confidence.score).toFixed(2)})`
+                   : `confidence ${Number(confidence.score).toFixed(2)}`;
+  well.insertBefore(chip, well.querySelector(".read-text"));
+  if (lvl === "low") {
+    // Hidden, not gone: one click shows the read at medium weight.
+    well.classList.add("hidden");
+    well.addEventListener("click", () => well.classList.remove("hidden"), {once: true});
+  }
+}
+
+function addRead(id, tone, read, voice, speaker, confidence) {
   const node = entries.get(id);
   if (!node) return;
   node.className = `entry t-${tone}`;          // recolor by tone
@@ -393,6 +435,7 @@ function addRead(id, tone, read, voice, speaker) {
   if (!txt) return;                             // a "you" entry has no read row
   txt.classList.remove("pending");
   txt.textContent = read;
+  applyConfidence(node, confidence);
   // The utterance frame normally carried the chip already; add it here only
   // if the label arrived on the read alone.
   if (speaker && !node.querySelector(".who")) {
@@ -430,6 +473,12 @@ function addRead(id, tone, read, voice, speaker) {
     const chip = document.createElement("span");
     chip.className = "chip";
     chip.textContent = voice.emotion;
+    // The SER model's own probability for that label, when the server sends
+    // it. A hint's weight, shown next to the hint.
+    if (typeof voice.confidence === "number") {
+      chip.textContent += ` ${voice.confidence.toFixed(2)}`;
+      chip.title = "how sure the speech-emotion model was of this label";
+    }
     line.appendChild(chip);
   }
 

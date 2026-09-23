@@ -53,6 +53,10 @@ proto::Type proto::parse(const char* json, Frame& out) {
       out.valence = doc["voice"]["valence"] | -1.0f;  // null -> -1 (absent)
       out.arousal = doc["voice"]["arousal"] | -1.0f;
     }
+    if (doc["confidence"].is<JsonObject>()) {         // optional: how sure the server was
+      copyStr(out.confLevel, sizeof(out.confLevel), doc["confidence"]["level"] | "");
+      out.confidence = doc["confidence"]["score"] | -1.0f;
+    }
   } else if (!strcmp(type, "ping")) {
     out.type = Type::Ping;
     out.t = doc["t"] | 0.0;

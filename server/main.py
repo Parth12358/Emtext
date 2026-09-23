@@ -37,7 +37,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clips, config, dashboard, metrics, ser, speaker, translog, transcriber
+from . import clips, config, confidence, dashboard, metrics, ser, speaker, translog, transcriber
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -267,7 +267,7 @@ def _log_task_error(task: asyncio.Task) -> None:
 
 
 def _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s) -> None:
+                    whisper_s, ser_s, llm_s, conf=None) -> None:
     """Hand one finished utterance to the transcript log, off the event loop.
 
     Fire-and-forget on purpose: the log is for improving the ASR later, so it
@@ -284,6 +284,7 @@ def _log_transcript(loop, uid, audio, transcript, who, voice, result,
         "voice": voice,
         "tone": result.get("tone") if result else None,
         "read": result.get("read") if result else None,
+        "confidence": conf,
         "whisper_s": round(whisper_s, 3),
         "ser_s": round(ser_s, 3),
         "llm_s": round(llm_s, 3) if llm_s is not None else None,
@@ -336,12 +337,16 @@ async def _process_utterance(
         return fn(*args), time.perf_counter() - start
 
     cpu_t0 = time.perf_counter()
-    (transcript, whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
-        loop.run_in_executor(None, _timed, transcribe, audio),
+    ((transcript, asr_conf), whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
+        loop.run_in_executor(None, _timed, transcriber.transcribe_scored, audio),
         loop.run_in_executor(None, _timed, ser.analyze, audio),
         loop.run_in_executor(None, _timed, speaker.identify, audio, session),
     )
     cpu_stage_s = time.perf_counter() - cpu_t0
+    # Seconds of actual speech in the buffer (pure numpy, same VAD threshold the
+    # segmenter used): the voice model is unreliable under ~1.5 s of it, and
+    # the confidence score says so rather than pretending otherwise.
+    voiced_s = speaker.voiced_fraction(audio) * (float(audio.size) / config.SAMPLE_RATE)
 
     if not transcript:
         # Whisper heard nothing usable. Invisible everywhere else, and a useful
@@ -380,6 +385,18 @@ async def _process_utterance(
     result = await interpreter.interpret(transcript, voice, who=label)
     llm_s = time.perf_counter() - llm_t0
 
+    # How sure is this read? Pure combination of the signals above; never
+    # changes what the LLM saw, only how the read is weighted on the way out.
+    conf = confidence.score(
+        tone=result.get("tone"),
+        tone_prob=result.get("tone_prob"),
+        offline=bool(result.get("offline")),
+        asr_conf=asr_conf,
+        ser_conf=voice.get("confidence") if voice else None,
+        voiced_s=voiced_s,
+        speaker_label=label,
+    )
+
     metrics.record_utterance(
         transcript=transcript,
         tone=result.get("tone"),
@@ -391,19 +408,26 @@ async def _process_utterance(
         voice=voice,
         offline=result.get("read") == "(interpreter offline)",
         speaker=label,
+        confidence=conf,
     )
 
     # Keep the retention ring current so a `save` that names this id gets the
     # read as well as the audio. Cheap, and a no-op if the entry aged out.
-    recent.update(uid, tone=result.get("tone"), read=result.get("read"), voice=voice)
+    recent.update(uid, tone=result.get("tone"), read=result.get("read"), voice=voice,
+                  confidence=conf)
     _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s)
+                    whisper_s, ser_s, llm_s, conf)
 
     message = {
         "type": "read",
         "id": uid,
         "tone": result["tone"],
         "read": result["read"],
+        # Additive, like `voice` and `speaker`: how sure the server is, as a
+        # 0-1 score, a level the clients render (high as before, medium
+        # de-emphasised, low suppressed behind a "not sure" marker), and the
+        # plain-language reasons. Older clients ignore the key.
+        "confidence": conf,
     }
     if spk_field:
         message["speaker"] = spk_field
@@ -413,6 +437,7 @@ async def _process_utterance(
         # unknown key, so the wire protocol stays backward compatible.
         message["voice"] = {
             "emotion": voice.get("emotion"),
+            "confidence": voice.get("confidence"),
             "valence": voice.get("valence"),
             "arousal": voice.get("arousal"),
             # Added with the derived-dimensions work: on the default backend

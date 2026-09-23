@@ -210,6 +210,9 @@ def save(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             # "user" clip is the listener's own voice, which is worth seeing
             # when reviewing -- and before deciding to keep it.
             "speaker": _speaker_meta(e.get("speaker")),
+            # How sure the read was (server/confidence.py), so a reviewed clip
+            # shows whether the app was guessing at the time.
+            "confidence": e.get("confidence"),
         } for e in parts]
         tones = [u["tone"] for u in utterances if u["tone"]]
         meta = {

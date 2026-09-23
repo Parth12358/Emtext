@@ -991,3 +991,61 @@ run-to-run variance.
 Reproduce: `python -m eval.spk_eval` (the keeper version of the original
 throwaway probes; `--real me.wav conv.wav` is the tool for the real-room
 measurement above).
+
+---
+
+## Confidence on every read (built 2026-09-22)
+
+Every `read` frame now carries `"confidence": {"score", "level", "reasons"}`,
+computed in `server/confidence.py` (pure, self-tested) from signals the pipeline
+already had and threw away: the probability Ollama assigns to the first token
+of the chosen tone (`logprobs`, pre-grammar-mask, so it is a real distribution
+over the enum), the transcriber's own confidence, SER confidence, voiced
+seconds, and the speaker label. RESEARCH.md §4.8 / §4.10 / §6.5: calibrate, abstain
+on short utterances, and suppress rather than hedge. Browser hides a `low` read
+behind a "not sure" chip; the pendant renders it faint; the server always sends it.
+
+### Measured (`eval/results/pipeline_conf.csv`, emotion2vec x qwen3:14b, 280 RAVDESS clips, parakeet:v3)
+
+Reproduce: `python -m eval.confidence_eval --csv eval/results/pipeline_conf.csv --fit`.
+"Correct" means the tone matched the acted emotion; overall tone accuracy 76.4%.
+
+| signal              | AUROC vs tone_correct | verdict |
+|---------------------|-----------------------|---------|
+| `tone_prob` (LLM)   | 0.812                 | the base score; wrong reads sit at 0.6-0.9, right ones at ~1.0 |
+| composite score     | 0.842                 | penalties help a little over tone_prob alone |
+| `voiced_s`          | 0.610                 | weak but real; keeps the §4.10 short-clip penalty |
+| `ser_confidence`    | 0.547                 | coin flip: emotion2vec is confident whether or not the LLM is right |
+| `asr_conf`          | 0.452                 | coin flip here (RAVDESS transcripts are near-perfect); kept only as a misheard-words flag at 0.35 |
+
+- **Platt scaling gains nothing.** The fit (a=0.35, b=-0.94) moves ECE 0.187 to
+  0.186. The identity is shipped; `--fit` only recommends values when ECE
+  improves by 0.01 or more.
+- **Shipped cut-offs** `CONFIDENCE_HIGH=0.9`, `CONFIDENCE_LOW=0.6` give the
+  listener: high 63 reads (22%) at 96.8% accuracy, medium 176 (63%) at 83.0%,
+  low 41 (15%) at 17.1%. The old defaults (0.7 / 0.4) put 8 reads in `low` at
+  12.5% and 207 in `medium` at 72.9%, i.e. nearly everything looked the same.
+- Composite ECE is 0.145; the score is over-confident in the 0.6-0.8 bins, which
+  is the "too short" band (see below), and honest above 0.9.
+
+### Caveats
+
+- **68% of RAVDESS clips have under 1.5 s of voiced audio**, so nearly every
+  RAVDESS read carries the `too short to read the voice` penalty and the bulk
+  of scores land at 0.6-0.7. Live speech is longer; expect more `high` reads
+  there than the table suggests. The 1.5 s floor is §4.10's number, not fitted.
+- `asr_conf` is backend-specific (exp of Whisper's mean `avg_logprob`, exp of
+  Parakeet's minimum token log-prob) and has only been profiled on clean
+  speech. Measured on `experiments/asr`: parakeet:v3 0.93 on a clean line,
+  0.53 on the "415" line; whisper:base 0.77. Noisy-room numbers are unknown.
+- The SER threshold `SER_MIN_CONFIDENCE=0.4` is also written as "about 0.4"
+  **inside `SYSTEM_PROMPT`**; the env var does not change the prompt text.
+- `interpreter offline` now scores 0 / `low` with its own reason, so the client
+  can finally tell "unsure" from "dead" without `neutral` changing meaning.
+
+### Open
+
+- Fit the cut-offs on real conversation once the transcript log has a few
+  hundred labelled lines; RAVDESS is acted, studio, single-speaker.
+- `mixed` speaker label and `mixed` tone penalties are untested (RAVDESS never
+  produces either).

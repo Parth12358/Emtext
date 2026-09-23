@@ -234,6 +234,7 @@
   <div class="check"><span class="k">Auth</span><span class="v pend" id="c-auth">—</span></div>
   <div class="check"><span class="k">Keepalive round-trip</span><span class="v pend" id="c-ping">—</span></div>
   <div class="check"><span class="k">Speech emotion (voice field)</span><span class="v pend" id="c-voice">—</span></div>
+  <div class="check"><span class="k">Confidence (confidence field)</span><span class="v pend" id="c-conf">—</span></div>
 </div>
 
 <div class="card">
@@ -706,6 +707,15 @@ function addRead(msg) {
     check("c-voice", "ok", msg.voice.emotion || "present");
   } else {
     check("c-voice", "warn", "absent (SER off?)");
+  }
+  // Optional, like voice: how sure the server was, and why when it was not.
+  if (msg.confidence && msg.confidence.level) {
+    const c = msg.confidence;
+    bits.push(`conf ${Number(c.score).toFixed(2)} ${c.level}` +
+              (c.reasons && c.reasons.length ? ` (${c.reasons.join("; ")})` : ""));
+    check("c-conf", c.level === "low" ? "warn" : "ok", `${c.level} ${Number(c.score).toFixed(2)}`);
+  } else {
+    check("c-conf", "warn", "absent (old server?)");
   }
   node.querySelector(".meta").textContent = bits.join("  ·  ");
 }

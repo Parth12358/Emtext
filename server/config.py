@@ -243,7 +243,10 @@ SER_DEVICE: str = _env_str("SER_DEVICE", "cpu")
 SER_MODEL_DIR: str = _env_str("SER_MODEL_DIR", "models/emotion2vec_plus_base_slim")
 # Below this softmax probability the categorical label is close to a coin flip,
 # so the interpreter is told to treat the voice signal as weak rather than
-# letting it override a plain reading of the words.
+# letting it override a plain reading of the words. NOTE: SYSTEM_PROMPT spells
+# this out as "about 0.4" in words; changing the env does not change the
+# prompt text, and editing the prompt invalidates the model_eval baseline.
+# confidence.py uses the same number for its "voice unclear" penalty.
 SER_MIN_CONFIDENCE: float = _env_float("SER_MIN_CONFIDENCE", 0.4)
 # Torch intra-op threads for SER. 0 = leave torch's own default (typically one
 # per physical core). Raising it to the logical core count measurably speeds up
@@ -440,6 +443,41 @@ CLIP_RETENTION_S: float = _env_float("CLIP_RETENTION_S", 45.0)
 # than silently evicting moments the user deliberately kept -- deleting is the
 # user's call, from the dashboard.
 CLIPS_MAX_FILES: int = _env_int("CLIPS_MAX_FILES", 200)
+
+# --- Confidence (server/confidence.py) ---------------------------------------
+# Every read carries {"score","level","reasons"} on the wire. The base score is
+# the interpreter's first-token probability for its tone label (Ollama
+# logprobs), Platt-scaled; each weak input multiplies it by CONFIDENCE_PENALTY
+# and adds a reason. The numbers here are meant to be SET BY
+# `python -m eval.confidence_eval`, which measures how each signal tracks
+# correctness on this pipeline -- hand-tuned thresholds are how a confidence
+# number stops meaning anything. Until that has been run: identity Platt and
+# conservative cut-offs.
+OLLAMA_LOGPROBS: bool = _env_bool("OLLAMA_LOGPROBS", True)   # ask Ollama for token probabilities
+# Measured 2026-09-22 (eval/results/pipeline_conf.csv, emotion2vec x qwen3:14b,
+# 280 RAVDESS clips, parakeet:v3): tone_prob alone has AUROC 0.81 against tone
+# correctness and the composite 0.84; the Platt fit (a=0.35, b=-0.94) moved ECE
+# from 0.187 to 0.186, i.e. nothing, so the identity stays. Wrong reads sit at
+# tone_prob 0.6-0.9; correct ones at ~1.0. With the cut-offs below the listener
+# sees: high 63 reads at 97% accuracy, medium 175 at 83%, low 41 at 17%.
+# Caveat: 68% of those clips are under 1.5 s voiced, so nearly every RAVDESS
+# read carries the "too short" penalty; live speech is longer and lands higher.
+CONFIDENCE_PLATT_A: float = _env_float("CONFIDENCE_PLATT_A", 1.0)
+CONFIDENCE_PLATT_B: float = _env_float("CONFIDENCE_PLATT_B", 0.0)
+CONFIDENCE_HIGH: float = _env_float("CONFIDENCE_HIGH", 0.9)   # >= this renders as before
+CONFIDENCE_LOW: float = _env_float("CONFIDENCE_LOW", 0.6)     # < this is suppressed ("not sure")
+CONFIDENCE_PENALTY: float = _env_float("CONFIDENCE_PENALTY", 0.7)  # per weak input
+# Voice models sit in their worst regime under ~1.5 s of speech (RESEARCH.md
+# §4.10: a 5-6 point UAR penalty at 2 s), so a read on a very short line leans
+# on words alone and says so.
+CONFIDENCE_MIN_VOICE_S: float = _env_float("CONFIDENCE_MIN_VOICE_S", 1.5)
+# Transcriber confidence below which the words themselves are in doubt. Backend
+# specific (exp of Whisper's avg_logprob, or of Parakeet's minimum token
+# log-prob). 0.35 is exp(-1), Whisper's own "this segment failed" line. On
+# RAVDESS it did not track tone correctness (AUROC 0.45 -- the transcripts
+# there are near-perfect), so it is kept only as a flag for genuinely doubtful
+# transcripts, not as a tone signal.
+CONFIDENCE_MIN_ASR: float = _env_float("CONFIDENCE_MIN_ASR", 0.35)
 
 # --- Transcript log (server/translog.py) -------------------------------------
 # A running record of every utterance the server transcribed -- text, ASR

@@ -132,6 +132,16 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
 
 - `server/config.py` — every tunable, each overridable by an env var of the same name. New
   knobs go here, never hardcoded elsewhere.
+- `server/confidence.py` — **pure logic, zero I/O**, self-test in `__main__`. Turns the
+  signals the pipeline already has (the interpreter's first-token probability for its
+  tone from Ollama `logprobs`, ASR confidence from `transcriber.transcribe_scored`, SER
+  confidence, voiced seconds, speaker label, `mixed` tone, offline) into
+  `{"score","level","reasons"}`. Base = Platt-scaled tone probability; each weak input
+  multiplies by `CONFIDENCE_PENALTY` and adds a listener-facing reason. It never changes
+  what the LLM sees, so `SYSTEM_PROMPT` and the eval baselines are untouched. The
+  thresholds and Platt parameters come from `python -m eval.confidence_eval`, never
+  from hand-tuning; verbalised "I am 80% sure" was rejected on the literature (small
+  models are badly overconfident).
 - `server/segmenter.py` — **pure logic, zero I/O.** Energy-based VAD state machine: PCM
   bytes in → float32 utterances out. The speech threshold is **noise-floor-relative**:
   `clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)`, with the floor learned
@@ -213,7 +223,11 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   optional and omitted when SER has nothing; clients must be able to ignore it. Likewise
   the `speaker` object (`{"label","score"}`) on `utterance` and `read`, present only once
   a voice is enrolled -- and a `user` utterance gets **no `read` frame at all**, so a
-  client must never block waiting for one.
+  client must never block waiting for one. Likewise `confidence`
+  (`{"score","level","reasons"}`) on `read`, always sent by this server: `high` renders
+  as normal, `medium` de-emphasised, `low` suppressed behind a "not sure" marker
+  (browser) or drawn faint (pendant, fw 0.1.2+). The server never withholds a read on
+  confidence; suppression is the client's decision so logs and evals keep the record.
   The only client->server TEXT frames after auth are `{"type":"ping"}` and
   `{"type":"save","from":a,"to":b}` (an inclusive id range bundled into one clip,
   answered by `saved`; the older `{"id":n}` form still works as `from == to`);

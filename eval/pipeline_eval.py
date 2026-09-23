@@ -63,7 +63,7 @@ import httpx
 
 from eval.asr_eval import wer
 from eval.ser_eval import STATEMENTS, load_clips
-from server import config
+from server import config, confidence
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "eval" / "results"
@@ -105,6 +105,11 @@ COLUMNS = [
     "prompt_eval_count", "eval_count", "prompt_eval_ms", "eval_ms", "load_ms",
     "total_ms", "decode_tps",
     "cpu_stage_s", "total_latency_s", "error",
+    # Confidence signals (server/confidence.py), appended so older CSVs still
+    # load: the interpreter's first-token probability for its tone, the ASR
+    # backend's confidence, voiced seconds, and the composite the server would
+    # have sent. eval/confidence_eval.py measures how each tracks tone_correct.
+    "tone_prob", "asr_conf", "voiced_s", "confidence_score", "confidence_level",
 ]
 
 # Set by the SIGINT handler. 1 = finish this clip then stop; 2 = abort now.
@@ -313,6 +318,17 @@ def build_row(cell_id, ser_model, ser_backend, llm_model, meta, cached,
     ser_emotion = voice.get("emotion")
     tone = (llm_out or {}).get("tone")
     expected = EXPECTED_TONE.get(meta["true_emotion"])
+    # The same combination main.py sends on the wire, from the same inputs,
+    # so the eval scores what the listener would actually have seen.
+    conf = confidence.score(
+        tone=tone,
+        tone_prob=(llm_out or {}).get("tone_prob"),
+        offline=bool((llm_out or {}).get("offline")),
+        asr_conf=cached.get("asr_conf"),
+        ser_conf=voice.get("confidence"),
+        voiced_s=cached.get("voiced_s"),
+        speaker_label=None,
+    )
 
     return {
         "cell_id": cell_id,
@@ -362,6 +378,11 @@ def build_row(cell_id, ser_model, ser_backend, llm_model, meta, cached,
         "cpu_stage_s": cached.get("cpu_stage_s"),
         "total_latency_s": round((cached.get("cpu_stage_s") or 0) + llm_s, 3),
         "error": cached.get("error", ""),
+        "tone_prob": (llm_out or {}).get("tone_prob"),
+        "asr_conf": cached.get("asr_conf"),
+        "voiced_s": cached.get("voiced_s"),
+        "confidence_score": conf["score"],
+        "confidence_level": conf["level"],
     }
 
 
@@ -816,6 +837,10 @@ async def run(args) -> None:
         return
 
     cells = [(sm, slug, llm) for sm, slug in SER_MODELS for llm in LLM_MODELS]
+    if args.llm:
+        # One interpreter only: re-scoring a single cell (e.g. for
+        # eval.confidence_eval) without swapping every model through VRAM.
+        cells = [c for c in cells if c[2] in args.llm]
     if args.cells:
         cells = cells[: args.cells]
 
@@ -917,6 +942,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cells", type=int, default=0,
                     help="run only the first N cells (smallest models first)")
+    ap.add_argument("--llm", nargs="*", default=None, metavar="MODEL",
+                    help="restrict to these interpreter models (default: all three)")
     ap.add_argument("--include-calm", action="store_true",
                     help="fold RAVDESS 'calm' into neutral (default: excluded; "
                          "see eval/ser_eval.py for why)")

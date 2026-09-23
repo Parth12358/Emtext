@@ -134,11 +134,15 @@ static void onNetFrame(const proto::Frame& f) {
       if (g_clipHolding || g_clipFinalizing) LOG_INFO("clip: captured utterance #%d", f.id);
       break;
     case proto::Type::Read:
-      LOG_INFO("net: read #%d [%s] '%s'", f.id, proto::toneName(f.tone), f.read);
+      LOG_INFO("net: read #%d [%s] '%s' conf=%s", f.id, proto::toneName(f.tone), f.read,
+               f.confLevel[0] ? f.confLevel : "-");
       if (f.id > g_lastUttId) g_lastUttId = f.id;   // clip-save target (same id space as utterance)
       g_lastUttAt = millis();
       display::setProcessing(false);
-      display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript);
+      // A "low" confidence read is drawn faint (the requirement: visibly
+      // reduced emphasis). Medium and high, or no field at all, draw as before.
+      display::setGlance(f.read, proto::toneName(f.tone), g_lastTranscript,
+                         strcmp(f.confLevel, "low") == 0);
       break;
     case proto::Type::Saved:                      // clip-save reply (see README.md, wire protocol)
       LOG_INFO("net: clip %s (#%d)", f.ok ? "saved" : "FAILED", f.id);

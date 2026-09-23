@@ -16,6 +16,7 @@ degrade gracefully -- the transcript still reaches the user, just with a
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import deque
 
@@ -276,6 +277,45 @@ def _ollama_stats(body: dict | None) -> dict:
     }
 
 
+def _tone_prob(body: dict | None) -> float | None:
+    """The model's probability for the tone it chose, from Ollama's logprobs.
+
+    Measured on qwen3:14b (Ollama 0.34, JSON-schema `format`, 2026-09-22):
+    the logprobs are PRE-grammar-mask -- the forced opening `{"` scores about
+    -25 while `<think>` sits at 0, because the schema, not the model, chose it.
+    That is exactly what we want at the tone position: the token that starts the
+    tone value gets a real distribution over the enum's first tokens (e.g.
+    `sar` -0.07 against `negative` -3.6, `neutral` -3.9, `mixed` -3.9), so its
+    probability says how torn the model was between labels. A structural token
+    would say nothing.
+
+    Finds that token by character offset: the response is a JSON string whose
+    tokens concatenate to it, so walk the tokens until the offset of the tone
+    value's first character. Returns None whenever the shape is not as
+    expected (older Ollama, no logprobs, unexpected key order) -- never raises.
+    """
+    try:
+        if not body or not isinstance(body.get("logprobs"), list):
+            return None
+        text = body.get("response") or ""
+        m = re.search(r'"tone"\s*:\s*"', text)
+        if not m:
+            return None
+        target = m.end()                 # offset of the value's first character
+        pos = 0
+        for tok in body["logprobs"]:
+            piece = tok.get("token") or ""
+            if pos + len(piece) > target:  # this token contains the offset
+                if pos != target:
+                    return None            # value starts mid-token; not comparable
+                lp = tok.get("logprob")
+                return round(math.exp(float(lp)), 4) if isinstance(lp, (int, float)) else None
+            pos += len(piece)
+        return None
+    except Exception:  # noqa: BLE001 -- a missing number, never a failed read
+        return None
+
+
 # Belt-and-braces: the shipped prompt delimits with quotes, not tags, so this
 # matches nothing today. It is here so that if the tag variant is ever revisited
 # (see the docstring below), a spoken "</utterance>" cannot close the fence.
@@ -424,6 +464,12 @@ class Interpreter:
                 "num_predict": config.OLLAMA_NUM_PREDICT,  # the read is short; cap tokens
             },
         }
+        if config.OLLAMA_LOGPROBS:
+            # Token probabilities for the confidence score (server/confidence.py).
+            # Ignored by Ollama builds before 0.12.11; _tone_prob() then returns
+            # None and the score falls back to its "no probability" base.
+            payload["logprobs"] = True
+            payload["top_logprobs"] = 5
 
         try:
             resp = await self._client.post(
@@ -442,9 +488,10 @@ class Interpreter:
                 tone = "neutral"
             if not read:
                 read = "(no read)"
-            return {"tone": tone, "read": read, **_ollama_stats(body)}
+            return {"tone": tone, "read": read, "offline": False,
+                    "tone_prob": _tone_prob(body), **_ollama_stats(body)}
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):
             # Unreachable Ollama, non-2xx, or malformed/garbage JSON all land
             # here. Degrade gracefully rather than dropping the utterance.
             return {"tone": "neutral", "read": "(interpreter offline)",
-                    **_ollama_stats(None)}
+                    "offline": True, "tone_prob": None, **_ollama_stats(None)}

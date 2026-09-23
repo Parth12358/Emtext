@@ -141,17 +141,24 @@ the LLM judged them on wrong words. SER and WER columns are still usable.
 
 ## Whisper accuracy in a noisy room
 
-**Status:** open; the alternatives are now INSTALLED and switchable (2026-09-19)
-· **Affects:** `server/config.py` (`ASR_MODEL`), `server/transcriber.py`
+**Status:** default switched to `parakeet:v2` on 2026-09-22; the real-room
+measurement is still owed · **Affects:** `server/config.py` (`ASR_MODEL`),
+`server/transcriber.py`
+
+Update 2026-09-22: `ASR_MODEL` now defaults to `parakeet:v2`. On the SAPI set
+it scored 4.8% WER at 0.10 s per utterance against `whisper:base`'s 6.0% at
+0.26 s, and as a transducer it does not hallucinate on silence. `WHISPER_MODEL`
+set explicitly still wins (`whisper:<name>`), so nobody's start script changes
+behaviour silently. The caveat below is unchanged: this was decided on clean
+synthetic speech, and a real recording must confirm it.
 
 Update 2026-09-19: `transcriber.py` now carries a catalogue -- Whisper `base` /
 `distil-small.en` / `small.en` / `distil-large-v3` / `large-v3-turbo`, Parakeet TDT
 0.6B v2/v3, Moonshine tiny/base, SenseVoice small -- switchable live from the
-dashboard. `python -m eval.asr_eval` scores all of them. The instruction below
-still stands: the default has NOT been changed, because the only eval audio is
-SAPI. Record real-room utterances into `experiments/asr/` first.
+dashboard. `python -m eval.asr_eval` scores all of them. Record real-room
+utterances into `experiments/asr/` and re-score before trusting the choice.
 
-`base` is the default and is the weakest link now that SER dropped to ~0.12 s --
+`base` was the default and the weakest link once SER dropped to ~0.12 s --
 Whisper is the largest CPU cost in the pipeline at ~0.24 s, and the transcript
 sets a ceiling on how good any read can be.
 
@@ -710,7 +717,27 @@ The guard returns before `import torch`, so nothing heavy is imported at all.
 
 ## Audio-native LLM could replace Whisper entirely
 
-**Status:** idea, blocked on tooling · **Affects:** architecture
+**Status:** MEASURED 2026-09-22, NOT adopted · **Affects:** architecture
+
+### Measured (2026-09-22)
+
+Three local audio LLMs on llama.cpp (Vulkan, Arc B580), same 280 RAVDESS clips
+and baselines as `pipeline.csv`, production prompt verbatim. Full report:
+`docs/reports/audio-llm.md`. The harness was removed with the decision; the
+report records the method in enough detail to rebuild it.
+
+| model | audio tone / v.sens | `neutral` share | follows wrong hint / audio | RAVDESS WER | audio latency |
+|---|---|---|---|---|---|
+| gemma4-e4b (Q4_0) | 14% / +0 | 100% | 91% / 0% | 11% | 0.90 s |
+| voxtral-mini (Q4_K_M) | 14% / -4 | 96% | 99% / 0% | 9% | 0.92 s |
+| qwen25-omni-7b (Q4_K_M) | 16% / -1 | 98% | 25% / 4% (72% neither) | 3% | 1.27 s |
+| qwen3:14b + emotion2vec (current) | 81% / +48 | -- | -- | 2% (parakeet) | 0.30 + 0.89 s |
+
+They do not hear tone (audio is indistinguishable from the text-only floor),
+two of three follow a five-word wrong transcript over the delivery every time,
+and none is faster than the CPU ASR + GPU LLM split or fits beside qwen3:14b
+in 12 GB. The prediction below held locally, and worse than the published
+numbers. Original entry kept for the record:
 
 An audio-in LLM could take the waveform directly and produce transcript + tone in
 one pass, removing Whisper and the valence hand-off.

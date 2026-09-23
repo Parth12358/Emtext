@@ -67,7 +67,7 @@ VRAM), not estimated.
 | stage | model | device | cost per utterance |
 |---|---|---|---|
 | VAD | energy segmenter | — | negligible |
-| transcription | Whisper `base` (int8) | CPU | ~0.24 s |
+| transcription | Parakeet TDT 0.6B v2 (int8, sherpa-onnx) | CPU | ~0.10 s |
 | speech emotion | `emotion2vec_plus_base` | CPU | ~0.12 s |
 | interpretation | `qwen3:14b` via Ollama | GPU | ~0.89 s |
 
@@ -107,12 +107,14 @@ before the SER swap.
 
 **Known rough edges** — see [docs/status/TODO.md](docs/status/TODO.md) for the detail:
 
-- **Segmentation needs tuning for real rooms.** `SPEECH_RMS` is an absolute
-  threshold; quiet speech is dropped and sentences split at soft consonants. The
-  VAD strip in `/remote.html` is the tool for this.
-- **Whisper `base` could be better.** `distil-small.en` matches `small`'s accuracy
-  for less CPU, but that was measured on clean synthetic speech, so it needs a
-  real-microphone comparison first.
+- **Segmentation is unverified on the pendant's mic.** The speech threshold now
+  tracks the room (`noise_floor × NOISE_MARGIN`, clamped to
+  `[SPEECH_RMS_MIN, SPEECH_RMS]`) and segments 10 of 10 RAVDESS test clips where a
+  fixed threshold dropped 5, but nobody has watched it in a real room yet. The VAD
+  strip in `/remote.html` shows the live floor and threshold for exactly that.
+- **The ASR default was chosen on synthetic speech.** Parakeet v2 replaced Whisper
+  `base` on the SAPI set (4.8% vs 6.0% WER at under half the cost), but that set
+  cannot see noise robustness; a real-microphone comparison is still owed.
 - The current SER backend supplies **no valence**; arousal and dominance are
   derived from its class distribution, and the mismatch rule is built on those
   two axes (valence is left to the LLM, which reads it from the words).
@@ -183,7 +185,7 @@ The first run also downloads the models, which are cached after that:
 
 | model | size | notes |
 |-------|------|-------|
-| Whisper `base` (faster-whisper) | ~150 MB | transcription, CPU |
+| Parakeet TDT 0.6B v2 (sherpa-onnx, int8) | ~640 MB | transcription, CPU. Fetched into `models/asr/` on first start; `ASR_MODEL=whisper:base` restores the old default |
 | `emotion2vec/emotion2vec_plus_base` | ~1.07 GB | speech emotion, CPU. Two thirds of that file is optimizer state inference never touches; `python -m eval.slim_ser_ckpt` writes a 355 MB copy under `models/` that `SER_MODEL_DIR` picks up automatically and saves ~1.4 GB of RAM |
 | CAM++ (`cam++`, via funasr) | ~27 MB | speaker id, CPU. Skipped with `SPEAKER_ENABLED=0` |
 
@@ -331,7 +333,7 @@ variable of the same name. The ones you'll actually touch:
 
 | Env var             | Default | What it does |
 |---------------------|---------|--------------|
-| `SPEECH_RMS`        | 500     | Loudness (int16 RMS) needed to count a frame as speech. **Raise it** if a noisy room keeps triggering; **lower it** if quiet speech gets missed. |
+| `SPEECH_RMS`        | 500     | Ceiling of the adaptive speech threshold (int16 RMS); with `VAD_ADAPTIVE=0` it is the constant threshold. **Raise it** if a noisy room keeps triggering; the adaptive floor already handles quiet speech, so lower `SPEECH_RMS_MIN` rather than this if quiet speech is still missed. |
 | `END_SILENCE_MS`    | 650     | How much trailing quiet ends an utterance. Lower = snappier but may split sentences at pauses; higher = fewer splits but more lag. |
 | `MIN_UTTERANCE_MS`  | 350     | Utterances with less voiced audio than this are discarded as blips (coughs, taps). |
 | `MAX_UTTERANCE_MS`  | 15000   | Hard cap; force-cuts run-on audio so the buffer never grows without bound. |
@@ -489,7 +491,9 @@ python -m eval.bench              # all three models
 python -m eval.bench --skip-llm   # audio stages only (no Ollama needed)
 ```
 
-Measured on a 12-core CPU + Arc B580, `WHISPER_MODEL=base`, `qwen3:14b`:
+Measured on a 12-core CPU + Arc B580, `qwen3:14b`. Transcription was Whisper
+`base` when these were taken; `parakeet:v2`, the default since 2026-09-22,
+measured ~0.10 s per utterance on the same set:
 
 | stage | model | device | per utterance |
 |-------|-------|--------|---------------|
@@ -594,7 +598,10 @@ python -m eval.run_all             # the full run (slow: ~1-2 hours)
 Outside `run_all`: `python -m eval.spk_eval` scores speaker id against RAVDESS
 (`--eer`, `--pairs`, `--label`; `--real me.wav conv.wav` is the harness for a
 real-room recording, which has not been made yet), and `python -m
-eval.slim_ser_ckpt` builds the slimmed SER checkpoint described above.
+eval.slim_ser_ckpt` builds the slimmed SER checkpoint described above. An
+audio-input LLM as a one-shot replacement for the whole pipeline was measured
+and not adopted; the write-up is
+[docs/reports/audio-llm.md](docs/reports/audio-llm.md).
 
 Every stage streams progress as it goes — the SER stage prints a line per clip
 with a running ETA — because the full run takes long enough that a silent
@@ -697,12 +704,12 @@ and means `whisper:<name>`.
 
 | key | family | size | why it is here |
 |---|---|---|---|
-| `whisper:base` *(default)* | faster-whisper | ~75 MB | the long-standing default, 6.0% WER / 0.26 s on the SAPI set |
+| `whisper:base` | faster-whisper | ~75 MB | the previous default, 6.0% WER / 0.26 s on the SAPI set |
 | `whisper:distil-small.en` | faster-whisper | ~170 MB | `small`'s accuracy for less CPU (4.8% / 0.67 s measured) |
 | `whisper:small.en` | faster-whisper | ~250 MB | 4.8% / 0.80 s measured |
 | `whisper:distil-large-v3` | faster-whisper | ~750 MB | best Whisper on noisy speech; **seconds** per utterance on CPU |
 | `whisper:large-v3-turbo` | faster-whisper | ~810 MB | as above, slightly worse on noise |
-| `parakeet:v2` | sherpa-onnx (NVIDIA Parakeet TDT 0.6B, English) | ~640 MB | ~6% WER on the Open ASR leaderboard vs ~10% for Whisper base; cost scales with audio |
+| `parakeet:v2` *(default)* | sherpa-onnx (NVIDIA Parakeet TDT 0.6B, English) | ~640 MB | 4.8% WER / 0.10 s on the SAPI set; ~6% on the Open ASR leaderboard vs ~10% for Whisper base; cost scales with audio |
 | `parakeet:v3` | sherpa-onnx (Parakeet TDT 0.6B, 25 languages) | ~640 MB | multilingual sibling |
 | `moonshine:base` | sherpa-onnx (Useful Sensors Moonshine) | ~270 MB | built for short utterances; the fastest here |
 | `moonshine:tiny` | sherpa-onnx | ~120 MB | smallest |
@@ -811,15 +818,15 @@ Two findings from building this suite are baked back into the code:
 See [docs/status/TODO.md](docs/status/TODO.md) for the full write-up of each, including what was tested
 and ruled out. In short:
 
-- **The VAD cannot hear quiet speech.** `SPEECH_RMS` is an absolute threshold, so
-  subdued delivery is never segmented and the app emits nothing for it — on
-  RAVDESS that dropped 5 of 10 sample clips, and they were the *sad* and *neutral*
-  ones. Backwards for a tool meant to make masked emotion legible. The VAD strip
-  in `/remote.html` now diagnoses it; the fix (a noise-floor-relative threshold)
-  is not written.
-- **Whisper `base` is untested in a real room.** The ASR comparison used clean
-  synthetic speech, which cannot see noise robustness. Do not switch models on
-  that evidence alone.
+- **The adaptive VAD is unconfirmed on real hardware.** A fixed `SPEECH_RMS`
+  used to drop subdued speech entirely — 5 of 10 RAVDESS sample clips, the *sad*
+  and *neutral* ones, backwards for a tool meant to make masked emotion legible.
+  The threshold is now noise-floor-relative and segments all 10, but that is a
+  studio-audio result; the pendant's mic in a real room has not been checked, and
+  `MIN_UTTERANCE_MS` was left as it was pending that.
+- **Parakeet v2 is untested in a real room.** It became the default on the SAPI
+  comparison, which cannot see noise robustness; re-run `python -m eval.asr_eval`
+  on real recordings before trusting it over the Whisper keys.
 - **The default SER backend has no measured dimensions.** Arousal and dominance
   are derived from the label distribution, so they grade only when the model is
   torn; valence is left to the LLM. Whether that beats a measured head on real

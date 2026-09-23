@@ -6,7 +6,7 @@ Guidance for Claude when working in this repo. Keep it current when conventions 
 
 **emtext** — a live conversation interpreter for a neurodivergent listener. A client
 streams mic audio over a websocket; the server segments it into utterances, transcribes
-each (Whisper, CPU), scores how the voice sounded (SER, CPU), decides whose voice it was
+each (Parakeet by default, Whisper selectable, CPU), scores how the voice sounded (SER, CPU), decides whose voice it was
 (speaker id, CPU), and reads the emotional subtext (local LLM via Ollama, GPU). The
 listener's own lines get no read. A hold on the pendant's button saves the moment as a
 clip for later review. A browser page is the test client; an **M5StickS3 pendant
@@ -89,6 +89,12 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   the guard rails against over-reading tone into plain speech. The `mismatch`
   pairs (identical text, opposite voice) are the only check that the SER signal
   is actually being used; a model ignoring `voice` scores 0 there.
+- An audio-input LLM (Gemma 4 E4B, Voxtral Mini, Qwen2.5-Omni behind
+  `llama-server`) as a one-shot replacement for ASR+SER+LLM was measured on
+  2026-09-22 and **not adopted**: the models answer `neutral` on ~all RAVDESS
+  audio and follow a wrong transcript over the delivery. The harness was removed
+  with the decision; the verdict, method and tables are in
+  `docs/reports/audio-llm.md`. Do not re-open this without new evidence.
 
 ## Branches, CI and releases (how work ships)
 
@@ -138,6 +144,7 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under
   `models/asr/`), exactly **one resident** at a time, swapped behind the function by
   `select(key)` (blocking, executor) so `main.py`'s bound `transcribe` keeps working.
+  Default `parakeet:v2` (since 2026-09-22; an explicit `WHISPER_MODEL` still wins).
   Import loads `config.ASR_MODEL` synchronously and raises on failure, as before; a
   later switch that fails keeps the old model and reports in `status()`. Only catalogue
   keys are ever accepted from the wire. `build(key)` makes a backend without installing

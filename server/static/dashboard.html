@@ -182,6 +182,18 @@
   .clip button { min-height: 34px; padding: 0 12px; font-size: 12.5px; }
   audio { width: 100%; margin-top: 12px; border-radius: 999px; }
   .note { font-size: 12px; color: var(--ink-2); margin-top: 12px; line-height: 1.5; }
+
+  /* Transcript log switches: a master switch, then one pressed well per field. */
+  .translog { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .translog .switch { font-size: 14px; display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 999px; box-shadow: var(--raise-sm); cursor: pointer; }
+  .translog .fields { display: flex; gap: 8px; flex-wrap: wrap; }
+  .translog .chk { font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center;
+    gap: 6px; padding: 6px 12px; border-radius: 999px; box-shadow: var(--press-sm); cursor: pointer; }
+  .translog .chk:has(input:checked) { color: var(--ink); box-shadow: var(--raise-sm); }
+  .translog .chk:has(input:disabled) { opacity: .5; cursor: default; }
+  .translog input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+  .translog .stat { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -287,6 +299,24 @@
   <div class="card wide">
     <h2>Recent utterances</h2>
     <div id="recent"><div class="empty">nothing yet — talk to the app and it appears here</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Transcript log</h2>
+    <div class="translog">
+      <label class="switch"><input type="checkbox" id="tl-enabled"> <b>Keep a log</b></label>
+      <div class="fields" id="tl-fields"></div>
+      <span class="stat" id="tl-stat"></span>
+    </div>
+    <div class="note">
+      Records each utterance the server handles to <code>logs/transcripts/</code>,
+      one JSON line per utterance plus, with <b>audio</b> ticked, its WAV. Everything
+      is off by default because the audio is other people's speech; tick only what
+      you need. Changes apply at once and are <b>not persisted</b> — a restart returns
+      to <code>TRANSCRIPT_LOG_ENABLED</code> / <code>TRANSCRIPT_LOG_FIELDS</code>. The
+      WAV store is a rolling cap (<code>TRANSCRIPT_LOG_MAX_AUDIO</code>). Export for
+      ASR scoring with <code>python -m server.translog --export DIR</code>.
+    </div>
   </div>
 
   <div class="card wide">
@@ -564,6 +594,11 @@ function render(d) {
       : c.speaker_ready ? `enrolled (${c.speaker_enrolled} sentences)`
       : `NOT ENROLLED (${c.speaker_enrolled}/${c.speaker_min_enroll}) — /enroll.html`,
       !c.speaker_available ? "warn" : c.speaker_ready ? "ok" : "warn"],
+    // Retention is the thing to be honest about on this panel.
+    ["transcript log", !c.transcript_log || !c.transcript_log.active ? "off"
+      : Object.entries(c.transcript_log.fields).filter(([, on]) => on).map(([k]) => k).join(", ") +
+        ` · ${c.transcript_log.audio_files}/${c.transcript_log.max_audio} wavs`,
+      c.transcript_log && c.transcript_log.active && c.transcript_log.fields.audio ? "warn" : ""],
     ["SPEECH_RMS", String(c.speech_rms)],
     ["END_SILENCE_MS", String(c.end_silence_ms)],
     ["auth", c.auth_enabled ? "enabled" : "OPEN — do not tunnel",
@@ -829,6 +864,56 @@ async function loadClips() {
   }
 }
 
+// ----- transcript log switches ----------------------------------------------
+// Each checkbox posts immediately; the server answers with the full state so
+// the card always renders what the process actually has, not what was clicked.
+const TL_LABELS = {
+  audio: "audio (the WAV)", transcript: "transcription", result: "result (tone + read)",
+  voice: "voice (SER)", speaker: "speaker id", timing: "timings",
+};
+let tlBusy = false;
+
+function renderTranslog(s) {
+  const master = el("tl-enabled");
+  master.checked = !!s.enabled;
+  const box = el("tl-fields");
+  box.replaceChildren();
+  for (const name of s.available_fields || Object.keys(s.fields || {})) {
+    const lab = document.createElement("label");
+    lab.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.dataset.field = name;
+    cb.checked = !!(s.fields && s.fields[name]);
+    cb.disabled = !s.enabled;
+    cb.onchange = () => postTranslog({fields: {[name]: cb.checked}});
+    lab.append(cb, document.createTextNode(" " + (TL_LABELS[name] || name)));
+    box.appendChild(lab);
+  }
+  const on = s.active;
+  el("tl-stat").textContent = (on ? "logging" : "not logging") +
+    ` · ${s.audio_files}/${s.max_audio} wavs on disk` +
+    (s.days ? ` · ${s.days} day${s.days === 1 ? "" : "s"} recorded` : "");
+  el("tl-stat").className = "stat " + (on && s.fields && s.fields.audio ? "warn" : "");
+}
+
+async function postTranslog(body) {
+  if (tlBusy) return;
+  tlBusy = true;
+  try {
+    renderTranslog(await api("/api/translog", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }));
+  } catch (e) { alert(e.message); await loadTranslog(); }
+  finally { tlBusy = false; }
+}
+
+async function loadTranslog() {
+  try { renderTranslog(await api("/api/translog")); }
+  catch (e) { el("tl-stat").textContent = e.message; }
+}
+el("tl-enabled").addEventListener("change", (e) => postTranslog({enabled: e.target.checked}));
+
 // ----- poll -----------------------------------------------------------------
 async function tick() {
   try {
@@ -846,6 +931,7 @@ async function tick() {
 tick();
 loadModels();
 loadAsr();
+loadTranslog();
 loadClips();
 // 2s is responsive without hammering: /api/stats reads cached GPU data and
 // psutil counters, so it is cheap, but there is no reason to poll faster than

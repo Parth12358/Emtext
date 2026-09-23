@@ -141,13 +141,15 @@ the LLM judged them on wrong words. SER and WER columns are still usable.
 
 ## Whisper accuracy in a noisy room
 
-**Status:** default switched to `parakeet:v2` on 2026-09-22; the real-room
+**Status:** default switched to `parakeet:v3` on 2026-09-22; the real-room
 measurement is still owed · **Affects:** `server/config.py` (`ASR_MODEL`),
 `server/transcriber.py`
 
-Update 2026-09-22: `ASR_MODEL` now defaults to `parakeet:v2`. On the SAPI set
-it scored 4.8% WER at 0.10 s per utterance against `whisper:base`'s 6.0% at
-0.26 s, and as a transducer it does not hallucinate on silence. `WHISPER_MODEL`
+Update 2026-09-22: `ASR_MODEL` now defaults to `parakeet:v3` (multilingual; it
+was briefly `parakeet:v2` the same day). On the SAPI set v3 scored 6.0% WER at
+0.10 s per utterance, level with `whisper:base`'s 6.0% at 0.26 s and one
+numeral-formatting error behind v2's 4.8%; as a transducer it does not
+hallucinate on silence, and it covers 25 languages at the same cost. `WHISPER_MODEL`
 set explicitly still wins (`whisper:<name>`), so nobody's start script changes
 behaviour silently. The caveat below is unchanged: this was decided on clean
 synthetic speech, and a real recording must confirm it.

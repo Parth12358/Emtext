@@ -67,7 +67,7 @@ VRAM), not estimated.
 | stage | model | device | cost per utterance |
 |---|---|---|---|
 | VAD | energy segmenter | — | negligible |
-| transcription | Parakeet TDT 0.6B v2 (int8, sherpa-onnx) | CPU | ~0.10 s |
+| transcription | Parakeet TDT 0.6B v3 (int8, sherpa-onnx) | CPU | ~0.10 s |
 | speech emotion | `emotion2vec_plus_base` | CPU | ~0.12 s |
 | interpretation | `qwen3:14b` via Ollama | GPU | ~0.89 s |
 
@@ -90,6 +90,15 @@ before the SER swap.
   with playback and delete.
 - **`/remote.html`** — connection diagnostics plus a live VAD strip showing which
   audio frames cleared `SPEECH_RMS`, which is how segmentation gets tuned.
+- **A transcript log** (`logs/transcripts/`, gitignored), **off by default**: the
+  dashboard's "Transcript log" card switches it on for a session and picks what to
+  keep per utterance -- audio (the WAV), transcription, result (tone + read), voice,
+  speaker id, timings -- as one JSON line each, with a rolling cap on the audio. It
+  exists so the ASR choice can finally be made on this microphone and room instead
+  of synthetic speech: `python -m server.translog --export DIR` writes an
+  `experiments/asr/`-style set whose draft `.txt` references you correct by ear,
+  then `python -m eval.asr_eval --dir DIR` scores every backend on it. Ticking
+  `audio` retains other people's speech; the card says so.
 - **An eval suite** (`python -m eval.run_all`) scoring SER, ASR, the interpreter
   LLM, and the whole pipeline against RAVDESS. Results are committed under
   `eval/results/`.
@@ -112,9 +121,10 @@ before the SER swap.
   `[SPEECH_RMS_MIN, SPEECH_RMS]`) and segments 10 of 10 RAVDESS test clips where a
   fixed threshold dropped 5, but nobody has watched it in a real room yet. The VAD
   strip in `/remote.html` shows the live floor and threshold for exactly that.
-- **The ASR default was chosen on synthetic speech.** Parakeet v2 replaced Whisper
-  `base` on the SAPI set (4.8% vs 6.0% WER at under half the cost), but that set
-  cannot see noise robustness; a real-microphone comparison is still owed.
+- **The ASR default was chosen on synthetic speech.** Parakeet v3 replaced Whisper
+  `base` on the SAPI set (the same 6.0% WER at under half the cost, plus 25
+  languages), but that set cannot see noise robustness; a real-microphone
+  comparison is still owed.
 - The current SER backend supplies **no valence**; arousal and dominance are
   derived from its class distribution, and the mismatch rule is built on those
   two axes (valence is left to the LLM, which reads it from the words).
@@ -185,7 +195,7 @@ The first run also downloads the models, which are cached after that:
 
 | model | size | notes |
 |-------|------|-------|
-| Parakeet TDT 0.6B v2 (sherpa-onnx, int8) | ~640 MB | transcription, CPU. Fetched into `models/asr/` on first start; `ASR_MODEL=whisper:base` restores the old default |
+| Parakeet TDT 0.6B v3 (sherpa-onnx, int8) | ~640 MB | transcription, CPU. Fetched into `models/asr/` on first start; `ASR_MODEL=whisper:base` restores the old default |
 | `emotion2vec/emotion2vec_plus_base` | ~1.07 GB | speech emotion, CPU. Two thirds of that file is optimizer state inference never touches; `python -m eval.slim_ser_ckpt` writes a 355 MB copy under `models/` that `SER_MODEL_DIR` picks up automatically and saves ~1.4 GB of RAM |
 | CAM++ (`cam++`, via funasr) | ~27 MB | speaker id, CPU. Skipped with `SPEAKER_ENABLED=0` |
 
@@ -492,7 +502,7 @@ python -m eval.bench --skip-llm   # audio stages only (no Ollama needed)
 ```
 
 Measured on a 12-core CPU + Arc B580, `qwen3:14b`. Transcription was Whisper
-`base` when these were taken; `parakeet:v2`, the default since 2026-09-22,
+`base` when these were taken; `parakeet:v3`, the default since 2026-09-22,
 measured ~0.10 s per utterance on the same set:
 
 | stage | model | device | per utterance |
@@ -709,8 +719,8 @@ and means `whisper:<name>`.
 | `whisper:small.en` | faster-whisper | ~250 MB | 4.8% / 0.80 s measured |
 | `whisper:distil-large-v3` | faster-whisper | ~750 MB | best Whisper on noisy speech; **seconds** per utterance on CPU |
 | `whisper:large-v3-turbo` | faster-whisper | ~810 MB | as above, slightly worse on noise |
-| `parakeet:v2` *(default)* | sherpa-onnx (NVIDIA Parakeet TDT 0.6B, English) | ~640 MB | 4.8% WER / 0.10 s on the SAPI set; ~6% on the Open ASR leaderboard vs ~10% for Whisper base; cost scales with audio |
-| `parakeet:v3` | sherpa-onnx (Parakeet TDT 0.6B, 25 languages) | ~640 MB | multilingual sibling |
+| `parakeet:v2` | sherpa-onnx (NVIDIA Parakeet TDT 0.6B, English) | ~640 MB | 4.8% WER / 0.10 s on the SAPI set; ~6% on the Open ASR leaderboard vs ~10% for Whisper base; cost scales with audio |
+| `parakeet:v3` *(default)* | sherpa-onnx (Parakeet TDT 0.6B, 25 languages) | ~640 MB | 6.0% WER / 0.10 s on the SAPI set (one numeral-formatting miss more than v2); same speed, multilingual |
 | `moonshine:base` | sherpa-onnx (Useful Sensors Moonshine) | ~270 MB | built for short utterances; the fastest here |
 | `moonshine:tiny` | sherpa-onnx | ~120 MB | smallest |
 | `sensevoice:small` | sherpa-onnx (FunAudioLLM SenseVoice) | ~230 MB | also tags language / emotion / laughter events (logged, not used yet) |
@@ -824,7 +834,7 @@ and ruled out. In short:
   The threshold is now noise-floor-relative and segments all 10, but that is a
   studio-audio result; the pendant's mic in a real room has not been checked, and
   `MIN_UTTERANCE_MS` was left as it was pending that.
-- **Parakeet v2 is untested in a real room.** It became the default on the SAPI
+- **Parakeet v3 is untested in a real room.** It became the default on the SAPI
   comparison, which cannot see noise robustness; re-run `python -m eval.asr_eval`
   on real recordings before trusting it over the Whisper keys.
 - **The default SER backend has no measured dimensions.** Arousal and dominance
@@ -945,6 +955,7 @@ server/
   ser.py          speech emotion recognition: emotion2vec / MERaLiON (CPU)
   speaker.py      speaker id: is this the listener's own voice? CAM++ (CPU)
   clips.py        clips: per-connection retention ring + wav/json save + listing
+  translog.py     transcript log: every utterance's text + audio under logs/transcripts/, for re-scoring ASR on real speech
   interpreter.py  Ollama wrapper + rolling conversation context
   metrics.py      in-memory rolling metrics for the dashboard (no DB)
   dashboard.py    token-gated /api/* : stats, model select/evict, clips, speaker enrol/forget

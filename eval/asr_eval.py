@@ -84,15 +84,22 @@ def wer(reference: str, hypothesis: str) -> tuple[int, int]:
     return prev[-1], len(ref)
 
 
-def load_set() -> list[tuple[str, np.ndarray, str]]:
-    if not ASR_DIR.exists():
+def load_set(asr_dir: Path = ASR_DIR) -> list[tuple[str, np.ndarray, str]]:
+    """Every `name.wav` with a sibling `name.txt` reference under `asr_dir`.
+
+    The default is the synthetic SAPI set. `python -m server.translog --export`
+    writes a folder of the same shape from real logged speech; pass it with
+    `--dir` once its draft .txt references have been corrected by ear.
+    """
+    if not asr_dir.exists():
         raise SystemExit(
-            "no ASR set found. Generate it first:\n"
+            f"no ASR set found at {asr_dir}. Generate the synthetic one first:\n"
             "  powershell -NoProfile -ExecutionPolicy Bypass -File "
-            "experiments\\make_asr_set.ps1"
+            "experiments\\make_asr_set.ps1\n"
+            "or export real speech: python -m server.translog --export DIR"
         )
     items = []
-    for wav_path in sorted(ASR_DIR.glob("*.wav")):
+    for wav_path in sorted(asr_dir.glob("*.wav")):
         txt_path = wav_path.with_suffix(".txt")
         if not txt_path.exists():
             continue
@@ -104,13 +111,16 @@ def load_set() -> list[tuple[str, np.ndarray, str]]:
             txt_path.read_text(encoding="utf-8-sig").strip(),
         ))
     if not items:
-        raise SystemExit(f"no .wav/.txt pairs in {ASR_DIR}")
+        raise SystemExit(f"no .wav/.txt pairs in {asr_dir}")
     return items
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--models", nargs="*", help="override the model list")
+    ap.add_argument("--dir", type=Path, default=ASR_DIR,
+                    help="folder of name.wav + name.txt pairs (default: the SAPI set; "
+                         "use a `server.translog --export` folder for real speech)")
     ap.add_argument("--csv", default="eval/asr_results.csv",
                     help="per-utterance CSV output path")
     ap.add_argument("--quiet", action="store_true",
@@ -122,12 +132,16 @@ def main() -> None:
     # model without touching the resident one.
     from server import transcriber
 
-    items = load_set()
+    items = load_set(args.dir)
     total_audio = sum(a.size for _, a, _ in items) / config.SAMPLE_RATE
     print(f"{len(items)} utterances, {total_audio:.1f}s of audio, "
           f"compute_type={config.WHISPER_COMPUTE_TYPE} on {config.WHISPER_DEVICE}")
-    print("(Windows SAPI speech: clean and accent-free -- a relative ranking, "
-          "not real-world WER)\n")
+    if args.dir == ASR_DIR:
+        print("(Windows SAPI speech: clean and accent-free -- a relative ranking, "
+              "not real-world WER)\n")
+    else:
+        print(f"(real speech from {args.dir}; the .txt references are only as good "
+              "as the ear that corrected them)\n")
 
     wanted = args.models or [m for m, _ in DEFAULT_MODELS]
     notes = dict(DEFAULT_MODELS)

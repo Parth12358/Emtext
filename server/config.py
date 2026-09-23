@@ -155,10 +155,12 @@ WHISPER_LANGUAGE: str = _env_str("WHISPER_LANGUAGE", "en")
 # returns here. Exactly one model is resident at a time -- the large ones are
 # 1-1.5 GB each and this process is already ~1.3-2 GB.
 #
-# Default: parakeet:v2 (switched 2026-09-22). On the SAPI set it matched the
-# best Whisper WER (4.8%, vs 6.0% for base) at 0.10 s per utterance against
-# base's 0.26 s, and it does not invent text on silence. Its int8 archive
-# (~640 MB) is fetched on first start if models/asr/ does not already hold it.
+# Default: parakeet:v3 (multilingual, 25 languages). On the SAPI set it scored
+# 6.0% WER at 0.10 s per utterance -- level with whisper:base's 6.0% at 0.26 s,
+# a point behind the English-only parakeet:v2's 4.8% (the one extra error is
+# "415" vs "4.15", numeral formatting) -- and it does not invent text on
+# silence. Chosen over v2 for the language coverage at the same cost. Its int8
+# archive (~640 MB) is fetched on first start if models/asr/ does not hold it.
 # The caveat in docs/status/TODO.md still stands: no real-room recording has
 # been scored yet, so re-run `python -m eval.asr_eval` once one exists.
 #
@@ -166,7 +168,7 @@ WHISPER_LANGUAGE: str = _env_str("WHISPER_LANGUAGE", "en")
 # key is derived as whisper:<WHISPER_MODEL>, so existing start scripts keep
 # their Whisper. Only a fully unset environment lands on Parakeet.
 ASR_MODEL: str = _env_str("ASR_MODEL", "") or (
-    f"whisper:{WHISPER_MODEL}" if os.environ.get("WHISPER_MODEL") else "parakeet:v2"
+    f"whisper:{WHISPER_MODEL}" if os.environ.get("WHISPER_MODEL") else "parakeet:v3"
 )
 # Where sherpa-onnx model archives are unpacked (gitignored). One directory per
 # catalogue entry, named after the upstream archive.
@@ -438,3 +440,37 @@ CLIP_RETENTION_S: float = _env_float("CLIP_RETENTION_S", 45.0)
 # than silently evicting moments the user deliberately kept -- deleting is the
 # user's call, from the dashboard.
 CLIPS_MAX_FILES: int = _env_int("CLIPS_MAX_FILES", 200)
+
+# --- Transcript log (server/translog.py) -------------------------------------
+# A running record of every utterance the server transcribed -- text, ASR
+# model, tone/read, speaker label, timings -- plus the utterance's audio, so
+# ASR models can later be re-scored on the speech this listener actually hears
+# (see docs/status/TODO.md: every ASR decision so far rests on synthetic SAPI
+# speech). `python -m server.translog --export DIR` turns the log into an
+# `experiments/asr/`-shaped set for `eval.asr_eval`, with the transcripts as
+# draft references to correct by hand.
+#
+# Retention note: with audio on, this keeps third-party speech, which the
+# pendant brief otherwise avoids (clips are the explicit exception). So it is
+# OFF by default, field by field, and switched on from the dashboard's
+# "Transcript log" card for a session -- runtime only, never persisted, the
+# same rule as the model switches. The env vars below set the startup state
+# for anyone who wants it on from boot; the audio store is a rolling cap
+# either way, so it cannot grow without bound.
+TRANSCRIPT_LOG_ENABLED: bool = _env_bool("TRANSCRIPT_LOG_ENABLED", False)
+# Which parts of an utterance to keep, as a comma list. The record always
+# carries id, timestamp, duration and the ASR model key; everything else is
+# opt-in:
+#   audio       the utterance WAV (the part that makes ASR re-scoring possible)
+#   transcript  the text the ASR produced
+#   result      the interpreter's tone and read
+#   voice       the SER dict (emotion, confidence, arousal, dominance)
+#   speaker     the speaker-id label and score
+#   timing      per-stage seconds (whisper_s, ser_s, llm_s)
+TRANSCRIPT_LOG_FIELDS: str = _env_str("TRANSCRIPT_LOG_FIELDS", "")
+# One JSONL file per day plus an audio/ folder, relative to the project root.
+TRANSCRIPT_LOG_DIR: str = _env_str("TRANSCRIPT_LOG_DIR", "logs/transcripts")
+# Rolling cap on stored utterance WAVs; the oldest are deleted past it. A 3 s
+# utterance is ~100 KB, so 5000 files is roughly 500 MB and a few weeks of
+# conversation. The JSONL text rows are not capped -- they are tiny.
+TRANSCRIPT_LOG_MAX_AUDIO: int = _env_int("TRANSCRIPT_LOG_MAX_AUDIO", 5000)

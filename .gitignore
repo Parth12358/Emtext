@@ -56,3 +56,6 @@ experiments/spk/
 
 # arduino-cli --export-binaries output (CI and local compile checks)
 firmware/emtext/build/
+
+# Transcript log: every utterance the server heard, text + audio (server/translog.py). Never commit.
+logs/

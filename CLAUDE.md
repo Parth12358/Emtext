@@ -144,12 +144,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under
   `models/asr/`), exactly **one resident** at a time, swapped behind the function by
   `select(key)` (blocking, executor) so `main.py`'s bound `transcribe` keeps working.
-  Default `parakeet:v2` (since 2026-09-22; an explicit `WHISPER_MODEL` still wins).
+  Default `parakeet:v3` (multilingual; an explicit `WHISPER_MODEL` still wins).
   Import loads `config.ASR_MODEL` synchronously and raises on failure, as before; a
   later switch that fails keeps the old model and reports in `status()`. Only catalogue
   keys are ever accepted from the wire. `build(key)` makes a backend without installing
   it (what `eval/asr_eval.py` uses). Blocking CPU call — callers must run it off the
-  event loop. Re-run `python -m eval.asr_eval` after adding a backend.
+  event loop. Re-run `python -m eval.asr_eval` after adding a backend; with
+  `--dir <folder>` it scores a `server.translog --export` set of real speech instead
+  of the synthetic SAPI lines.
 - `server/ser.py` — speech emotion recognition (emotion2vec by default, MERaLiON
   opt-in). Model loaded **once** at import, on CPU. The rest of the codebase knows
   only `ser.analyze()` and `ser.available()` — swapping the model must not touch any
@@ -178,6 +180,11 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   no profile enrolled the prompt is byte-identical to the measured one and
   `SYSTEM_PROMPT` is untouched. `remember()` adds a line without interpreting it.
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
+- `server/translog.py` — the transcript log: one JSON line per utterance
+  (`logs/transcripts/<day>.jsonl`: transcript, `asr_model`, tone, read, speaker,
+  voice, timings) plus the utterance WAV under `audio/` with a rolling cap. Same
+  contract as `clips.py`: blocking file I/O, run in the executor, **never raises**,
+  only this module knows the layout. `--stats` and `--export DIR` in its `__main__`.
 - `server/clips.py` — "save this moment" (hold-to-record on the pendant). `Recent`
   is a per-connection ring of the last few utterances keyed by the wire `id`
   (bounded by count AND age, dropped with the connection); `save()` takes the
@@ -241,6 +248,19 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   utterances, and PCM deflates ~21:1, so ~1.6 KB on the wire bought a full
   Whisper+SER+LLM job. A conforming client never approaches any of them, so the
   ESP32 contract is unaffected — but don't "simplify" them away.
+- The **transcript log** (`server/translog.py`) is the second retention path and
+  the one the brief did NOT ask for, so it is **off by default, field by field**:
+  the dashboard's "Transcript log" card has a master switch plus `audio`,
+  `transcript`, `result`, `voice`, `speaker`, `timing` checkboxes
+  (`GET/POST /api/translog`), runtime only, not persisted -- a restart returns to
+  `TRANSCRIPT_LOG_ENABLED` / `TRANSCRIPT_LOG_FIELDS`. Rows go to
+  `logs/transcripts/<day>.jsonl`; with `audio` on, the WAV goes beside it under a
+  rolling cap (`TRANSCRIPT_LOG_MAX_AUDIO`, oldest evicted). Its purpose is scoring ASR
+  on this mic and room: `python -m server.translog --export DIR` writes an
+  `experiments/asr/`-shaped set (needs `audio` + `transcript` logged) whose `.txt`
+  drafts must be corrected by ear before `eval.asr_eval --dir` trusts them. `logs/`
+  is gitignored. Never raises, fire-and-forget from `main.py`, never on the read's
+  latency path.
 - Clips are the one sanctioned retention of third-party audio: explicit
   user action, visible confirmation, one clip (a bounded id range) per save. `CLIPS_MAX_FILES`
   is load-bearing (a hostile client through the tunnel could otherwise fill

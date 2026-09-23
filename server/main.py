@@ -37,7 +37,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clips, config, dashboard, metrics, ser, speaker
+from . import clips, config, dashboard, metrics, ser, speaker, translog, transcriber
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -266,6 +266,31 @@ def _log_task_error(task: asyncio.Task) -> None:
         metrics.record_event("utterance_errors")
 
 
+def _log_transcript(loop, uid, audio, transcript, who, voice, result,
+                    whisper_s, ser_s, llm_s) -> None:
+    """Hand one finished utterance to the transcript log, off the event loop.
+
+    Fire-and-forget on purpose: the log is for improving the ASR later, so it
+    must never add to the latency of the read, and `translog.record` never
+    raises, so there is nothing to await for. Skipped entirely when disabled.
+    """
+    if not translog.enabled():
+        return
+    entry = {
+        "uid": uid,
+        "asr_model": transcriber.current_key(),
+        "transcript": transcript,
+        "speaker": _speaker_field(who),
+        "voice": voice,
+        "tone": result.get("tone") if result else None,
+        "read": result.get("read") if result else None,
+        "whisper_s": round(whisper_s, 3),
+        "ser_s": round(ser_s, 3),
+        "llm_s": round(llm_s, 3) if llm_s is not None else None,
+    }
+    loop.run_in_executor(None, translog.record, entry, audio)
+
+
 def _speaker_field(who: dict | None) -> dict | None:
     """The optional `speaker` object for the wire, or None to omit it.
 
@@ -344,6 +369,8 @@ async def _process_utterance(
         interpreter.remember(transcript, who="user")
         metrics.record_speaker(label, spk_s)
         metrics.record_event("user_line")
+        _log_transcript(loop, uid, audio, transcript, who, None, None,
+                        whisper_s, ser_s, None)
         return
 
     metrics.record_speaker(label, spk_s)
@@ -369,6 +396,8 @@ async def _process_utterance(
     # Keep the retention ring current so a `save` that names this id gets the
     # read as well as the audio. Cheap, and a no-op if the entry aged out.
     recent.update(uid, tone=result.get("tone"), read=result.get("read"), voice=voice)
+    _log_transcript(loop, uid, audio, transcript, who, voice, result,
+                    whisper_s, ser_s, llm_s)
 
     message = {
         "type": "read",

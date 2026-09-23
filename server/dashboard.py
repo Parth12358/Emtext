@@ -37,7 +37,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import clips, config, metrics, ser, speaker, transcriber
+from . import clips, config, metrics, ser, speaker, transcriber, translog
 from .segmenter import Segmenter
 
 log = logging.getLogger(__name__)
@@ -177,6 +177,9 @@ async def stats(request: Request,
             "speaker_enrolled": speaker.profile.count,
             "speaker_min_enroll": config.SPEAKER_MIN_ENROLL,
             "speaker_ready": speaker.available() and speaker.profile.ready(),
+            # The running transcript log (server/translog.py): what is being
+            # retained and how much, so nobody is surprised by it later.
+            "transcript_log": translog.stats(),
             "speech_rms": config.SPEECH_RMS,
             "end_silence_ms": config.END_SILENCE_MS,
             "min_utterance_ms": config.MIN_UTTERANCE_MS,
@@ -539,3 +542,34 @@ async def select_asr(body: AsrSelectRequest,
     # "loading" rather than the stale previous state.
     await asyncio.sleep(0.05)
     return {"requested": key, "status": transcriber.status(), "persisted": False}
+
+
+# ---------------------------------------------------------------------------
+# Transcript log switches (server/translog.py)
+# ---------------------------------------------------------------------------
+# Runtime only, not persisted -- the same rule as the model switches -- and off
+# by default because with audio on it retains other people's speech. The
+# dashboard card is the intended way to turn it on for a session.
+
+class TranslogRequest(BaseModel):
+    enabled: bool | None = None
+    fields: dict[str, bool] | None = None
+
+
+@router.get("/translog")
+async def translog_state(token: str | None = Query(None),
+                         x_auth_token: str | None = Header(None)) -> dict:
+    """Current switches plus what is on disk."""
+    _require_token(token, x_auth_token)
+    return {**translog.stats(), "available_fields": list(translog.FIELDS), "persisted": False}
+
+
+@router.post("/translog")
+async def translog_set(body: TranslogRequest,
+                       token: str | None = Query(None),
+                       x_auth_token: str | None = Header(None)) -> dict:
+    """Switch the log, or individual fields, on or off for this process."""
+    _require_token(token, x_auth_token)
+    translog.set_options(body.enabled, body.fields)
+    log.info("dashboard: transcript log -> %s", translog.options())
+    return {**translog.stats(), "available_fields": list(translog.FIELDS), "persisted": False}

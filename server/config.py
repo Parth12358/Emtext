@@ -155,9 +155,19 @@ WHISPER_LANGUAGE: str = _env_str("WHISPER_LANGUAGE", "en")
 # returns here. Exactly one model is resident at a time -- the large ones are
 # 1-1.5 GB each and this process is already ~1.3-2 GB.
 #
-# Back-compat: if ASR_MODEL is unset but WHISPER_MODEL is, the key is derived as
-# whisper:<WHISPER_MODEL>, so existing start scripts keep working.
-ASR_MODEL: str = _env_str("ASR_MODEL", "") or f"whisper:{WHISPER_MODEL}"
+# Default: parakeet:v2 (switched 2026-09-22). On the SAPI set it matched the
+# best Whisper WER (4.8%, vs 6.0% for base) at 0.10 s per utterance against
+# base's 0.26 s, and it does not invent text on silence. Its int8 archive
+# (~640 MB) is fetched on first start if models/asr/ does not already hold it.
+# The caveat in docs/status/TODO.md still stands: no real-room recording has
+# been scored yet, so re-run `python -m eval.asr_eval` once one exists.
+#
+# Back-compat: if ASR_MODEL is unset but WHISPER_MODEL is set explicitly, the
+# key is derived as whisper:<WHISPER_MODEL>, so existing start scripts keep
+# their Whisper. Only a fully unset environment lands on Parakeet.
+ASR_MODEL: str = _env_str("ASR_MODEL", "") or (
+    f"whisper:{WHISPER_MODEL}" if os.environ.get("WHISPER_MODEL") else "parakeet:v2"
+)
 # Where sherpa-onnx model archives are unpacked (gitignored). One directory per
 # catalogue entry, named after the upstream archive.
 ASR_MODELS_DIR: str = _env_str("ASR_MODELS_DIR", "models/asr")

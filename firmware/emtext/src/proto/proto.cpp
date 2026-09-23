@@ -53,6 +53,10 @@ proto::Type proto::parse(const char* json, Frame& out) {
       out.valence = doc["voice"]["valence"] | -1.0f;  // null -> -1 (absent)
       out.arousal = doc["voice"]["arousal"] | -1.0f;
     }
+    if (doc["emotion"].is<JsonObject>()) {            // optional: the headline emotion (7 labels)
+      copyStr(out.shown, sizeof(out.shown), doc["emotion"]["label"] | "");
+      out.adjusted = doc["emotion"]["adjusted"] | false;
+    }
     if (doc["confidence"].is<JsonObject>()) {         // optional: how sure the server was
       copyStr(out.confLevel, sizeof(out.confLevel), doc["confidence"]["level"] | "");
       out.confidence = doc["confidence"]["score"] | -1.0f;

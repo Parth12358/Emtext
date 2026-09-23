@@ -25,7 +25,7 @@ namespace {
   void (*cbSetting)(display::Setting) = nullptr;      // cross-module action from a row
 
   String gRead = "";            // no text until a real read arrives
-  String gTone = "positive";    // default heart is RED (positive) on start
+  String gTone = "neutral";     // the heart is quiet gray until the first read
   String gTranscript = "";
   bool   gLowConf = false;
   bool   connReady = false;
@@ -62,10 +62,22 @@ namespace {
   uint16_t cFaint(){ return M5.Display.color565( 90,  90,  90); }
 
   struct Bar { uint16_t color; bool dashed; bool show; };
-  // Undertale soul colors carry the tone on the heart mark (pure color-only, per design).
-  // `show` also gates the History tick: neutral shows no tick (absence is the signal).
+  // Undertale soul colors carry the emotion on the heart mark (pure color-only, per
+  // design). Since fw 0.2.0 the key is the server's headline EMOTION -- the seven
+  // labels of the voice model -- and the six chromatic souls map onto the six
+  // non-neutral ones. The five old tone names still resolve, so an older server
+  // (which sends only `tone`) keeps its colours. `show` also gates the History
+  // tick: neutral shows no tick (absence is the signal).
   Bar toneBar(const String& t) {
     auto& d = M5.Display;
+    // emotions (the headline)
+    if (t == "angry")     return { d.color565(255,   0,  40), false, true };  // red    -- Determination
+    if (t == "surprised") return { d.color565(255, 140,   0), false, true };  // orange -- Bravery
+    if (t == "happy")     return { d.color565(255, 216,   0), false, true };  // yellow -- Justice
+    if (t == "disgusted") return { d.color565(  0, 192,   0), false, true };  // green  -- Kindness
+    if (t == "fearful")   return { d.color565( 66, 255, 255), false, true };  // cyan   -- Patience
+    if (t == "sad")       return { d.color565(  0, 120, 255), false, true };  // blue   -- Integrity
+    // tones (older servers)
     if (t == "positive")  return { d.color565(255,   0,  40), false, true };  // red    -- Determination
     if (t == "negative")  return { d.color565(  0, 120, 255), false, true };  // blue   -- Integrity
     if (t == "sarcastic") return { d.color565(190,  30, 255), false, true };  // purple -- Perseverance

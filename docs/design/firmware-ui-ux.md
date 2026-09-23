@@ -250,13 +250,28 @@ The mark is the **Undertale "DETERMINATION" heart** (`display::drawHeart`, a 16�
 rendered as the hero at glance centre. **One shape for every tone — the emotion is the colour**
 (Undertale soul colours, pure colour-only by design).
 
-| Tone | Mark | Colour (`color565`) — Undertale soul | History tick |
+Since fw 0.2.0 the colour key is the server's **`emotion.label`** — the seven labels of the
+voice model, as adjusted by the interpreter — and the six chromatic souls map onto the six
+non-neutral emotions. The five older tone names still resolve (below), so a pre-2026-09-22
+server that sends only `tone` keeps its colours.
+
+| Emotion | Mark | Colour (`color565`) — Undertale soul | History tick |
 |---|---|---|---|
-| positive | heart | red `(255,40,40)` — Determination | red |
-| negative | heart | blue `(60,130,255)` — Integrity | blue |
-| sarcastic | heart | purple `(180,70,230)` — Perseverance | purple |
-| mixed | heart | yellow `(255,210,40)` — Justice | yellow |
+| angry | heart | red `(255,0,40)` — Determination | red |
+| surprised | heart | orange `(255,140,0)` — Bravery | orange |
+| happy | heart | yellow `(255,216,0)` — Justice | yellow |
+| disgusted | heart | green `(0,192,0)` — Kindness | green |
+| fearful | heart | cyan `(66,255,255)` — Patience | cyan |
+| sad | heart | blue `(0,120,255)` — Integrity | blue |
 | neutral | heart | dim gray `(120,120,120)` | *none* |
+
+| Tone (older servers) | Colour |
+|---|---|
+| positive | red — Determination |
+| negative | blue — Integrity |
+| sarcastic | purple — Perseverance |
+| mixed | yellow — Justice |
+| neutral | dim gray, no tick |
 
 Low-confidence reads render the caption in a fainter gray — driven, since fw 0.1.2, by the
 server's `read.confidence.level == "low"` (`server/confidence.py`; absent on older servers, in

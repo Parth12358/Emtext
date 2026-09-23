@@ -14,7 +14,13 @@ namespace proto {
     Tone  tone = Tone::Neutral;   // read
     char  transcript[160]= {0};   // utterance
     char  read[128]      = {0};   // read
-    char  emotion[24]    = {0};   // read.voice (optional)
+    char  emotion[24]    = {0};   // read.voice.emotion (optional): what the voice model said
+    // read.emotion.label (additive, server >= 2026-09-22): the headline emotion in
+    // the voice model's vocabulary (neutral/happy/sad/angry/fearful/disgusted/
+    // surprised), as adjusted by the interpreter. Empty on an older server, in
+    // which case the glance colours by `tone` as before.
+    char  shown[16]      = {0};
+    bool  adjusted = false;       // read.emotion.adjusted: the interpreter moved the voice label
     float valence = -1.0f;        // -1 = absent
     float arousal = -1.0f;
     // read.confidence (optional, additive): how sure the server was. The glance

@@ -48,7 +48,7 @@ from server import confidence, config
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CSV = ROOT / "eval" / "results" / "pipeline.csv"
 
-SIGNALS = ("tone_prob", "asr_conf", "ser_confidence", "voiced_s", "confidence_score")
+SIGNALS = ("emotion_prob", "tone_prob", "asr_conf", "ser_confidence", "voiced_s", "confidence_score")
 
 
 def _f(v) -> float | None:
@@ -58,15 +58,18 @@ def _f(v) -> float | None:
         return None
 
 
-def load_rows(path: Path, cell: tuple[str, str] | None) -> list[dict]:
+def load_rows(path: Path, cell: tuple[str, str] | None, target: str = "emotion_correct") -> list[dict]:
+    """Rows with a scoreable `target` column (emotion_correct by default,
+    tone_correct for pre-2026-09-22 CSVs via --target tone)."""
     rows = list(csv.DictReader(path.open(encoding="utf-8")))
     if cell:
         backend, llm = cell
         rows = [r for r in rows if backend in (r.get("ser_backend") or "") and r.get("llm_model") == llm]
     out = []
     for r in rows:
-        if r.get("tone_correct") in ("", None) or r.get("llm_offline") == "1":
+        if r.get(target) in ("", None) or r.get("llm_offline") == "1":
             continue
+        r["_correct"] = r[target]
         out.append(r)
     return out
 
@@ -123,17 +126,20 @@ def main() -> None:
     ap.add_argument("--cell", nargs=2, metavar=("SER_BACKEND", "LLM_MODEL"),
                     default=("emotion2vec", "qwen3:14b"))
     ap.add_argument("--all-cells", action="store_true", help="ignore --cell; pool every row")
-    ap.add_argument("--fit", action="store_true", help="fit Platt scaling for tone_prob and print config values")
+    ap.add_argument("--fit", action="store_true", help="fit Platt scaling for the base probability and print config values")
+    ap.add_argument("--target", choices=("emotion", "tone"), default="emotion",
+                    help="score against emotion_correct (default) or tone_correct (older CSVs)")
     args = ap.parse_args()
 
-    rows = load_rows(args.csv, None if args.all_cells else tuple(args.cell))
+    target = f"{args.target}_correct"
+    rows = load_rows(args.csv, None if args.all_cells else tuple(args.cell), target)
     if not rows:
-        raise SystemExit(f"no scoreable rows in {args.csv} for cell {args.cell}")
-    labels = [int(r["tone_correct"]) for r in rows]
+        raise SystemExit(f"no scoreable rows in {args.csv} for cell {args.cell} ({target})")
+    labels = [int(r["_correct"]) for r in rows]
     print(f"{len(rows)} rows from {args.csv.name}"
           f"{'' if args.all_cells else ' (' + ' x '.join(args.cell) + ')'}; "
-          f"tone accuracy {100 * sum(labels) / len(labels):.1f}%")
-    print("correct = tone matched the acted RAVDESS emotion; acted studio speech, neutral words\n")
+          f"{args.target} accuracy {100 * sum(labels) / len(labels):.1f}%")
+    print(f"correct = {args.target} matched the acted RAVDESS emotion; acted studio speech, neutral words\n")
 
     # --- per-signal discrimination ---
     print(f"{'signal':<18}{'n':>6}{'AUROC':>8}   note")
@@ -175,14 +181,17 @@ def main() -> None:
                 print(f"    {name:<7} {len(lv[name]):>4} reads ({100 * len(lv[name]) / len(rows):4.0f}%)"
                       f"  accuracy {100 * sum(lv[name]) / len(lv[name]):5.1f}%")
 
-    # --- Platt fit for the base signal ---
-    if args.fit and "tone_prob" in have:
-        s, y = have["tone_prob"]
+    # --- Platt fit for the base signal (emotion_prob since 2026-09-22) ---
+    base = "emotion_prob" if "emotion_prob" in have else "tone_prob"
+    if args.fit and base in have:
+        s, y = have[base]
         e0, _ = ece(s, y)
         a, b = fit_platt(s, y)
         scaled = [confidence.platt(p, a, b) for p in s]
         e1, _ = ece(scaled, y)
-        print(f"\nPlatt fit on tone_prob: a={a} b={b}   ECE {e0:.3f} -> {e1:.3f}")
+        print(f"\nPlatt fit on {base}: a={a} b={b}   ECE {e0:.3f} -> {e1:.3f}"
+              + ("  (applies only to ADJUSTED reads; an unadjusted read's base is ser_confidence)"
+                 if base == "emotion_prob" else ""))
         if e1 < e0 - 0.01:
             print(f"  worth using: CONFIDENCE_PLATT_A={a}  CONFIDENCE_PLATT_B={b}")
         else:

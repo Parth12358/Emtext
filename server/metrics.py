@@ -52,7 +52,8 @@ _latencies: dict[str, deque[float]] = {
     "speaker": deque(maxlen=_WINDOW),
 }
 _tones: Counter[str] = Counter()
-_emotions: Counter[str] = Counter()
+_emotions: Counter[str] = Counter()   # what the voice model said
+_shown: Counter[str] = Counter()      # what the listener saw (after the interpreter's adjustment)
 # Speaker-id labels (user / other / mixed / unknown). "user" lines never reach
 # record_utterance -- they get no read -- so they are counted here instead.
 _speakers: Counter[str] = Counter()
@@ -168,6 +169,7 @@ def record_utterance(
     offline: bool,
     speaker: str | None = None,
     confidence: dict | None = None,
+    emotion: str | None = None,
 ) -> None:
     """One completed utterance, start to finish."""
     with _lock:
@@ -187,10 +189,13 @@ def record_utterance(
             _tones[tone] += 1
         if voice and voice.get("emotion"):
             _emotions[voice["emotion"]] += 1
+        if emotion:
+            _shown[emotion] += 1
         _recent.appendleft({
             "t": time.time(),
             "transcript": transcript,
             "tone": tone,
+            "emotion": emotion,
             "read": read,
             "voice": voice,
             "speaker": speaker,
@@ -244,6 +249,7 @@ def pipeline_stats() -> dict:
             "latency": {k: _summary(v) for k, v in _latencies.items()},
             "tones": dict(_tones),
             "emotions": dict(_emotions),
+            "shown": dict(_shown),
             "speakers": dict(_speakers),
             "confidence": {
                 "levels": dict(_confidence_levels),

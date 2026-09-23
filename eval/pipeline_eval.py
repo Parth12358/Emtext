@@ -110,6 +110,12 @@ COLUMNS = [
     # backend's confidence, voiced seconds, and the composite the server would
     # have sent. eval/confidence_eval.py measures how each tracks tone_correct.
     "tone_prob", "asr_conf", "voiced_s", "confidence_score", "confidence_level",
+    # Since 2026-09-22 the headline is the EMOTION (the voice label as adjusted
+    # by the interpreter), scored directly against the acted RAVDESS emotion --
+    # no EXPECTED_TONE heuristic needed. `ser_correct` is the voice alone;
+    # `emotion_correct` is what the listener saw; the difference is what the
+    # interpreter's adjustment is worth.
+    "llm_emotion", "emotion_adjusted", "emotion_prob", "emotion_correct",
 ]
 
 # Set by the SIGINT handler. 1 = finish this clip then stop; 2 = abort now.
@@ -320,12 +326,14 @@ def build_row(cell_id, ser_model, ser_backend, llm_model, meta, cached,
     expected = EXPECTED_TONE.get(meta["true_emotion"])
     # The same combination main.py sends on the wire, from the same inputs,
     # so the eval scores what the listener would actually have seen.
+    emotion = (llm_out or {}).get("emotion")
+    base, ser_pen = confidence.base_prob(llm_out, voice or None)
     conf = confidence.score(
         tone=tone,
-        tone_prob=(llm_out or {}).get("tone_prob"),
+        tone_prob=base,
         offline=bool((llm_out or {}).get("offline")),
         asr_conf=cached.get("asr_conf"),
-        ser_conf=voice.get("confidence"),
+        ser_conf=ser_pen,
         voiced_s=cached.get("voiced_s"),
         speaker_label=None,
     )
@@ -379,6 +387,10 @@ def build_row(cell_id, ser_model, ser_backend, llm_model, meta, cached,
         "total_latency_s": round((cached.get("cpu_stage_s") or 0) + llm_s, 3),
         "error": cached.get("error", ""),
         "tone_prob": (llm_out or {}).get("tone_prob"),
+        "llm_emotion": emotion,
+        "emotion_adjusted": int(bool((llm_out or {}).get("emotion_adjusted"))) if emotion else "",
+        "emotion_prob": (llm_out or {}).get("emotion_prob"),
+        "emotion_correct": int(emotion == meta["true_emotion"]) if emotion else "",
         "asr_conf": cached.get("asr_conf"),
         "voiced_s": cached.get("voiced_s"),
         "confidence_score": conf["score"],
@@ -587,9 +599,9 @@ async def _interpret_and_write(client, Interpreter, llm_model, cached, meta_by_n
     try:
         counters["done"] += 1
         counters["elapsed"] = time.perf_counter() - counters["t0"]
-        if row["tone_correct"] != "":
+        if row["emotion_correct"] != "":
             counters["tone_n"] += 1
-            counters["tone_ok"] += int(row["tone_correct"])
+            counters["tone_ok"] += int(row["emotion_correct"])
         acc = 100 * counters["tone_ok"] / counters["tone_n"] if counters["tone_n"] else 0
         remaining = total - counters["done"]
         eta = (counters["elapsed"] / counters["done"]) * remaining if counters["done"] else 0
@@ -597,7 +609,7 @@ async def _interpret_and_write(client, Interpreter, llm_model, cached, meta_by_n
         if not quiet:
             log_row(counters["prefix"], counters["done"], total, row, acc, eta)
         elif counters["done"] % 25 == 0:
-            print(f"{counters['prefix']}{counters['done']}/{total}  tone acc {acc:.0f}%  "
+            print(f"{counters['prefix']}{counters['done']}/{total}  emotion acc {acc:.0f}%  "
                   f"eta {eta / 60:.1f}m", flush=True)
 
         write_status(phase=counters["phase"], cell_id=cell_id, llm_model=llm_model,
@@ -659,7 +671,7 @@ def summarise(csv_path: Path) -> None:
     print("\n" + "=" * 92)
     print("RESULTS BY CELL")
     print("=" * 92)
-    print(f"{'ser':<12}{'llm':<14}{'n':>5}{'SER acc':>9}{'tone acc':>10}"
+    print(f"{'ser':<12}{'llm':<14}{'n':>5}{'SER acc':>9}{'emo acc':>10}{'tone acc':>10}"
           f"{'WER':>7}{'voice sens':>12}{'cpu s':>8}{'llm s':>8}")
     print("-" * 92)
 
@@ -691,7 +703,7 @@ def summarise(csv_path: Path) -> None:
             return sum(vals) / len(vals) if vals else 0.0
 
         print(f"{backend:<12}{llm:<14}{n:>5}{pct('ser_correct'):>8.0f}%"
-              f"{pct('tone_correct'):>9.0f}%"
+              f"{pct('emotion_correct'):>9.0f}%{pct('tone_correct'):>9.0f}%"
               f"{(100 * errs / words if words else 0):>6.0f}%{sens:>12}"
               f"{mean('cpu_stage_s'):>7.2f}s{mean('llm_latency_s'):>7.2f}s")
 

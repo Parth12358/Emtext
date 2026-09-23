@@ -232,6 +232,18 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   `{"type":"save","from":a,"to":b}` (an inclusive id range bundled into one clip,
   answered by `saved`; the older `{"id":n}` form still works as `from == to`);
   anything else is ignored, never fatal.
+- **The headline emotion is the SER's, adjusted by the interpreter** (since
+  2026-09-22). The `read` frame's `emotion` object (`{"label","voice","adjusted"}`)
+  uses `ser.EMOTIONS` (neutral/happy/sad/angry/fearful/disgusted/surprised); the
+  LLM's schema requires an `emotion` in that enum and the prompt tells it to START
+  from the voice label and move only when the words make it untenable. Interpreter
+  offline = the voice label untouched; SER off = words alone. `tone` stays on the
+  wire for `sarcastic`/`mixed` and for older clients, and the firmware (0.2.0+)
+  colours the heart by `emotion.label`, falling back to `tone`. Measured on 280
+  RAVDESS clips: SER alone 89%, shown emotion 88% -- the adjustment is roughly
+  neutral there because the words are neutral by construction; the case for it is
+  real speech, where the words carry information. Do not make the LLM the primary
+  source again without re-measuring.
 - **Interpreter prompt**'s `voice sounded like: X` slot is now filled by `ser.py`.
   The prompt must keep explaining the words-vs-voice **mismatch** rule in both forms:
   on valence (positive words + low valence = sarcasm/masking; negative words + high

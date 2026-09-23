@@ -1049,3 +1049,64 @@ Reproduce: `python -m eval.confidence_eval --csv eval/results/pipeline_conf.csv 
   hundred labelled lines; RAVDESS is acted, studio, single-speaker.
 - `mixed` speaker label and `mixed` tone penalties are untested (RAVDESS never
   produces either).
+
+---
+
+## The headline is the SER's emotion; the interpreter adjusts it (built 2026-09-22)
+
+The listener found the five-way tone verdict (positive / negative / neutral /
+sarcastic / mixed) less useful than the seven emotions the voice model already
+produces, so the roles were swapped: **the SER label is the primary source and
+the LLM supports it**. The `read` frame now carries
+`"emotion": {"label", "voice", "adjusted"}` in `ser.EMOTIONS`; the LLM's
+schema requires an `emotion` and the prompt tells it to START from the voice
+label and move it only when the words make it untenable. Interpreter offline =
+the voice label untouched; SER off = words alone. `tone` stays for sarcasm and
+mixed lines and for older clients. Every client colours by `emotion.label`;
+the pendant (fw 0.2.0) maps the six non-neutral emotions onto the six chromatic
+Undertale souls.
+
+### Measured (`eval/results/pipeline_emotion.csv`, emotion2vec x qwen3:14b, 280 RAVDESS clips)
+
+Reproduce: `python -m eval.pipeline_eval --llm qwen3:14b --cells 1 --limit 280 --speech-rms 150 --csv eval/results/pipeline_emotion.csv`
+then `python -m eval.confidence_eval --csv eval/results/pipeline_emotion.csv --fit`.
+
+| | accuracy vs acted emotion |
+|---|---|
+| SER alone (`ser_correct`) | 88.9% |
+| shown emotion, after the interpreter (`emotion_correct`) | 88.2% |
+
+- **The interpreter defers almost always.** 3 of 280 rows were adjusted, all
+  happy -> neutral, and all three were wrong (the SER had 2 of 3 right). That is
+  the expected shape on RAVDESS: the words are neutral by construction, so the
+  LLM has nothing to add and can only hurt. The case for the adjustment is real
+  speech, where the words carry information -- RAVDESS cannot measure it.
+- Per emotion the SER and the shown label agree everywhere except happy
+  (87.5% -> 82.5%, the three adjustments).
+- The old tone channel got worse under the new prompt and is now secondary:
+  RAVDESS tone accuracy (vs the EXPECTED_TONE heuristic) 76.4% -> 63%, and
+  `eval/tone_cases.jsonl` 88% -> 82% on one run (passive-aggression 50%,
+  sarcasm 75%; `mm-01a`/`mm-03a` now over-call sarcasm on a warm voice,
+  `pa-03`/`pa-04` fall to neutral). Nothing here is tuned yet: the prompt
+  gained one paragraph and the JSON gained one field, and the model's
+  attention moved with them. Open.
+
+### Confidence had to change with it
+
+With the LLM copying the voice label, its own probability for the emotion says
+nothing about whether the label is right: `emotion_prob` AUROC 0.59 against
+correctness, while `ser_confidence` scores 0.76. So `confidence.base_prob()`
+makes the base of the score the **voice model's confidence for an unadjusted
+read** and the interpreter's probability only for an adjusted one. Composite
+AUROC went 0.62 -> 0.78 with that rule; with the shipped cut-offs (0.9 / 0.6):
+high 79 reads at 97.5%, medium 182 at 87.9%, low 19 at 52.6%. The `--fit`
+Platt line in `confidence_eval` now applies only to adjusted reads.
+
+### Open
+
+- Re-measure on real conversation once the transcript log has labelled lines;
+  RAVDESS can only show that the adjustment does no harm, not that it helps.
+- The tone regression above. Either tune the prompt for both fields or accept
+  that `tone` is now a sarcasm flag and re-label `tone_cases.jsonl` with
+  `expect_emotion` so the suite scores the headline.
+- Website copy and demo still speak in the five tones.

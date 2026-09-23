@@ -113,6 +113,7 @@ async def run_model(model: str, cases: list[dict], runs: int) -> dict:
                         "category": case["category"],
                         "expect": case["expect"],
                         "got": out["tone"],
+                        "emotion": out.get("emotion", ""),
                         "read": out["read"],
                         "ok": out["tone"] in case["expect"],
                         "offline": out["read"] == "(interpreter offline)",
@@ -167,7 +168,7 @@ def mismatch_score(results: list[dict]) -> tuple[int, int]:
 CSV_COLUMNS = [
     "model", "run", "id", "category", "transcript", "context",
     "voice_emotion", "voice_confidence", "voice_valence", "voice_arousal",
-    "expected", "got", "correct", "read", "elapsed_s", "offline", "note",
+    "expected", "got", "emotion", "correct", "read", "elapsed_s", "offline", "note",
 ]
 
 
@@ -196,6 +197,7 @@ def write_csv(runs_data: list[dict], path: Path) -> None:
                     "voice_arousal": r["voice_arousal"],
                     "expected": "|".join(r["expect"]),
                     "got": r["got"],
+                    "emotion": r.get("emotion", ""),
                     "correct": int(r["ok"]),
                     "read": r["read"],
                     "elapsed_s": round(r["elapsed"], 3),

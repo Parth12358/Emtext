@@ -62,9 +62,16 @@ from . import config
 # `python -m eval.model_eval` after editing.
 SYSTEM_PROMPT = """You help a neurodivergent listener understand the emotional \
 subtext of a conversation they are hearing. For the newest line only, reply \
-with a single JSON object: {"tone": one of \
+with a single JSON object: {"emotion": one of \
+["neutral","happy","sad","angry","fearful","disgusted","surprised"], "tone": one of \
 ["positive","negative","neutral","sarcastic","mixed"], "read": a short plain \
-sentence}. The "read" must be AT MOST 5 WORDS, practical rather than clinical -- tell \
+sentence}. The "emotion" is what the speaker is feeling. The voice model's \
+label (in the "voice:" field) is the primary source for it: START from that \
+label and keep it unless the words make it untenable or its confidence is \
+weak; if you move it, move to the nearest emotion the words support, and say \
+why in the read. With no voice field, choose the emotion from the words alone \
+and prefer "neutral". \
+The "read" must be AT MOST 5 WORDS, practical rather than clinical -- tell \
 them what the speaker likely means or wants, not a diagnosis. Use terse, \
 telegraphic "caveman" phrasing: keep only content words, drop every filler and \
 grammar word -- no articles ("a"/"the"), no "is"/"are"/"probably", no "The \
@@ -190,6 +197,24 @@ def _describe_voice(voice: dict | None) -> str | None:
 
 TONES = ("positive", "negative", "neutral", "sarcastic", "mixed")
 
+# The headline emotion, in the SER model's own vocabulary (server/ser.py
+# EMOTIONS). Since 2026-09-22 the voice label is the PRIMARY source and the
+# interpreter only adjusts it: the listener found the five-way tone verdict
+# less useful than the seven emotions the voice model already produces, so
+# the LLM is asked to start from the voice label and move it only when the
+# words make it untenable. `tone` stays for what an emotion cannot carry
+# (sarcasm, a mixed line) and for older clients.
+EMOTIONS = ("neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised")
+_EMOTION_SYNONYMS = {
+    "anger": "angry", "mad": "angry", "annoyed": "angry", "frustrated": "angry",
+    "sadness": "sad", "upset": "sad", "disappointed": "sad",
+    "fear": "fearful", "afraid": "fearful", "anxious": "fearful", "scared": "fearful",
+    "disgust": "disgusted",
+    "surprise": "surprised", "shocked": "surprised",
+    "happiness": "happy", "joy": "happy", "pleased": "happy", "excited": "happy",
+    "calm": "neutral", "flat": "neutral",
+}
+
 # Off-enum answers that have an obvious home. RESPONSE_SCHEMA constrains `tone`
 # to TONES, but only on Ollama builds that honour schemas; a model that
 # volunteers "ironic" used to be recorded as "neutral" -- the maximally wrong
@@ -222,10 +247,11 @@ SPEAKER_TAGS = {"user": "listener:", "other": "speaker:"}
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
+        "emotion": {"type": "string", "enum": list(EMOTIONS)},
         "tone": {"type": "string", "enum": list(TONES)},
         "read": {"type": "string"},
     },
-    "required": ["tone", "read"],
+    "required": ["emotion", "tone", "read"],
 }
 
 
@@ -277,8 +303,11 @@ def _ollama_stats(body: dict | None) -> dict:
     }
 
 
-def _tone_prob(body: dict | None) -> float | None:
-    """The model's probability for the tone it chose, from Ollama's logprobs.
+def _tone_prob(body: dict | None, key: str = "tone") -> float | None:
+    """The model's probability for the tone (or emotion) it chose, from Ollama's logprobs.
+
+    `key` names the JSON field: "tone" or "emotion". Both values are enum
+    strings whose first token is distinctive, so the same offset walk works.
 
     Measured on qwen3:14b (Ollama 0.34, JSON-schema `format`, 2026-09-22):
     the logprobs are PRE-grammar-mask -- the forced opening `{"` scores about
@@ -298,7 +327,7 @@ def _tone_prob(body: dict | None) -> float | None:
         if not body or not isinstance(body.get("logprobs"), list):
             return None
         text = body.get("response") or ""
-        m = re.search(r'"tone"\s*:\s*"', text)
+        m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"', text)
         if not m:
             return None
         target = m.end()                 # offset of the value's first character
@@ -427,7 +456,13 @@ class Interpreter:
 
     async def interpret(self, transcript: str, voice: dict | None = None,
                         who: str | None = None) -> dict:
-        """Return {"tone": ..., "read": ...} for `transcript`.
+        """Return {"emotion": ..., "tone": ..., "read": ...} for `transcript`.
+
+        `emotion` is the headline: one of EMOTIONS, the voice label as
+        adjusted by the model. `emotion_adjusted` says whether it differs from
+        the voice label, and `emotion_prob` is the model's probability for it.
+        When the call fails, `emotion` is the voice label untouched (or neutral
+        with no voice), so the SER stays the source of truth with the LLM down.
 
         `voice` is an optional ser.analyze() result describing how the line
         sounded. When present it is rendered into the prompt's "voice sounded
@@ -447,6 +482,8 @@ class Interpreter:
         fallback so the caller can send *something* to the user.
         """
         prompt = self._build_prompt(transcript, _describe_voice(voice), who)
+        voice_label = (voice or {}).get("emotion")
+        voice_label = voice_label if voice_label in EMOTIONS else None
 
         # Record the line into context AFTER building the prompt, so a line is
         # never fed as its own "earlier context".
@@ -488,10 +525,22 @@ class Interpreter:
                 tone = "neutral"
             if not read:
                 read = "(no read)"
-            return {"tone": tone, "read": read, "offline": False,
+            emotion = str(parsed.get("emotion", "")).lower().strip()
+            emotion = _EMOTION_SYNONYMS.get(emotion, emotion)
+            if emotion not in EMOTIONS:
+                # An off-enum or missing emotion is not a verdict: fall back to
+                # the voice label, which is the source anyway.
+                emotion = voice_label or "neutral"
+            return {"emotion": emotion, "tone": tone, "read": read, "offline": False,
+                    "emotion_voice": voice_label,
+                    "emotion_adjusted": bool(voice_label) and emotion != voice_label,
+                    "emotion_prob": _tone_prob(body, "emotion"),
                     "tone_prob": _tone_prob(body), **_ollama_stats(body)}
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):
             # Unreachable Ollama, non-2xx, or malformed/garbage JSON all land
-            # here. Degrade gracefully rather than dropping the utterance.
-            return {"tone": "neutral", "read": "(interpreter offline)",
-                    "offline": True, "tone_prob": None, **_ollama_stats(None)}
+            # here. Degrade gracefully rather than dropping the utterance: the
+            # voice label still ships as the emotion, unadjusted.
+            return {"emotion": voice_label or "neutral", "tone": "neutral",
+                    "read": "(interpreter offline)", "offline": True,
+                    "emotion_voice": voice_label, "emotion_adjusted": False,
+                    "emotion_prob": None, "tone_prob": None, **_ollama_stats(None)}

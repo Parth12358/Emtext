@@ -84,6 +84,27 @@ def platt(p: float, a: float | None = None, b: float | None = None) -> float:
     return 1.0 / (1.0 + math.exp(-z))
 
 
+def base_prob(result: dict | None, voice: dict | None) -> tuple[float | None, float | None]:
+    """Which probability is the base, and which SER confidence still applies.
+
+    Since the headline emotion is the voice model's label (2026-09-22), the
+    honest probability for an UNADJUSTED read is the voice model's own
+    confidence: the interpreter copying that label is near-certain every time
+    (emotion_prob AUROC 0.59 against correctness on RAVDESS, ser_confidence
+    0.76), so the LLM's number says nothing about whether the label is right.
+    When the interpreter DID move the label, its probability for the new one
+    is the base and the voice confidence becomes the ordinary penalty input.
+
+    Returns (base, ser_conf_for_penalty). One shared rule for main.py and
+    eval/pipeline_eval.py so the eval scores what the wire carries.
+    """
+    result = result or {}
+    ser_conf = (voice or {}).get("confidence")
+    if voice and not result.get("emotion_adjusted") and isinstance(ser_conf, (int, float)):
+        return float(ser_conf), None
+    return result.get("emotion_prob", result.get("tone_prob")), ser_conf
+
+
 def level(score: float) -> str:
     if score >= config.CONFIDENCE_HIGH:
         return "high"

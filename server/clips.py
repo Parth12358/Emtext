@@ -76,6 +76,7 @@ class Recent:
             "pcm": pcm,
             "transcript": None,
             "tone": None,
+            "emotion": None,
             "read": None,
             "voice": None,
             "speaker": None,
@@ -204,6 +205,7 @@ def save(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             "duration_s": round(len(e["pcm"]) / 2 / config.SAMPLE_RATE, 3),
             "transcript": e.get("transcript"),
             "tone": e.get("tone"),
+            "emotion": e.get("emotion"),
             "read": e.get("read"),
             "voice": e.get("voice"),
             # Speaker-id result (user / other / mixed) if it was known. A saved
@@ -215,6 +217,8 @@ def save(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             "confidence": e.get("confidence"),
         } for e in parts]
         tones = [u["tone"] for u in utterances if u["tone"]]
+        emotions = [u["emotion"]["label"] for u in utterances
+                    if isinstance(u.get("emotion"), dict) and u["emotion"].get("label")]
         meta = {
             "id": clip_id,
             # `uid` stays as the first id so older sidecars and the dashboard
@@ -230,6 +234,7 @@ def save(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             "transcript": " ".join(u["transcript"] for u in utterances if u["transcript"]) or None,
             "read": " / ".join(u["read"] for u in utterances if u["read"]) or None,
             "tone": tones[-1] if tones else None,      # the most recent read's tone
+            "emotion": emotions[-1] if emotions else None,  # ... and its headline emotion
             "voice": last.get("voice"),
             "speaker": _bundle_speaker(
                 [u["speaker"]["label"] for u in utterances if u["speaker"]]),

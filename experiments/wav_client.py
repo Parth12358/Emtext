@@ -71,7 +71,16 @@ async def run(path: str, url: str, token: str, realtime: bool) -> int:
                     ctag = (f"  conf {c.get('score')} {c.get('level')}"
                             + (f" ({'; '.join(c['reasons'])})" if c.get("reasons") else "")
                             if c.get("level") else "")
-                    print(f"    -> [{msg['id']}] ({msg['tone']}) {msg['read']}{ctag}")
+                    # "emotion" is the headline since 2026-09-22: the voice
+                    # label as adjusted by the interpreter. Older servers
+                    # send only "tone".
+                    e = msg.get("emotion") or {}
+                    head = e.get("label") or msg["tone"]
+                    if e.get("adjusted"):
+                        head += f" (voice said {e.get('voice')})"
+                    if msg["tone"] in ("sarcastic", "mixed"):
+                        head += f", {msg['tone']}"
+                    print(f"    -> [{msg['id']}] ({head}) {msg['read']}{ctag}")
                     # "voice" is optional: present only when SER is available.
                     v = msg.get("voice")
                     if v:

@@ -267,7 +267,7 @@ def _log_task_error(task: asyncio.Task) -> None:
 
 
 def _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s, conf=None) -> None:
+                    whisper_s, ser_s, llm_s, conf=None, emotion=None) -> None:
     """Hand one finished utterance to the transcript log, off the event loop.
 
     Fire-and-forget on purpose: the log is for improving the ASR later, so it
@@ -283,6 +283,7 @@ def _log_transcript(loop, uid, audio, transcript, who, voice, result,
         "speaker": _speaker_field(who),
         "voice": voice,
         "tone": result.get("tone") if result else None,
+        "emotion": emotion,
         "read": result.get("read") if result else None,
         "confidence": conf,
         "whisper_s": round(whisper_s, 3),
@@ -387,19 +388,32 @@ async def _process_utterance(
 
     # How sure is this read? Pure combination of the signals above; never
     # changes what the LLM saw, only how the read is weighted on the way out.
+    # The headline is the voice model's emotion, so an unadjusted read's base
+    # is the voice model's own confidence; only an adjusted one uses the
+    # interpreter's probability (confidence.base_prob has the measurements).
+    base, ser_pen = confidence.base_prob(result, voice)
     conf = confidence.score(
         tone=result.get("tone"),
-        tone_prob=result.get("tone_prob"),
+        tone_prob=base,
         offline=bool(result.get("offline")),
         asr_conf=asr_conf,
-        ser_conf=voice.get("confidence") if voice else None,
+        ser_conf=ser_pen,
         voiced_s=voiced_s,
         speaker_label=label,
     )
 
+    # The wire's `emotion` object: the label the clients headline, the voice
+    # model's own label it started from, and whether the interpreter moved it.
+    emotion = {
+        "label": result.get("emotion") or "neutral",
+        "voice": result.get("emotion_voice"),
+        "adjusted": bool(result.get("emotion_adjusted")),
+    }
+
     metrics.record_utterance(
         transcript=transcript,
         tone=result.get("tone"),
+        emotion=emotion["label"],
         read=result.get("read"),
         whisper_s=whisper_s,
         ser_s=ser_s,
@@ -413,16 +427,22 @@ async def _process_utterance(
 
     # Keep the retention ring current so a `save` that names this id gets the
     # read as well as the audio. Cheap, and a no-op if the entry aged out.
-    recent.update(uid, tone=result.get("tone"), read=result.get("read"), voice=voice,
-                  confidence=conf)
+    recent.update(uid, tone=result.get("tone"), emotion=emotion, read=result.get("read"),
+                  voice=voice, confidence=conf)
     _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s, conf)
+                    whisper_s, ser_s, llm_s, conf, emotion)
 
     message = {
         "type": "read",
         "id": uid,
         "tone": result["tone"],
         "read": result["read"],
+        # Additive: the headline emotion in the voice model's vocabulary,
+        # {"label", "voice", "adjusted"}. `voice` is the SER label it started
+        # from (null with SER off); `adjusted` says the interpreter moved it.
+        # Always present on this server; older clients ignore it and keep
+        # colouring by `tone`.
+        "emotion": emotion,
         # Additive, like `voice` and `speaker`: how sure the server is, as a
         # 0-1 score, a level the clients render (high as before, medium
         # de-emphasised, low suppressed behind a "not sure" marker), and the

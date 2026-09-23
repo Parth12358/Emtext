@@ -30,6 +30,16 @@
     --neutral: #857d73;
     --sarcastic: #7d55c9;
     --mixed: #c4861a;
+    /* Emotion palette: the seven labels the voice model produces, which are
+       the headline since 2026-09-22 (the tone palette above stays for the
+       secondary chip and for older servers that send no `emotion`). */
+    --e-neutral: var(--neutral);
+    --e-happy: #d19a00;
+    --e-sad: #3b7bd4;
+    --e-angry: #d4433a;
+    --e-fearful: #2a9d96;
+    --e-disgusted: #5f9e3a;
+    --e-surprised: #e0772a;
     --r-lg: 22px; --r: 14px; --r-sm: 10px;
     --raise: 7px 7px 14px var(--sh-dark), -7px -7px 14px var(--sh-light);
     --raise-sm: 3px 3px 7px var(--sh-dark), -3px -3px 7px var(--sh-light);
@@ -158,6 +168,13 @@
   .t-neutral   { --tone: var(--neutral); }
   .t-sarcastic { --tone: var(--sarcastic); }
   .t-mixed     { --tone: var(--mixed); }
+  .e-neutral   { --tone: var(--e-neutral); }
+  .e-happy     { --tone: var(--e-happy); }
+  .e-sad       { --tone: var(--e-sad); }
+  .e-angry     { --tone: var(--e-angry); }
+  .e-fearful   { --tone: var(--e-fearful); }
+  .e-disgusted { --tone: var(--e-disgusted); }
+  .e-surprised { --tone: var(--e-surprised); }
   .t-neutral .read { color: var(--ink); }
   .hint { font-size: 12.5px; color: var(--ink-2); margin-top: 12px; }
 
@@ -233,6 +250,7 @@
   <div class="check"><span class="k">WebSocket connect</span><span class="v pend" id="c-ws">—</span></div>
   <div class="check"><span class="k">Auth</span><span class="v pend" id="c-auth">—</span></div>
   <div class="check"><span class="k">Keepalive round-trip</span><span class="v pend" id="c-ping">—</span></div>
+  <div class="check"><span class="k">Emotion shown (emotion field)</span><span class="v pend" id="c-emotion">—</span></div>
   <div class="check"><span class="k">Speech emotion (voice field)</span><span class="v pend" id="c-voice">—</span></div>
   <div class="check"><span class="k">Confidence (confidence field)</span><span class="v pend" id="c-conf">—</span></div>
 </div>
@@ -685,10 +703,18 @@ function addEntry(id, transcript, speaker) {
 function addRead(msg) {
   const node = entries.get(msg.id);
   if (!node) return;
-  node.className = "entry t-" + msg.tone;
-  node.querySelector(".read").textContent = msg.read;
+  const label = msg.emotion && msg.emotion.label;
+  node.className = "entry " + (label ? "e-" + label : "t-" + msg.tone);
+  node.querySelector(".read").textContent = (label ? label + " \u00b7 " : "") + msg.read;
 
   const bits = [];
+  if (label) {
+    bits.push(msg.emotion.adjusted ? `emotion ${label} (voice said ${msg.emotion.voice})` : `emotion ${label}`);
+    check("c-emotion", "ok", label + (msg.emotion.adjusted ? " (adjusted)" : ""));
+  } else {
+    check("c-emotion", "warn", "absent (old server?)");
+  }
+  if (msg.tone && msg.tone !== "neutral") bits.push(`tone ${msg.tone}`);
   // Latency from when the mic stopped picking up speech to the read landing --
   // the number a user actually feels. Approximate: it is measured client-side
   // from the last non-silent block, so it includes the VAD's end-of-speech wait.

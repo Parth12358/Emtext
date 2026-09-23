@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 FIELDS: dict[str, tuple[str, ...]] = {
     "audio": (),
     "transcript": ("transcript",),
-    "result": ("tone", "read", "confidence"),
+    "result": ("tone", "emotion", "read", "confidence"),
     "voice": ("voice",),
     "speaker": ("speaker",),
     "timing": ("whisper_s", "ser_s", "llm_s"),

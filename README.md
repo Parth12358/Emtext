@@ -261,7 +261,8 @@ The server replies with TEXT JSON frames:
 {"type":"ready"}
 {"type":"status","state":"listening|heard|thinking"}
 {"type":"utterance","id":1,"transcript":"..."}
-{"type":"read","id":1,"tone":"positive|negative|neutral|sarcastic|mixed","read":"one line"}
+{"type":"read","id":1,"emotion":{"label":"neutral|happy|sad|angry|fearful|disgusted|surprised","voice":"...","adjusted":false},
+ "tone":"positive|negative|neutral|sarcastic|mixed","read":"one line"}
 {"type":"ping","t":1789794138.7}          // keepalive after WS_IDLE_PING_S (30 s) with no audio
 {"type":"pong","t":...}                   // reply to a client ping, `t` echoed untouched
 {"type":"saved","id":2,"ok":true,"clip":"20260918T230722_1_eb19"}   // reply to a save
@@ -300,12 +301,21 @@ Connect with `?vad=1` and the server also streams `vad` (~10/s: current RMS,
 threshold, state) and `vad_close` (why each utterance ended) frames for the
 diagnostics page. Normal clients and the pendant never ask for these.
 
-The `read` frame carries one **optional** field, `voice`, present only when SER
+The headline of a `read` is `emotion`: the voice model's label, in its own
+seven-word vocabulary, **as adjusted by the interpreter**. The SER is the
+primary source; the LLM starts from its label and moves it only when the words
+make it untenable (`adjusted: true`, with `voice` holding the label it started
+from). With SER off, `voice` is null and the label comes from the words alone;
+with the interpreter offline, the voice label ships untouched. `tone` stays for
+what an emotion cannot carry -- `sarcastic` and `mixed` -- and for older clients.
+
+The `read` frame also carries one **optional** field, `voice`, present only when SER
 produced a result (so it is absent when `SER_ENABLED=0`, when the model failed
 to load, or when that utterance couldn't be scored):
 
 ```jsonc
-{"type":"read","id":1,"tone":"sarcastic","read":"one line",
+{"type":"read","id":1,"emotion":{"label":"angry","voice":"angry","adjusted":false},
+ "tone":"sarcastic","read":"one line",
  "voice":{"emotion":"angry","confidence":0.77,"valence":0.21,"arousal":0.65,"dominance":0.7},
  "speaker":{"label":"other","score":0.0},
  "confidence":{"score":0.47,"level":"medium","reasons":["too short to read the voice"]}}
@@ -318,7 +328,7 @@ label. `confidence` is **how sure the server is of the whole read**
 as normal, `medium` de-emphasised, `low` suppressed behind a "not sure" marker in
 the browser and drawn faint on the pendant), and plain-language `reasons` for
 anything below high. The score starts from the interpreter's own token
-probability for the tone it chose and is knocked down for a short utterance, an
+probability for the emotion it chose and is knocked down for a short utterance, an
 unclear voice, a doubtful transcript, two voices in one line, or a `mixed` tone;
 `(interpreter offline)` is always score 0. Clients must treat `voice`, `speaker`
 and `confidence` — and each field inside them — as optional:

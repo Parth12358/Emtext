@@ -25,6 +25,8 @@ namespace {
   bool     inStandby   = false; // low-power connected standby (mic off, ping off, Wi-Fi kept)
   uint32_t standbySince = 0;    // millis() standby began (times out -> full power off)
 
+  bool     paused      = false; // privacy pause active -> motion must NOT keep the device awake
+
   uint32_t lastBattPoll = 0;   // millis() of the last battery read
   bool     warnedLow    = false;  // low-battery warning already shown this discharge
 
@@ -97,6 +99,8 @@ void power::noteVoiced(bool on) {
   // (no standby exit: the mic is off in standby, so this never fires while asleep)
 }
 
+void power::setPaused(bool on) { paused = on; }
+
 bool power::standby() { return inStandby; }
 bool power::grace()   { return inGrace; }
 
@@ -105,8 +109,10 @@ void power::loop() {
   const config::Config& c = config::get();
 
   // Motion (controls owns the IMU) counts as activity ONLY while awake -- it keeps the device
-  // out of standby, but is IGNORED once in standby (only a button wakes it back).
-  if (!inStandby && now - controls::lastMotionMs() < MOTION_FRESH_MS) idleSince = now;
+  // out of standby, but is IGNORED once in standby (only a button wakes it back). While
+  // privacy-paused the mic is off and there is nothing to wait for, so motion is ignored too:
+  // a worn, paused pendant idles -> standby -> off on the normal timeout instead of staying lit.
+  if (!inStandby && !paused && now - controls::lastMotionMs() < MOTION_FRESH_MS) idleSince = now;
 
   // Battery: poll on a slow cadence; warn once when low and not charging, with hysteresis
   // so a sagging reading near the threshold can't re-trigger the warning repeatedly.

@@ -13,6 +13,11 @@ namespace {
 
   const int      BAR_W = 7;      // tone edge-bar width, px
   const uint8_t  BRIGHT_PAUSED = 60;
+  // Privacy pause is a static screen the user may leave up for a long, sensitive conversation,
+  // so after a few seconds we drop the backlight to a low level -- the glyph stays readable (an
+  // unmistakable "mic off" indicator), but the backlight stops being a continuous drain.
+  const uint8_t  BRIGHT_PAUSED_DIM = 10;
+  const uint32_t PAUSED_BRIGHT_MS  = 5000;
   const int      STRIP = 12;     // thickness of the top status bar AND the button-indicator bars
 
   // User-adjustable screen brightness (the Settings "bright" row cycles these). Replaces
@@ -32,6 +37,7 @@ namespace {
   int    connState = 0;                           // 0 = searching/off, 1 = ready, 2 = degraded
   bool   processing = false;
   bool   paused = false;
+  uint32_t pausedSince = 0;                       // millis() pause began -> the paused screen dims after PAUSED_BRIGHT_MS
   bool   portalOn = false;
   bool   bA = false, bB = false, bPwr = false;   // button-held -> press indicators
   int    pingMs = -1;                            // median RTT (ms) from net; -1 = unknown
@@ -188,7 +194,9 @@ namespace {
 
   void drawPaused() {                               // privacy screen: unmistakable
     auto& d = M5.Display;
-    d.setBrightness(BRIGHT_PAUSED);
+    // Full brightness for the first few seconds, then low -- computed from pausedSince so any
+    // redraw while paused lands on the right level (idempotent with the dim step in loop()).
+    d.setBrightness(millis() - pausedSince >= PAUSED_BRIGHT_MS ? BRIGHT_PAUSED_DIM : BRIGHT_PAUSED);
     d.fillScreen(TFT_BLACK);
     int cx = d.width() / 2, cy = d.height() / 2;
     int bw = 8, bh = 34, gap = 10;
@@ -595,6 +603,11 @@ void display::loop() {
       setState(State::Dark);
   }
 
+  // Privacy pause: keep the glyph lit briefly, then drop to a low backlight. No redraw --
+  // the static glyph stays; only the backlight changes. (Idempotent with drawPaused.)
+  if (paused && millis() - pausedSince >= PAUSED_BRIGHT_MS)
+    M5.Display.setBrightness(BRIGHT_PAUSED_DIM);
+
   // Keep the top bar live (battery %, charging bolt, ping) without a full redraw/flicker.
   static uint32_t lastBar = 0;
   if (!paused && !clipRec && !clipSaving && !statusOn && !overlay && st != State::Dark && millis() - lastBar >= 5000) {
@@ -758,6 +771,7 @@ void display::onSetting(void (*cb)(Setting)) { cbSetting = cb; }
 
 void display::setPaused(bool on) {
   paused = on;
+  if (on) pausedSince = millis();     // start the bright-then-dim timer for the privacy screen
   LOG_INFO("paused -> %d", (int)on);
   if (on) draw();
   else    setState(State::Glance);    // leaving pause returns to the read (auto-dims after 8s)

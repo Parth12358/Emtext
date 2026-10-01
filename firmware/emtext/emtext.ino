@@ -49,6 +49,7 @@ static void onWake() {
 static bool g_paused = false;
 static void applyMic() {
   audio::setPaused(g_paused);
+  power::setPaused(g_paused);   // while paused, motion must not keep the device awake (mic is off)
 }
 
 // BtnA hold: back out of Settings; otherwise save a clip (server-stored; needs server support).

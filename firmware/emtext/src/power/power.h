@@ -31,6 +31,7 @@ namespace power {
 
   void noteActivity();       // a button / conversation event: reset idle, cancel grace, WAKE from standby
   void noteVoiced(bool on);  // speech-energy from the mic gate: reset the idle timer while true
+  void setPaused(bool on);   // privacy pause: motion no longer keeps the device awake (mic is off, nothing to wait for)
   bool standby();            // currently in low-power standby? (so a waking press can be consumed)
   bool grace();              // currently in the pre-standby grace countdown? (a press cancels+consumes)
 

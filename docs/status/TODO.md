@@ -1110,3 +1110,30 @@ Platt line in `confidence_eval` now applies only to adjusted reads.
   that `tone` is now a sarcasm flag and re-label `tone_cases.jsonl` with
   `expect_emotion` so the suite scores the headline.
 - Website copy and demo still speak in the five tones.
+
+---
+
+## A fine-tuned ≤1.5B interpreter (researched 2026-10-03)
+
+**Status:** researched, nothing built or measured · **Found:** 2026-10-03 ·
+**Affects:** `server/interpreter.py` and `server/config.py` (only if adopted);
+full write-up in `docs/design/small-interpreter.md`
+
+`qwen3:14b` costs 9.3 GB of the B580's 12 GB and ~0.89 s per read, most of it
+decode (~26 tokens at ~41 tok/s). A distilled 0.6-1.5B model would be several
+times faster and could run on the CPU, but its quality ceiling is the teacher's
+unless it is trained on real labelled speech, which does not exist yet.
+Compute is not the constraint: a full H100 sweep is under $15.
+
+### Open
+
+- Stage 0: run `qwen3:0.6b` and `granite4` through `eval.model_eval` and
+  `eval.pipeline_eval` with today's prompt, to get the floor. Needs
+  `expect_emotion` in `tone_cases.jsonl` first (already owed above).
+- The existing reads cannot be training data: 280 RAVDESS reads have 45 distinct
+  strings ("noticing kids" x54).
+- A consented real-speech test set is the long pole, and it is also the
+  missing test for the current 14B.
+- Training on the B580 under Windows is blocked by torch-xpu-ops#5220 (bf16 NaN);
+  Linux/WSL2 has a working recipe.
+

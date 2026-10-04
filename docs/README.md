@@ -12,10 +12,12 @@ code: module boundaries, invariants, and where the measurements behind each deci
 | design | [`design/firmware-ui-ux.md`](design/firmware-ui-ux.md) | The pendant's screens, controls, state machine and dev glyphs, with what is built vs planned. |
 | design | [`design/firmware-requirements.md`](design/firmware-requirements.md) | The firmware requirements the device is built against, with recorded deviations. |
 | design | [`design/website-design-brief.md`](design/website-design-brief.md) | The brief the project site was built to. |
+| design | [`design/small-interpreter.md`](design/small-interpreter.md) | Research, not built: building our own dataset and fine-tuning a ≤1.5B model to replace the 14B interpreter. Candidate models, data sources and licences, H100 vs Arc B580 training, staged plan with stop conditions. |
 | guide | [`guides/firmware.md`](guides/firmware.md) | Building and flashing the M5StickS3 pendant: modules, stages, the wire contract from the device side, TLS debt. |
 | guide | [`guides/tunnel.md`](guides/tunnel.md) | Exposing the server through a Cloudflare quick tunnel: token, scripts, keepalives, troubleshooting. |
 | guide | [`guides/website.md`](guides/website.md) | The Vite site: layout, sections, dependencies. |
 | report | [`reports/laya.md`](reports/laya.md) | Measured and rejected: a typed classifier (Laya) between SER and the LLM. Kept so the next candidate is scored the same way. |
+| report | [`reports/audio-llm.md`](reports/audio-llm.md) | Measured and rejected: an audio-input LLM (Gemma 4 E4B, Voxtral, Qwen2.5-Omni) as a one-shot replacement for ASR+SER+LLM. |
 
 Conventions: `status/` is the one file that changes with every finding; `design/` holds
 intent and evidence; `guides/` holds how-to; `reports/` holds one-off measurements whose

@@ -197,6 +197,25 @@ OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)
 OLLAMA_TIMEOUT_S: float = _env_float("OLLAMA_TIMEOUT_S", 30.0)
 
+# Load-time options. Ollama reloads the runner whenever a request arrives with
+# load options that differ from the loaded model's, so these are sent by EVERY
+# caller through interpreter.load_options() -- never spelled out per call site.
+#
+# use_mmap off: on Windows the mmap loader leaves the whole GGUF resident in the
+# runner's working set after the weights have gone to the GPU. Measured on
+# qwen3:14b (docs/reports/server-resources.md): 8.6 GB of host RAM and a 10-12 s
+# load with mmap, 0.6 GB and 2.7 s without. 1 restores Ollama's default.
+OLLAMA_USE_MMAP: bool = _env_bool("OLLAMA_USE_MMAP", False)
+# Context window. 0 = do not send it, Ollama picks (4096 on a 12 GB card). The
+# runner uses --context-shift --keep 4, so an overflowing prompt silently loses
+# the START OF SYSTEM_PROMPT -- see CONTEXT_WARN_FRACTION before lowering it.
+OLLAMA_NUM_CTX: int = _env_int("OLLAMA_NUM_CTX", 0)
+# Warn (log + dashboard counter "context_near_full") when prompt tokens plus
+# OLLAMA_NUM_PREDICT exceed this share of the context. Prompts measured at
+# ~1,000-1,560 tokens against 4096, so this never fires today; it is the guard
+# that makes shrinking OLLAMA_NUM_CTX safe to try.
+CONTEXT_WARN_FRACTION: float = _env_float("CONTEXT_WARN_FRACTION", 0.85)
+
 
 # --- Speech emotion recognition (SER) ---------------------------------------
 # Reads *how* a line sounded, so the interpreter can compare voice against

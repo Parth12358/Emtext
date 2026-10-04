@@ -121,9 +121,11 @@ async def _startup() -> None:
     # The dashboard reuses this pooled client rather than opening its own.
     app.state.http = _http
 
-    # GPU counters cost ~2.6s to query on Windows, so they are sampled on a
-    # background thread and served from cache -- a dashboard poll never waits.
-    metrics.start_gpu_poller()
+    # GPU counters cost ~2.8s and a PowerShell launch per query on Windows, so
+    # they are sampled on a background thread and served from cache -- a
+    # dashboard poll never waits. The poller is NOT started here: dashboard.py
+    # starts it on the first /api/stats and it idles again once nobody polls
+    # (it used to cost ~2.4 CPU-hours a day with no dashboard open).
     asyncio.create_task(_sample_system_loop())
 
     # ser.py loads at import, before uvicorn has configured logging, so restate
@@ -385,6 +387,9 @@ async def _process_utterance(
     llm_t0 = time.perf_counter()
     result = await interpreter.interpret(transcript, voice, who=label)
     llm_s = time.perf_counter() - llm_t0
+    if result.get("context_near_full"):
+        # interpreter.py already logged it; count it so the dashboard shows it.
+        metrics.record_event("context_near_full")
 
     # How sure is this read? Pure combination of the signals above; never
     # changes what the LLM saw, only how the read is weighted on the way out.

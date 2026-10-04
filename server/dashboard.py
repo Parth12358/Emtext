@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import clips, config, metrics, ser, speaker, transcriber, translog
+from .interpreter import load_options
 from .segmenter import Segmenter
 
 log = logging.getLogger(__name__)
@@ -130,6 +131,9 @@ async def stats(request: Request,
                 x_auth_token: str | None = Header(None)) -> dict:
     """Everything the dashboard polls: pipeline, system, GPU, models, config."""
     _require_token(token, x_auth_token)
+    # Someone is watching: keep the (expensive) GPU poller running. Returns at
+    # once; this response serves whatever sample is cached.
+    metrics.gpu_wanted()
 
     client: httpx.AsyncClient = request.app.state.http
     ps = await _ollama(client, "/api/ps")
@@ -253,11 +257,14 @@ async def select_model(body: SelectRequest, request: Request,
         # which reads as "this model is slow" rather than "it did not fit".
         await _ollama(client, "/api/generate",
                       json={"model": previous, "keep_alive": 0, "prompt": "",
-                            "stream": False})
+                            "stream": False, "options": load_options()})
         t0 = time.perf_counter()
         warm = await _ollama(client, "/api/generate",
                              json={"model": body.model, "prompt": "hi",
-                                   "stream": False, "keep_alive": -1})
+                                   "stream": False, "keep_alive": -1,
+                                   # same load options as the interpreter, or
+                                   # its first read reloads what we just warmed
+                                   "options": load_options()})
         warmed = round(time.perf_counter() - t0, 2)
         if "_error" in warm:
             log.warning("dashboard: warm-up of %s failed: %s", body.model, warm["_error"])
@@ -290,7 +297,8 @@ async def evict(body: EvictRequest, request: Request,
         await _require_pulled(client, body.model)
     result = await _ollama(client, "/api/generate",
                            json={"model": body.model, "keep_alive": 0,
-                                 "prompt": "", "stream": False})
+                                 "prompt": "", "stream": False,
+                                 "options": load_options()})
     if "_error" in result:
         raise HTTPException(status_code=503, detail=result["_error"])
     log.info("dashboard: evicted %s from VRAM", body.model)

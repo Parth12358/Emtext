@@ -44,6 +44,7 @@ import numpy as np
 import websockets
 
 from server import config
+from server.interpreter import load_options
 
 ROOT = Path(__file__).resolve().parent.parent
 CHUNK_MS = 30
@@ -141,7 +142,9 @@ async def warmup(model: str, audio: np.ndarray) -> None:
         t0 = time.perf_counter()
         await client.post(
             f"{config.OLLAMA_URL}/api/generate",
-            json={"model": model, "prompt": "hi", "stream": False, "keep_alive": -1},
+            json={"model": model, "prompt": "hi", "stream": False, "keep_alive": -1,
+                  # the interpreter's load options, or its first timed read reloads
+                  "options": load_options()},
             timeout=300,
         )
         print(f"  llm      {model:<28} {time.perf_counter() - t0:5.1f}s  (now resident)")

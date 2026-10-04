@@ -64,6 +64,7 @@ import httpx
 from eval.asr_eval import wer
 from eval.ser_eval import STATEMENTS, load_clips
 from server import config, confidence
+from server.interpreter import load_options
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "eval" / "results"
@@ -138,7 +139,8 @@ def evict(model: str | None, quiet: bool = False) -> None:
     try:
         httpx.post(
             f"{config.OLLAMA_URL}/api/generate",
-            json={"model": model, "keep_alive": 0, "prompt": "", "stream": False},
+            json={"model": model, "keep_alive": 0, "prompt": "", "stream": False,
+                  "options": load_options()},
             timeout=30,
         )
         if not quiet:

@@ -1,8 +1,9 @@
 # Server compute requirements: RAM and GPU, active and idle
 
-**Date:** 2026-10-03 -- **Status:** measured, recommendations only, nothing adopted --
-**Touches:** nothing in `server/` (every number below came from scratch probes run
-outside the repo, from the live server process, and from Ollama's own logs)
+**Date:** 2026-10-03 -- **Status:** measured; **1.1 (no mmap), 1.3 (on-demand GPU
+poller) and 1.4 (context guard) adopted 2026-10-03**, the rest open -- **Touches:**
+the measurements touched nothing in `server/` (scratch probes outside the repo, the
+live server process, and Ollama's own logs)
 
 ## Verdict
 

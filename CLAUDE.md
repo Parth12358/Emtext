@@ -189,6 +189,12 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   speaker labels are rendered in `_build_prompt` **only when a label exists**, so with
   no profile enrolled the prompt is byte-identical to the measured one and
   `SYSTEM_PROMPT` is untouched. `remember()` adds a line without interpreting it.
+  **Load-time Ollama options (`use_mmap`, `num_ctx`) come only from
+  `interpreter.load_options()`**, and every request that can load or unload a model
+  (interpreter, dashboard warm/evict, eval warm-ups) merges it in: Ollama reloads the
+  runner whenever two callers disagree, which reads as "slow model". `use_mmap` is off
+  because on Windows the mmap loader keeps the whole GGUF resident in host RAM (8.6 GB
+  for qwen3:14b; `docs/reports/server-resources.md`).
 - `server/main.py` — FastAPI app + `/stream` websocket. **Wiring only, no signal logic.**
 - `server/translog.py` — the transcript log: one JSON line per utterance
   (`logs/transcripts/<day>.jsonl`: transcript, `asr_model`, tone, read, speaker,
@@ -333,8 +339,10 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   wiring. All routes are token-gated on the SAME rule as `/stream` (enforced only
   when `AUTH_TOKEN` is set), so there is one auth rule in the project, not two.
 - GPU stats come from Windows per-engine perf counters (vendor-neutral; there is
-  no `nvidia-smi` for an Arc). A query costs ~2.6s, so it is polled on a daemon
-  thread and served from cache -- never query it in a request handler.
+  no `nvidia-smi` for an Arc). A query costs ~2.8s and a PowerShell launch, so it is
+  polled on a daemon thread and served from cache -- never query it in a request
+  handler. The poller runs only while `/api/stats` has been called in the last 60 s
+  (`metrics.gpu_wanted()`); polling unconditionally cost ~2.4 CPU-hours a day.
 - `POST /api/model` switches the interpreter live and deliberately does NOT
   persist. It works because `Interpreter` reads `config.OLLAMA_MODEL` at call
   time; keep that property.

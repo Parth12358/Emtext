@@ -374,9 +374,25 @@ def _poll_gpu_once() -> dict:
     }
 
 
+# Demand-driven: each poll launches powershell.exe (2.8 s wall, ~0.8 CPU-s,
+# ~130 MB), and polling every ~8 s whether or not anyone looked cost ~2.4
+# CPU-hours a day (docs/reports/server-resources.md). So the thread only polls
+# while the dashboard has asked within _GPU_IDLE_S, and otherwise sleeps on an
+# Event until gpu_wanted() wakes it.
+_GPU_IDLE_S = 60.0
+_gpu_last_wanted = 0.0
+_gpu_wake = threading.Event()
+
+
 def _gpu_loop(interval: float) -> None:
     global _gpu_cache
     while True:
+        if time.monotonic() - _gpu_last_wanted > _GPU_IDLE_S:
+            # Nobody is looking. Park until a dashboard poll wakes us; the
+            # cached value stays readable, so the next poll is never blocked.
+            _gpu_wake.clear()
+            _gpu_wake.wait()
+            continue
         result = _poll_gpu_once()
         _gpu_cache = result
         # Back off hard if it is not going to work, rather than spawning a
@@ -391,6 +407,18 @@ def start_gpu_poller(interval: float = 5.0) -> None:
         return
     _gpu_thread = threading.Thread(target=_gpu_loop, args=(interval,), daemon=True)
     _gpu_thread.start()
+
+
+def gpu_wanted() -> None:
+    """Note that someone is reading GPU stats; starts or wakes the poller.
+
+    Called from the dashboard's stats route. Cheap and non-blocking: it never
+    waits for a sample, it only makes sure one is on the way.
+    """
+    global _gpu_last_wanted
+    _gpu_last_wanted = time.monotonic()
+    start_gpu_poller()
+    _gpu_wake.set()
 
 
 def gpu_stats() -> dict:

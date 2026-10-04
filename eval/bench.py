@@ -190,7 +190,7 @@ async def bench_llm(runs: int) -> None:
     """
     import httpx
 
-    from server.interpreter import SYSTEM_PROMPT
+    from server.interpreter import SYSTEM_PROMPT, load_options
 
     print("\n" + "=" * 74)
     print("LLM (Ollama, GPU)")
@@ -227,10 +227,12 @@ async def bench_llm(runs: int) -> None:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
+                    "think": False,  # as interpreter.py; on by default since Ollama 0.34
                     "keep_alive": -1,
                     "options": {
                         "temperature": config.OLLAMA_TEMPERATURE,
                         "num_predict": config.OLLAMA_NUM_PREDICT,
+                        **load_options(),  # match the server's load, no reload
                     },
                 }
                 start = time.perf_counter()

@@ -16,6 +16,7 @@ degrade gracefully -- the transcript still reaches the user, just with a
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections import deque
@@ -23,6 +24,8 @@ from collections import deque
 import httpx
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 # The system prompt is the whole product, really. Notes on the choices:
 #   - Audience framing ("neurodivergent listener") steers toward concrete,
@@ -253,6 +256,38 @@ RESPONSE_SCHEMA = {
     },
     "required": ["emotion", "tone", "read"],
 }
+
+
+def load_options() -> dict:
+    """Ollama options that are fixed when a model LOADS, for every caller.
+
+    Ollama compares these against the loaded runner and reloads on any
+    difference, so a dashboard warm-up and the interpreter sending different
+    values would reload the model every time they alternate -- which reads as
+    "the model got slow". Every request that can load or unload a model
+    (interpreter, dashboard warm/evict, eval warm-ups) merges this in.
+    """
+    opts: dict = {"use_mmap": config.OLLAMA_USE_MMAP}
+    if config.OLLAMA_NUM_CTX > 0:
+        opts["num_ctx"] = config.OLLAMA_NUM_CTX
+    return opts
+
+
+# What Ollama uses when num_ctx is not sent: its VRAM-based default, logged as
+# "vram-based default context" at startup (4096 on the 12 GB Arc).
+_OLLAMA_DEFAULT_CTX = 4096
+
+
+def context_near_full(prompt_tokens: int | None) -> bool:
+    """True when this prompt plus the output cap is close to the context size.
+
+    The runner shifts context on overflow keeping only 4 tokens, i.e. it would
+    silently cut SYSTEM_PROMPT. This makes the approach visible long before.
+    """
+    if not isinstance(prompt_tokens, int):
+        return False
+    ctx = config.OLLAMA_NUM_CTX or _OLLAMA_DEFAULT_CTX
+    return prompt_tokens + config.OLLAMA_NUM_PREDICT > config.CONTEXT_WARN_FRACTION * ctx
 
 
 def _ollama_stats(body: dict | None) -> dict:
@@ -495,10 +530,17 @@ class Interpreter:
             "prompt": prompt,
             "stream": False,
             "format": RESPONSE_SCHEMA,  # constrain output at decode time
+            # qwen3 is a thinking model. Since the Ollama 0.34 upgrade an unset
+            # `think` means ON: it spent all OLLAMA_NUM_PREDICT tokens in the
+            # `thinking` field and returned an empty response, so EVERY read
+            # came back "(interpreter offline)". The measured baselines were all
+            # taken without thinking; say so explicitly. Ignored by non-thinking models.
+            "think": False,
             "keep_alive": -1,       # keep the model resident so we skip reloads
             "options": {
                 "temperature": config.OLLAMA_TEMPERATURE,
                 "num_predict": config.OLLAMA_NUM_PREDICT,  # the read is short; cap tokens
+                **load_options(),  # must match every other caller, see load_options()
             },
         }
         if config.OLLAMA_LOGPROBS:
@@ -531,11 +573,19 @@ class Interpreter:
                 # An off-enum or missing emotion is not a verdict: fall back to
                 # the voice label, which is the source anyway.
                 emotion = voice_label or "neutral"
+            stats = _ollama_stats(body)
+            near_full = context_near_full(stats["prompt_eval_count"])
+            if near_full:
+                log.warning("prompt is %s tokens, near the %s-token context; an overflow "
+                            "would silently cut SYSTEM_PROMPT",
+                            stats["prompt_eval_count"],
+                            config.OLLAMA_NUM_CTX or _OLLAMA_DEFAULT_CTX)
             return {"emotion": emotion, "tone": tone, "read": read, "offline": False,
                     "emotion_voice": voice_label,
                     "emotion_adjusted": bool(voice_label) and emotion != voice_label,
                     "emotion_prob": _tone_prob(body, "emotion"),
-                    "tone_prob": _tone_prob(body), **_ollama_stats(body)}
+                    "tone_prob": _tone_prob(body), "context_near_full": near_full,
+                    **stats}
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):
             # Unreachable Ollama, non-2xx, or malformed/garbage JSON all land
             # here. Degrade gracefully rather than dropping the utterance: the
@@ -543,4 +593,5 @@ class Interpreter:
             return {"emotion": voice_label or "neutral", "tone": "neutral",
                     "read": "(interpreter offline)", "offline": True,
                     "emotion_voice": voice_label, "emotion_adjusted": False,
-                    "emotion_prob": None, "tone_prob": None, **_ollama_stats(None)}
+                    "emotion_prob": None, "tone_prob": None, "context_near_full": False,
+                    **_ollama_stats(None)}

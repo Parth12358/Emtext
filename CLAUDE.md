@@ -34,6 +34,9 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   [28] is not available". `transcriber._pin_sherpa_onnxruntime()` loads the bundled
   DLL by path first; keep it. `pipeline_eval`'s CPU worker writes its stderr to
   `eval/results/_worker_<slug>.log` -- look there when it "failed to start".
+- Close GPU-heavy desktop apps before timing the 12B/14B: with ~2 GB of VRAM taken,
+  qwen3:14b spills into shared memory and reads in 4-6 s while `ollama ps` still
+  says "100% GPU" (`docs/reports/small-interpreter-stage0.md`).
 - `server/ser.py` has two backends behind one `analyze()`: `emotion2vec` (default,
   via funasr, categorical only, 9 classes normalised to our 7, ~0.17s) and `meralion`
   (opt-in via `SER_MODEL`, has valence/arousal/dominance, ~2.7s flat).

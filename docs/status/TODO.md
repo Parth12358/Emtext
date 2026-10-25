@@ -1107,8 +1107,9 @@ Platt line in `confidence_eval` now applies only to adjusted reads.
 - Re-measure on real conversation once the transcript log has labelled lines;
   RAVDESS can only show that the adjustment does no harm, not that it helps.
 - The tone regression above. Either tune the prompt for both fields or accept
-  that `tone` is now a sarcasm flag and re-label `tone_cases.jsonl` with
-  `expect_emotion` so the suite scores the headline.
+  that `tone` is now a sarcasm flag. (`tone_cases.jsonl` now carries
+  `expect_emotion` and `model_eval` scores the headline, as of 2026-10-24; see
+  "Stage 0 measured" below.)
 - Website copy and demo still speak in the five tones.
 
 ---
@@ -1125,15 +1126,56 @@ times faster and could run on the CPU, but its quality ceiling is the teacher's
 unless it is trained on real labelled speech, which does not exist yet.
 Compute is not the constraint: a full H100 sweep is under $15.
 
+### Stage 0 measured (2026-10-24)
+
+Full write-up, with per-emotion tables and the Stage 1 implications:
+`docs/reports/small-interpreter-stage0.md`. Today's prompt, unchanged, against the
+three current models. `tone_cases.jsonl`
+now carries `expect_emotion`, and `model_eval` scores it beside two no-LLM floors.
+"Always neutral" scores 59% and "copy the voice label" 85%, so the emotion number
+means something only as a margin over 85%. `eval/results/model_stage0.csv` (34
+cases x 3 runs) and `eval/results/pipeline_stage0.csv` (280 RAVDESS clips,
+emotion2vec, `--speech-rms 150`; SER alone 89%):
+
+| model | tone | emotion | pairs | literal / low-conf | sarcasm | PA | RAVDESS emotion | voice sens | read |
+|---|---|---|---|---|---|---|---|---|---|
+| qwen3:0.6b | 63% | 60% | 1/6 | 100% / 100% | 17% | 0% | 51% | +4% | 0.18 s |
+| qwen3.5:0.8b | 26% | 66% | 0/6 | **13% / 0%** | 0% | 0% | 34% | -41% | 0.24 s |
+| granite4:1b-h | 60% | 79% | 1/6 | 100% / 100% | 0% | 0% | 18% | +0% | 0.36 s |
+| qwen3:8b | 77% | 96% | 4/6 | 100% / 100% | 58% | 0% | 64% | +18% | 0.53 s |
+| gemma3:12b | 79% | 88% | 3/6 | 100% / **0%** | 75% | 75% | 62% | +36% | 1.29 s* |
+| qwen3:14b | 84% | 96% | 2/6 | 100% / 100% | 75% | 92% | 85% | +30% | 0.85 s** |
+
+\* and \*\*: games, Wallpaper Engine and a browser held ~2.2 GB of VRAM during the
+run, so qwen3:14b spilled ~2.4 GB into shared memory and measured 3.6-6.2 s while
+Ollama still said "100% GPU". 0.85 s is the same day's clean run. gemma's 1.29 s
+may be inflated too. Re-measure both with those apps closed.
+
+- **No small model is usable zero-shot.** None beats "copy the voice" on emotion.
+  All three score 0% on passive aggression, and qwen3.5:0.8b also fails the
+  listener-safety gate (it calls plain logistics `positive`).
+- **On real audio, only qwen3:14b keeps the voice label.** RAVDESS words are
+  neutral, so every move is a loss. 14b moves 12 of 280 (happy -> neutral). qwen3:8b
+  moves 73 and gemma 82, mostly towards `neutral`. granite moves 216, all towards
+  `neutral`, and qwen3:0.6b turns angry into happy 50 times. The prompt's "start
+  from the voice label" is followed only by the 14B. A small interpreter would need
+  either a fine-tune that learns to defer, or the emotion taken out of its hands.
+- gemma3:12b's tone low-confidence guard is 0% here. Earlier runs had it at 100%,
+  so it looks like a regression since the emotion paragraph joined the prompt.
+- `qwen3:14b`'s RAVDESS emotion is 85%, against 88.2% on 2026-09-22.
+
 ### Open
 
-- Stage 0: run `qwen3:0.6b` and `granite4` through `eval.model_eval` and
-  `eval.pipeline_eval` with today's prompt, to get the floor. Needs
-  `expect_emotion` in `tone_cases.jsonl` first (already owed above).
+- Re-time gemma3:12b and qwen3:14b on a clear GPU
+  (`python -m eval.model_eval --models gemma3:12b qwen3:14b --runs 3`).
 - The existing reads cannot be training data: 280 RAVDESS reads have 45 distinct
   strings ("noticing kids" x54).
 - A consented real-speech test set is the long pole, and it is also the
   missing test for the current 14B.
 - Training on the B580 under Windows is blocked by torch-xpu-ops#5220 (bf16 NaN);
   Linux/WSL2 has a working recipe.
+- Published speed (2026-10-07, design doc §3.1): llama.cpp CPU Q4_0 decode is
+  ~100-210 tok/s for the ≤1.2B candidates, which estimates to ~0.2-0.5 s per read
+  on the 9600X (vs 0.89 s today). There are no B580 numbers for any model under 3B, and
+  none for Granite-H at all. Run `llama-bench -p 300 -n 25` locally to replace the estimates.
 

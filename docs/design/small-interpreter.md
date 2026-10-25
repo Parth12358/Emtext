@@ -43,6 +43,13 @@ stop the effort.
 on `qwen3:0.6b` and `granite4` exactly as they are, with today's prompt. That gives the floor
 a fine-tune has to clear, and it costs an afternoon.
 
+**Stage 0 result (2026-10-24, [`../reports/small-interpreter-stage0.md`](../reports/small-interpreter-stage0.md)):**
+no ≤1B model is usable zero-shot. They are 2-5x faster on the B580 (0.18-0.36 s per read against
+0.85 s), but none beats copying the voice label on emotion, and all three score 0% on passive
+aggression. On RAVDESS they change the voice label they are told to keep, which cuts the voice
+model's 89% to 18-51%. Only the 14B keeps it. So Stage 1 must either train the model to defer, or
+take the emotion out of its hands.
+
 ---
 
 ## 1. The task, precisely
@@ -157,6 +164,73 @@ completely and overturn the hardware split (LLM on GPU, everything else on CPU).
 competes with ASR, SER and speaker id for the same six cores, which run in parallel per
 utterance. Measure with `llama-bench -p 300 -n 25` while `eval.latency` runs, before
 deciding. On the B580 it would decode far faster than 41 tok/s **[EST]**.
+
+### 3.1 Published numbers (searched 2026-10-07)
+
+Our prompts are short (~300-500 tokens in, ~25 out), so decode speed matters most. The figures
+below are the only like-for-like set found: llama.cpp on the CPU, Q4_0, a laptop Zen 5 (Ryzen AI 9
+HX 370), 1K-token prompt
+([LFM2 tech report, Table 3](https://arxiv.org/html/2511.23404v1);
+[LFM2.5 blog](https://www.liquid.ai/blog/introducing-lfm2-5-the-next-generation-of-on-device-ai))
+**[SINGLE, vendor]**. IFEval values come from each model's card or report **[SINGLE, vendor]**.
+Most of the cross-model IFEval set was run by Liquid, so it is one harness.
+
+| model | prefill tok/s | decode tok/s | est. read on 9600X, 300 in / 25 out **[EST]** | IFEval |
+|---|---|---|---|---|
+| LFM2-350M | 7534 | 208 | ~0.2 s | 65.1 |
+| LFM2-700M | 4214 | 135 | ~0.3 s | 72.2 |
+| Qwen3-0.6B | 3594 | 116 | ~0.4 s | 54.5 strict (Qwen) / 64.2 (Liquid) |
+| LFM2.5-1.2B | 2975 | 116 | ~0.4 s | 86.2 |
+| Gemma 3 1B | 3972 | 104 | ~0.4 s | 63.3 (Liquid) |
+| Llama 3.2 1B | 2912 | 97 | ~0.5 s | 59.5 |
+| Granite-4.0-H-1B | **[GAP]** | **[GAP]** | — | 78.5 |
+| Qwen3.5-0.8B | **[GAP]** | **[GAP]** | — | 52.1 |
+| Qwen3-1.7B (over cap) | 2008 | 62 | ~0.6 s | — |
+| *qwen3:14b today, B580 (`README.md`)* | *~1050* | *~41* | *0.89 s measured* | *84.8* |
+
+- **The estimate column** assumes a desktop 6-core runs at roughly 0.6× the laptop's prefill and
+  0.8× its decode. That ratio was not measured anywhere.
+- **Quant format matters on the CPU.** Llama-3.2-1B does 743 / 60 tok/s at Q4_K_M on a desktop
+  Ryzen 9 7900 ([OpenBenchmarking](https://openbenchmarking.org/result/2506157-NE-TINYLLMTE06))
+  **[SINGLE]**, against 2912 / 97 at Q4_0 above. Q8_0, the export pick in §6.3, will decode
+  slower than this table.
+- **Hybrids are a speed risk.**
+  - llama.cpp's [ops table](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) marks
+    Mamba2 `SSM_SCAN` (Granite-H) as only partly supported on Vulkan and SYCL.
+  - Qwen3.5's Gated DeltaNet fell back to the CPU on Vulkan until a recent shader landed
+    ([#20354](https://github.com/ggml-org/llama.cpp/issues/20354)).
+  - Ollama is reported 5-6× slower than llama.cpp on Qwen3.5 hybrids
+    ([ollama#14579](https://github.com/ollama/ollama/issues/14579)) **[SINGLE]**.
+  - LFM2's short-conv layers are the exception: they lose less speed at 4K context than
+    Qwen3-0.6B does (89 vs 53 tok/s decode).
+- **[GAP]** No B580 or A770 number exists for any model under 3B. No llama.cpp number exists for
+  Granite-4.0-H at any size.
+
+**Emotion and sarcasm.** No candidate has published results on our task. The closest:
+
+- **Qwen3-0.6B, 7-class emotion:** 51% zero-shot, 72% with a linear probe. Qwen3-8B gets 79%
+  zero-shot ([2510.04064](https://arxiv.org/html/2510.04064)) **[PREPRINT]**.
+- **Qwen2.5-0.5B and 1.5B, multi-class emotion with LoRA:** macro-F1 0.68. Prompted Qwen2.5-14B
+  scores 0.63 zero-shot and 0.70 few-shot ([2507.05918](https://arxiv.org/html/2507.05918))
+  **[PREPRINT]**.
+- **Llama-3.2-1B, headline sarcasm:** F1 0.36 zero-shot, 0.95 with LoRA and a classifier head
+  ([IIETA](https://www.iieta.org/node/24109)) **[SINGLE]**. Headlines are far easier than
+  speech (§5.2).
+
+**[GAP]** Nothing published covers the candidates on GoEmotions, TweetEval irony, iSarcasmEval or
+MELD. Nothing covers 5-way tone, ≤5-word reads, or the calibration of LoRA-tuned ≤1.5B models.
+
+**Reading:** every candidate up to 1.2B should give a read in about 0.2-0.5 s on the CPU, against
+0.89 s on the GPU today **[EST]**. Zero-shot quality is weak across the board, so the case still
+rests on the Stage 1 fine-tune. LFM2-350M/700M are the fastest, but bring Liquid's licence and
+only 8 languages. Qwen3-0.6B is the speed pick with a clean licence. Stage 0 plus one local
+`llama-bench -p 300 -n 25` run (CPU and B580, Q4_0 vs Q8_0) replaces this whole column of
+estimates.
+
+Stage 0 measured the **B580** half through Ollama (stock tags, full production request), as
+median read time: qwen3:0.6b 0.18 s, qwen3.5:0.8b 0.24 s, granite4:1b-h 0.36 s (so Granite-H does
+run on the Arc), and qwen3:8b 0.53 s, against qwen3:14b's 0.85 s. The **CPU** column above is still
+unmeasured ([report](../reports/small-interpreter-stage0.md), "Speed and memory").
 
 ---
 
@@ -522,7 +596,7 @@ Each stage has a cost and a result that stops the effort.
 
 | stage | what | cost | stop if |
 |---|---|---|---|
-| **0. Baseline** | `qwen3:0.6b`, `granite4` (and `qwen3.5:0.8b`) through `eval.model_eval` and `eval.pipeline_eval`, unchanged prompt. Add `expect_emotion` to `tone_cases.jsonl` first (TODO, already owed) so the headline is scored. | an afternoon, local | never: this is the floor every later number is measured against |
+| **0. Baseline** — **done 2026-10-24** ([report](../reports/small-interpreter-stage0.md)) | `qwen3:0.6b`, `granite4:1b-h` and `qwen3.5:0.8b` through `eval.model_eval` and `eval.pipeline_eval`, unchanged prompt, against the three current models. `expect_emotion` added to `tone_cases.jsonl` so the headline is scored. Floor: "copy the voice" 85% emotion; best small model 79% (`granite4:1b-h`); `qwen3.5:0.8b` fails the safety gate. | an afternoon, local | never: this is the floor every later number is measured against |
 | **1. Distil** | Scripted generator + 2-teacher labelling of 5-20k rows; dedup; SFT Qwen3-0.6B (full) and Granite-H-1B (LoRA); Q8_0 → Ollama; refit Platt. | ~$10-30 H100 + generation | the fine-tune scores below Stage 0's best on `literal` / `low-confidence`, **or** below qwen3:14b by more than a few points overall on `tone_cases` |
 | **2. Real speech** | Record consented scripted + free sessions; label with ≥3 raters (soft labels, self-labelled intent); a frozen real test set; then real rows into training; optional ORPO against over-firing. | weeks of recording and labelling; H100 cost negligible | the real test set shows no small model within reach of the 14B on the mismatch/sarcasm categories |
 | **3. Ship** | Per-model prompt knob in `config.py`; `eval.latency` with the model on CPU and on GPU; README model table; a `docs/reports/` write-up. | local | latency or VRAM gain smaller than the measured quality loss |

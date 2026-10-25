@@ -17,6 +17,8 @@ eval/results/_cache_*.jsonl
 # live progress, meaningless once a run ends
 eval/results/*_status.json
 eval/results/*_status.tmp
+# pipeline_eval CPU worker stderr, rewritten every run
+eval/results/_worker_*.log
 # throwaway smoke-test output, mixed seeds
 eval/results/demo*
 # older ad-hoc outputs at eval/ root

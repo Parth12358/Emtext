@@ -168,12 +168,40 @@ class _Whisper:
         return text, round(min(1.0, math.exp(sum(lps) / len(lps))), 3)
 
 
+def _pin_sherpa_onnxruntime() -> None:
+    """Load sherpa-onnx's bundled onnxruntime.dll by full path, before the import.
+
+    Windows 11 ships its own onnxruntime.dll (1.17.1) in System32. sherpa-onnx's
+    extension asks for `onnxruntime.dll` by name, and the loader resolves that to
+    the System32 copy rather than the 1.29 sitting beside it in sherpa_onnx/lib/,
+    so every sherpa key dies with "requested API version [28] is not available"
+    (found 2026-10-24; it took parakeet:v3, the default, and with it the server).
+    Once a DLL of that name is mapped, later by-name requests reuse it, so loading
+    the bundled one first by path is enough. Windows-only, and silent when the
+    file is missing: a non-Windows or differently packaged wheel loads as before.
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return
+    import ctypes
+    import importlib.util
+
+    spec = importlib.util.find_spec("sherpa_onnx")
+    if not spec or not spec.origin:
+        return
+    dll = Path(spec.origin).parent / "lib" / "onnxruntime.dll"
+    if dll.exists():
+        ctypes.WinDLL(str(dll))
+
+
 class _Sherpa:
     """Parakeet / Moonshine / SenseVoice through sherpa-onnx's OfflineRecognizer."""
 
     def __init__(self, spec: Spec, model_dir: Path) -> None:
         # Imported here, not at module top: a missing wheel must only break
         # these keys, never the import of this module (and therefore the server).
+        _pin_sherpa_onnxruntime()
         import sherpa_onnx
 
         self.spec = spec

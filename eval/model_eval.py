@@ -28,6 +28,13 @@ What it measures, and why each part is separate
     scores 0 here no matter how good its overall accuracy looks. This is the
     only metric that proves the voice signal is actually being used.
 
+  - **emotion accuracy** -- the headline the listener sees since 2026-09-22
+    (the voice label, adjusted by the LLM), scored against `expect_emotion`.
+    Printed beside two floors computed from the cases alone: always answering
+    `neutral`, and copying the voice label (else `neutral`). A model that does
+    no better than "copy the voice" has added nothing to the emotion; the
+    `low-confidence` cases are where copying is wrong on purpose.
+
   - **speed** -- wall clock plus Ollama's own prefill/decode token counters.
     A model that is 3 points better but twice as slow may still be the wrong
     choice for a live conversation.
@@ -51,7 +58,7 @@ from pathlib import Path
 import httpx
 
 from server import config
-from server.interpreter import Interpreter
+from server.interpreter import Interpreter, load_options
 
 CASES_PATH = Path(__file__).resolve().parent / "tone_cases.jsonl"
 
@@ -114,6 +121,9 @@ async def run_model(model: str, cases: list[dict], runs: int) -> dict:
                         "expect": case["expect"],
                         "got": out["tone"],
                         "emotion": out.get("emotion", ""),
+                        "expect_emotion": case.get("expect_emotion") or [],
+                        "emotion_ok": out.get("emotion") in (case.get("expect_emotion") or []),
+                        "emotion_adjusted": bool(out.get("emotion_adjusted")),
                         "read": out["read"],
                         "ok": out["tone"] in case["expect"],
                         "offline": out["read"] == "(interpreter offline)",
@@ -135,6 +145,20 @@ async def run_model(model: str, cases: list[dict], runs: int) -> dict:
                     print(f"    run {run_index}/{runs} done", flush=True)
         finally:
             config.OLLAMA_MODEL = original
+            # Unload before the next model loads. The interpreter pins with
+            # keep_alive:-1, so without this every model stays resident: on
+            # 2026-10-24 a 6-model run left qwen3:14b beside gemma3:12b, and
+            # 14b's reads measured 5.5 s instead of 0.85 s -- offload, not the
+            # model. Same load_options() as the interpreter, or Ollama reloads.
+            try:
+                await client.post(
+                    f"{config.OLLAMA_URL}/api/generate",
+                    json={"model": model, "keep_alive": 0, "prompt": "", "stream": False,
+                          "options": load_options()},
+                    timeout=30,
+                )
+            except httpx.HTTPError as exc:
+                print(f"    could not evict {model}: {exc}", flush=True)
 
     return {"model": model, "results": results}
 
@@ -168,7 +192,8 @@ def mismatch_score(results: list[dict]) -> tuple[int, int]:
 CSV_COLUMNS = [
     "model", "run", "id", "category", "transcript", "context",
     "voice_emotion", "voice_confidence", "voice_valence", "voice_arousal",
-    "expected", "got", "emotion", "correct", "read", "elapsed_s", "offline", "note",
+    "expected", "got", "correct", "expected_emotion", "emotion", "emotion_correct",
+    "emotion_adjusted", "read", "elapsed_s", "offline", "note",
 ]
 
 
@@ -197,8 +222,11 @@ def write_csv(runs_data: list[dict], path: Path) -> None:
                     "voice_arousal": r["voice_arousal"],
                     "expected": "|".join(r["expect"]),
                     "got": r["got"],
-                    "emotion": r.get("emotion", ""),
                     "correct": int(r["ok"]),
+                    "expected_emotion": "|".join(r["expect_emotion"]),
+                    "emotion": r.get("emotion", ""),
+                    "emotion_correct": int(r["emotion_ok"]),
+                    "emotion_adjusted": int(r["emotion_adjusted"]),
                     "read": r["read"],
                     "elapsed_s": round(r["elapsed"], 3),
                     "offline": int(r["offline"]),
@@ -207,29 +235,65 @@ def write_csv(runs_data: list[dict], path: Path) -> None:
     print(f"\nper-case rows written to {path}")
 
 
+def _category_rows(rows: list[tuple[str, list[dict]]], categories: list[str],
+                   key: str) -> None:
+    """One line per (label, results): accuracy on `key` per category, then overall."""
+    header = f"{'model':<14}" + "".join(f"{c[:11]:>13}" for c in categories) + f"{'ALL':>8}"
+    print(header)
+    print("-" * len(header))
+    for label, results in rows:
+        row = f"{label:<14}"
+        if not results:
+            print(row + "  (no results)")
+            continue
+        for cat in categories:
+            subset = [r for r in results if r["category"] == cat]
+            pct = 100 * sum(r[key] for r in subset) / len(subset) if subset else 0
+            row += f"{pct:>12.0f}%"
+        overall = 100 * sum(r[key] for r in results) / len(results)
+        row += f"{overall:>7.0f}%"
+        print(row)
+
+
+def emotion_floors(cases: list[dict]) -> list[tuple[str, list[dict]]]:
+    """What two policies that never call an LLM score on `expect_emotion`.
+
+    Many cases accept `neutral` and most voiced cases accept the voice label,
+    so both floors are high on purpose; the emotion number means something only
+    as a margin over them.
+    """
+    labelled = [c for c in cases if c.get("expect_emotion")]
+
+    def score(pick) -> list[dict]:
+        return [{"category": c["category"], "emotion_ok": pick(c) in c["expect_emotion"]}
+                for c in labelled]
+
+    return [
+        ("(neutral)", score(lambda c: "neutral")),
+        ("(copy voice)", score(lambda c: (c.get("voice") or {}).get("emotion") or "neutral")),
+    ]
+
+
 def report(runs_data: list[dict], cases: list[dict], show_fails: bool) -> None:
     categories = sorted({c["category"] for c in cases})
 
     print("\n" + "=" * 78)
     print("ACCURACY BY CATEGORY (tone within the case's accepted set)")
     print("=" * 78)
-    header = f"{'model':<14}" + "".join(f"{c[:11]:>13}" for c in categories) + f"{'ALL':>8}"
-    print(header)
-    print("-" * len(header))
+    _category_rows([(d["model"], d["results"]) for d in runs_data], categories, "ok")
 
+    print("\n" + "=" * 78)
+    print("EMOTION ACCURACY BY CATEGORY (headline emotion within expect_emotion)")
+    print("=" * 78)
+    _category_rows([(d["model"], d["results"]) for d in runs_data] + emotion_floors(cases),
+                   categories, "emotion_ok")
+    print("\n(neutral) and (copy voice) are policies with no LLM: the floor to beat.")
     for data in runs_data:
-        row = f"{data['model']:<14}"
-        results = data["results"]
-        if not results:
-            print(row + "  (no results)")
-            continue
-        for cat in categories:
-            subset = [r for r in results if r["category"] == cat]
-            pct = 100 * sum(r["ok"] for r in subset) / len(subset) if subset else 0
-            row += f"{pct:>12.0f}%"
-        overall = 100 * sum(r["ok"] for r in results) / len(results)
-        row += f"{overall:>7.0f}%"
-        print(row)
+        adjusted = [r for r in data["results"] if r["emotion_adjusted"]]
+        if adjusted:
+            ok = sum(r["emotion_ok"] for r in adjusted)
+            print(f"  {data['model']:<14} moved the voice label on {len(adjusted)} reads, "
+                  f"{ok} of them to an accepted emotion")
 
     print("\n" + "=" * 78)
     print("VOICE MISMATCH DISCRIMINATION  (identical text, opposite voice)")
@@ -267,6 +331,13 @@ def report(runs_data: list[dict], cases: list[dict], show_fails: bool) -> None:
             for r in misses:
                 print(f"  [{r['id']:<8}] got {r['got']:<10} want {'/'.join(r['expect'])}")
                 print(f"             \"{r['read']}\"")
+            seen.clear()
+            misses = [r for r in data["results"] if not r["emotion_ok"] and r["id"] not in seen
+                      and not seen.add(r["id"])]
+            print(f"  emotion misses ({len(misses)} distinct):")
+            for r in misses:
+                print(f"  [{r['id']:<8}] got {r['emotion']:<10} "
+                      f"want {'/'.join(r['expect_emotion'])}")
 
 
 async def main_async(args: argparse.Namespace) -> None:

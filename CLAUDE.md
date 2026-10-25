@@ -29,6 +29,11 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   built during `__init__`, which fails under transformers 5's meta-device init.
 - On Windows set `HF_HUB_DISABLE_SYMLINKS=1` before any first-time model download;
   without it the HF cache needs symlink privileges and fails with WinError 1314.
+- Windows 11 ships `System32\onnxruntime.dll` (1.17.1), and it wins over the one
+  bundled with sherpa-onnx, killing every sherpa ASR key with "requested API version
+  [28] is not available". `transcriber._pin_sherpa_onnxruntime()` loads the bundled
+  DLL by path first; keep it. `pipeline_eval`'s CPU worker writes its stderr to
+  `eval/results/_worker_<slug>.log` -- look there when it "failed to start".
 - `server/ser.py` has two backends behind one `analyze()`: `emotion2vec` (default,
   via funasr, categorical only, 9 classes normalised to our 7, ~0.17s) and `meralion`
   (opt-in via `SER_MODEL`, has valence/arousal/dominance, ~2.7s flat).

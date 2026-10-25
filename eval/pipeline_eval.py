@@ -452,11 +452,15 @@ async def collect_and_interpret(client, ser_model, slug, llm_model, clips, cache
     }
     print(f"  starting CPU worker for {ser_model} ({len(todo)} clips to compute) ...",
           flush=True)
+    # These libraries are very chatty on load, so stderr goes to a file rather
+    # than the console -- but not to DEVNULL: on 2026-10-24 the worker died on an
+    # onnxruntime DLL clash and the only message was "failed to start".
+    worker_log = RESULTS / f"_worker_{slug}.log"
     proc = subprocess.Popen(
         [sys.executable, "-u", "-m", "eval.pipeline_child", str(ROOT)],
         cwd=str(ROOT), env=env, text=True, bufsize=1,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,   # these libraries are very chatty on load
+        stderr=worker_log.open("w", encoding="utf-8"),
     )
 
     handshake = None
@@ -466,7 +470,8 @@ async def collect_and_interpret(client, ser_model, slug, llm_model, clips, cache
             break
     if not handshake or not handshake.get("ok"):
         proc.kill()
-        raise RuntimeError(f"CPU worker failed to start for {ser_model}")
+        raise RuntimeError(f"CPU worker failed to start for {ser_model}; "
+                           f"its stderr is in {worker_log}")
     backend = handshake.get("backend") or "?"
     print(f"  CPU worker ready (backend={backend}, "
           f"whisper={handshake.get('whisper_model')})", flush=True)
@@ -850,11 +855,13 @@ async def run(args) -> None:
         vad_check(clips[: args.vad_check])
         return
 
-    cells = [(sm, slug, llm) for sm, slug in SER_MODELS for llm in LLM_MODELS]
-    if args.llm:
-        # One interpreter only: re-scoring a single cell (e.g. for
-        # eval.confidence_eval) without swapping every model through VRAM.
-        cells = [c for c in cells if c[2] in args.llm]
+    # --llm replaces the list rather than filtering it: re-scoring one cell
+    # (e.g. for eval.confidence_eval) without swapping every model through
+    # VRAM, or running a model outside the default three (the small-interpreter
+    # baseline, docs/design/small-interpreter.md). Filtering used to drop an
+    # unknown name silently, so the run did nothing and said nothing.
+    llms = args.llm or LLM_MODELS
+    cells = [(sm, slug, llm) for sm, slug in SER_MODELS for llm in llms]
     if args.cells:
         cells = cells[: args.cells]
 
@@ -957,7 +964,8 @@ def main() -> None:
     ap.add_argument("--cells", type=int, default=0,
                     help="run only the first N cells (smallest models first)")
     ap.add_argument("--llm", nargs="*", default=None, metavar="MODEL",
-                    help="restrict to these interpreter models (default: all three)")
+                    help="interpreter models to run, in place of the default three "
+                         "(any pulled Ollama model)")
     ap.add_argument("--include-calm", action="store_true",
                     help="fold RAVDESS 'calm' into neutral (default: excluded; "
                          "see eval/ser_eval.py for why)")

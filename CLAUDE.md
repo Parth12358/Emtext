@@ -216,6 +216,15 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   under `CLIPS_DIR`. Only this module knows the file layout -- `main.py` calls
   `Recent`/`save`, `dashboard.py` calls the list/lookup/delete helpers. Never
   raises: a failed save is `{"type":"saved","ok":false,"error":...}` on the wire.
+- `distill/` — the teacher-student dataset for a small interpreter adapter
+  (`docs/guides/distill.md`). Not imported by the server. `spec.py` is the versioned rule
+  table (categories, voice variants, and the outcome SYSTEM_PROMPT's own rules predict;
+  self-test `python -m distill.spec`). Bump `SPEC_VERSION` when it changes. `voice.py`
+  samples hints through `ser._expected()` and the real anchors, never hand-typed numbers.
+  `pipeline.py` renders inputs with `Interpreter._build_prompt` and labels through
+  `Interpreter.interpret`, so the data is production's prompt byte for byte. Keep it that
+  way rather than re-implementing the prompt. Output goes to `data/distill/` (gitignored).
+  Rows near an eval transcript are rejected at build, so the eval suites stay held out.
 - `server/static/index.html` — single-file browser client. **No build step, no external
   CDNs/fonts.** Uses AudioWorklet (not MediaRecorder) and downsamples to 16 kHz in JS.
   The same single-file, no-CDN rule covers `dashboard.html`, `remote.html` and

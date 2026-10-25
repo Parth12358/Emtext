@@ -16,6 +16,7 @@ code: module boundaries, invariants, and where the measurements behind each deci
 | guide | [`guides/firmware.md`](guides/firmware.md) | Building and flashing the M5StickS3 pendant: modules, stages, the wire contract from the device side, TLS debt. |
 | guide | [`guides/tunnel.md`](guides/tunnel.md) | Exposing the server through a Cloudflare quick tunnel: token, scripts, keepalives, troubleshooting. |
 | guide | [`guides/website.md`](guides/website.md) | The Vite site: layout, sections, dependencies. |
+| guide | [`guides/distill.md`](guides/distill.md) | Building the teacher-student dataset for a small interpreter adapter (`distill/`): phases, filters, output format, recorded decisions. |
 | report | [`reports/laya.md`](reports/laya.md) | Measured and rejected: a typed classifier (Laya) between SER and the LLM. Kept so the next candidate is scored the same way. |
 | report | [`reports/small-interpreter-stage0.md`](reports/small-interpreter-stage0.md) | Stage 0 of the small-interpreter plan: ≤1B models (Qwen3-0.6B, Qwen3.5-0.8B, Granite-4.0-H-1B) on today's prompt against the three current models. Not usable zero-shot; the floor Stage 1 must clear. |
 | report | [`reports/audio-llm.md`](reports/audio-llm.md) | Measured and rejected: an audio-input LLM (Gemma 4 E4B, Voxtral, Qwen2.5-Omni) as a one-shot replacement for ASR+SER+LLM. |

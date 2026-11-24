@@ -191,7 +191,16 @@ OLLAMA_URL: str = _env_str("OLLAMA_URL", "http://localhost:11434")
 # (which is all emotion2vec supplies). Note gemma scores 93% on eval/tone_cases,
 # where the hint carries NUMERIC valence -- it uses valence well and discounts a
 # label. If a backend with usable valence lands, re-run the comparison.
-OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "qwen3:14b")
+#
+# Since 2026-11-24 the default is the distilled student (docs/reports/small-interpreter-
+# stage1.md): Qwen3-0.6B fine-tuned on distill v2, built with
+# `ollama create emtext-qwen3-0.6b:v2 -f distill/Modelfile.student` (the stock qwen3
+# template does NOT match its training format). Same RAVDESS eval, emotion2vec:
+#   emtext-qwen3-0.6b:v2  89% shown emotion, 81% tone, +49% voice sensitivity, 0.16s
+#   qwen3:14b             85%, 65%, +30%, 0.85s
+# It is weaker than the 14B on text-only sarcasm and passive aggression (no voice
+# hint); OLLAMA_MODEL=qwen3:14b brings the old default back.
+OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "emtext-qwen3-0.6b:v2")
 CONTEXT_LINES: int = _env_int("CONTEXT_LINES", 12)  # rolling transcript window
 OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)

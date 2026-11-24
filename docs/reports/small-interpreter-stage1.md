@@ -79,7 +79,11 @@ All three failure groups are lines **with no voice hint**:
   monitor moved to the motherboard's iGPU after Ollama started, new runners opened
   "device 0" and got the AMD Radeon iGPU while `ollama ps` still said "100% GPU": both 0.6B
   models read in 2.2 s at 15-20 tok/s. Restarting Ollama re-ran discovery, found the B580,
-  and the same reads took 0.15-0.2 s. The server log line
+  and the same reads took 0.15-0.2 s. **A restart is not enough:** an hour later, a newly
+  loaded `qwen3:14b` landed on the iGPU again at 22.6 s per read. The device order is not
+  stable between runners. Hiding the AMD Vulkan driver from Ollama's process alone
+  (`VK_LOADER_DRIVERS_DISABLE=*amd-vulkan*`, then `ollama serve`) leaves the B580 as its only
+  device; the 14B then labelled at 1.05 s per row. The server log line
   `using device Vulkan0 (...)` names the card actually used.
 
 ## Reproduce

@@ -214,6 +214,7 @@ async def models(request: Request,
             "family": details.get("family"),
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
+            "note": config.MODEL_NOTES.get(m.get("name")),
         })
     out.sort(key=lambda m: m["size_gb"])
     return {"reachable": True, "models": out, "selected": config.OLLAMA_MODEL}

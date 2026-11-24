@@ -201,6 +201,19 @@ OLLAMA_URL: str = _env_str("OLLAMA_URL", "http://localhost:11434")
 # It is weaker than the 14B on text-only sarcasm and passive aggression (no voice
 # hint); OLLAMA_MODEL=qwen3:14b brings the old default back.
 OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "emtext-qwen3-0.6b:v2")
+# One line per known interpreter model, shown beside it in the dashboard's model list
+# (GET /api/models) so the student versions, which share a size and a family, can be
+# told apart. Display only: any pulled model can still be selected. The numbers are
+# RAVDESS end to end (tone / voice sensitivity) and the median read, from
+# docs/reports/small-interpreter-stage1.md.
+MODEL_NOTES: dict[str, str] = {
+    "emtext-qwen3-0.6b:v3": "student v3: more words-only training rows; RAVDESS tone 90%, "
+                            "voice +79%; 0.16 s",
+    "emtext-qwen3-0.6b:v2": "student v2: RAVDESS tone 81%, voice +49%; 0.16 s",
+    "emtext-qwen3-0.6b:v3-ds": "student v3, DeepSeek labels only (ablation)",
+    "qwen3:14b": "previous default: best on words-only sarcasm; RAVDESS tone 65%; 0.7-0.9 s",
+    "qwen3:0.6b": "stock base model, not fine-tuned (Stage 0 floor)",
+}
 CONTEXT_LINES: int = _env_int("CONTEXT_LINES", 12)  # rolling transcript window
 OLLAMA_TEMPERATURE: float = _env_float("OLLAMA_TEMPERATURE", 0.2)
 OLLAMA_NUM_PREDICT: int = _env_int("OLLAMA_NUM_PREDICT", 80)

@@ -193,24 +193,28 @@ OLLAMA_URL: str = _env_str("OLLAMA_URL", "http://localhost:11434")
 # label. If a backend with usable valence lands, re-run the comparison.
 #
 # Since 2026-11-24 the default is the distilled student (docs/reports/small-interpreter-
-# stage1.md): Qwen3-0.6B fine-tuned on distill v2, built with
-# `ollama create emtext-qwen3-0.6b:v2 -f distill/Modelfile.student` (the stock qwen3
+# stage1.md): Qwen3-0.6B fine-tuned on distill v3, built with
+# `ollama create emtext-qwen3-0.6b:v3 -f distill/Modelfile.student` (the stock qwen3
 # template does NOT match its training format). Same RAVDESS eval, emotion2vec:
-#   emtext-qwen3-0.6b:v2  89% shown emotion, 81% tone, +49% voice sensitivity, 0.16s
-#   qwen3:14b             85%, 65%, +30%, 0.85s
+#   emtext-qwen3-0.6b:v3     89% shown emotion, 90% tone, +79% voice sensitivity, 0.15s
+#   emtext-qwen3-0.6b:v3-ds  89%, 93%, +91%, 0.15s (DeepSeek-only labels; a tie with v3,
+#                            which is 3 points ahead on text-only emotion, the headline)
+#   emtext-qwen3-0.6b:v2     89%, 81%, +49%, 0.16s
+#   qwen3:14b                85%, 65%, +30%, 0.85s
 # It is weaker than the 14B on text-only sarcasm and passive aggression (no voice
 # hint); OLLAMA_MODEL=qwen3:14b brings the old default back.
-OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "emtext-qwen3-0.6b:v2")
+OLLAMA_MODEL: str = _env_str("OLLAMA_MODEL", "emtext-qwen3-0.6b:v3")
 # One line per known interpreter model, shown beside it in the dashboard's model list
 # (GET /api/models) so the student versions, which share a size and a family, can be
 # told apart. Display only: any pulled model can still be selected. The numbers are
 # RAVDESS end to end (tone / voice sensitivity) and the median read, from
 # docs/reports/small-interpreter-stage1.md.
 MODEL_NOTES: dict[str, str] = {
-    "emtext-qwen3-0.6b:v3": "student v3: more words-only training rows; RAVDESS tone 90%, "
-                            "voice +79%; 0.16 s",
+    "emtext-qwen3-0.6b:v3": "student v3 (default): more words-only training rows; "
+                            "RAVDESS tone 90%, voice +79%; text emotion 94%; 0.15 s",
     "emtext-qwen3-0.6b:v2": "student v2: RAVDESS tone 81%, voice +49%; 0.16 s",
-    "emtext-qwen3-0.6b:v3-ds": "student v3, DeepSeek labels only (ablation)",
+    "emtext-qwen3-0.6b:v3-ds": "student v3, DeepSeek labels only: RAVDESS tone 93%, "
+                               "voice +91%; text emotion 91%; 0.15 s",
     "qwen3:14b": "previous default: best on words-only sarcasm; RAVDESS tone 65%; 0.7-0.9 s",
     "qwen3:0.6b": "stock base model, not fine-tuned (Stage 0 floor)",
 }

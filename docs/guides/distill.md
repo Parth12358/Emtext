@@ -244,7 +244,10 @@ figure (4%) means nothing here: the 14B labelled only the rows DeepSeek failed.
 **DeepSeek-only comparison** (`data/distill/v3-ds`): the same rows and labels built with
 no fallback teacher keep 5,531 (5,250 train, 281 val). The 1,091 missing rows are what the
 local teachers rescued, most in teasing/contrast (433 → 262), passive aggression/none
-(239 → 150) and sarcasm/contrast (294 → 222).
+(239 → 150) and sarcasm/contrast (294 → 222). Trained the same way, the two students tie
+within noise ([Stage 1](../reports/small-interpreter-stage1.md)), so **the local fallbacks
+are optional**: `build --teacher deepseek-flash` alone is enough, and it saves the ~55 minutes
+of GPU the `--only-failed` passes cost.
 
 Generator faults found and fixed in the pilot, so they are not rediscovered:
 - category draws too noisy, now round-robin;

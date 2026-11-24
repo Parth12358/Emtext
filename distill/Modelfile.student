@@ -1,10 +1,11 @@
 # emtext student (docs/reports/small-interpreter-stage1.md):
-#   ollama create emtext-qwen3-0.6b:v2 -f distill/Modelfile.student
+#   ollama create emtext-qwen3-0.6b:v3 -f distill/Modelfile.student
+# Another version: change FROM to its GGUF and the tag to match (:v2, :v3-ds).
 # The template reproduces the TRAINING format exactly (HF chat template, enable_thinking=False):
 # no " /no_think" suffix on the user turn (the stock qwen3 template adds one whenever a request
 # sends think=false, as interpreter.py always does), and the answer opens with an empty think
 # block. FROM is relative to this file; the GGUF comes from llama.cpp convert_hf_to_gguf.py.
-FROM ../models/gguf/emtext-qwen3-0.6b-v2-q8_0.gguf
+FROM ../models/gguf/emtext-qwen3-0.6b-v3-q8_0.gguf
 TEMPLATE """
 {{- if .System }}<|im_start|>system
 {{ .System }}<|im_end|>

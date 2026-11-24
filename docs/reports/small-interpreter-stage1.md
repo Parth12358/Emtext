@@ -6,7 +6,11 @@ Ollama with the production `SYSTEM_PROMPT`, schema and logprobs, and scored on t
 suites as [Stage 0](small-interpreter-stage0.md). Neither suite contributed training rows:
 `distill/pipeline.py build` rejects any row near an eval transcript.
 
-**Verdict: it clears the gate and beats `qwen3:14b` on the voice-driven metrics, at a
+**Update, same day:** v3 (more no-voice rows) is now the server default: RAVDESS tone 90%
+and voice sensitivity +79%, against v2's 81% and +49%. Words-only sarcasm did not move. A
+DeepSeek-only build ties it. See "v3, and the DeepSeek-only ablation" below.
+
+**Verdict (v2): it clears the gate and beats `qwen3:14b` on the voice-driven metrics, at a
 quarter of the latency and ~1/8 of the VRAM.** Literal and low-confidence stay at 100%. It
 is still behind the 14B on sarcasm and passive aggression **when there is no voice hint**,
 and it reads plain praise with no voice as emotion `neutral`. Not yet switched on as the
@@ -67,6 +71,46 @@ All three failure groups are lines **with no voice hint**:
 - A plausible cause, not verified: the no-voice variant is 15% of rows in the oversampled
   sincere-positive and sarcasm cells (`_CONTRAST_HEAVY`), so the student learned to lean on
   the voice. A v3 spec would raise `none` there, then retrain and re-run both suites.
+
+## v3, and the DeepSeek-only ablation (same day)
+
+**v3** retrains on spec v3 (`docs/guides/distill.md`, "No-voice rebalance"): v2's scenarios
+with about twice the no-voice rows in sarcasm, sincere positive and passive aggression,
+labelled by DeepSeek with the 14B and gemma as fallbacks. **v3-ds** is the same rows and
+DeepSeek labels built with no fallback teacher (16% fewer rows). Training arguments are
+identical. Each line below is from one day; the 34-case columns were run side by side.
+
+| | v2 | **v3** (default) | v3-ds | qwen3:14b |
+|---|---|---|---|---|
+| **tone_cases.jsonl, 34 x 3** | | | | |
+| tone | 88% | 87-88% | 88% | 83% |
+| emotion | 91% | **94%** | 91% | 95% |
+| mismatch pairs | 6/6 | 6/6 | 6/6 | 2/6 |
+| literal / low-confidence | 100 / 100 | 100 / 100 | 100 / 100 | 100 / 100 |
+| sarcasm / passive aggr. (tone) | 50 / 50 | 50 / 50 | 50 / 50 | 75 / 83 |
+| **RAVDESS, 280 clips** | | | | |
+| shown emotion | 89% | 89% | 89% | 85% |
+| tone | 81% | 90% | **93%** | 65% |
+| voice sensitivity | +49% | +79% | **+91%** | +30% |
+| read, median | 0.16 s | 0.15 s | 0.15 s | 0.85 s |
+
+v2 re-run beside v3 scored 88% tone and 6/6 pairs, against 86% and 5/6 that morning: at
+`OLLAMA_TEMPERATURE` 0.2 the 34-case suite moves by a couple of points between runs, so
+gaps that size are noise.
+
+- **More no-voice rows bought voice use, not words-only sarcasm.** RAVDESS tone rose 9 points
+  and voice sensitivity 30. The four words-only lines v2 missed ("Fine. Whatever you think
+  is best.", "It's fine, I'll just do it myself like always.", "Wow, you actually showed up
+  on time today. Miracle.", "Sure, because that plan worked out so well last time.") are
+  still wrong in every run of every student. Twice the rows did not move them, which points
+  at the 0.6B's capacity, or at how the teachers label that kind of line, rather than at
+  the amount of data. Not tested further.
+- **The local fallback teachers add nothing measurable.** v3-ds is within noise of v3: 3
+  points ahead on RAVDESS tone, 3 behind on text-only emotion. The next data build can drop
+  them and the ~55 minutes of GPU they cost. v3 stays the default because the headline the
+  listener sees is the emotion.
+- Neither moved a voice label on RAVDESS (0 of 280). On `tone_cases` the moves they did make
+  were right: v3-ds 6 of 6, v3 13 of 14 over its two runs.
 
 ## Serving notes
 

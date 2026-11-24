@@ -37,6 +37,11 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
 - Close GPU-heavy desktop apps before timing the 12B/14B: with ~2 GB of VRAM taken,
   qwen3:14b spills into shared memory and reads in 4-6 s while `ollama ps` still
   says "100% GPU" (`docs/reports/small-interpreter-stage0.md`).
+- Restart Ollama after moving the monitor between the B580 and the motherboard iGPU. Ollama
+  numbers Vulkan devices at start-up; afterwards its runners open the wrong "device 0" (the
+  AMD iGPU), `ollama ps` still says "100% GPU", and a 0.6B read takes 2.2 s instead of 0.2 s.
+  The server log's `using device Vulkan0 (...)` line names the card actually used
+  (`docs/reports/small-interpreter-stage1.md`).
 - `server/ser.py` has two backends behind one `analyze()`: `emotion2vec` (default,
   via funasr, categorical only, 9 classes normalised to our 7, ~0.17s) and `meralion`
   (opt-in via `SER_MODEL`, has valence/arousal/dominance, ~2.7s flat).

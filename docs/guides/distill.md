@@ -280,6 +280,11 @@ not rediscovered:
 - **`--save-steps` must be set when a run starts.** On `--resume`, transformers keeps the
   checkpoint's interval and only warns.
 
+Export and serve: convert `final/` to GGUF Q8_0 with llama.cpp's `convert_hf_to_gguf.py`, then
+`ollama create emtext-qwen3-0.6b:v2 -f distill/Modelfile.student`. That Modelfile's template is
+the training format, not the stock `qwen3` one (which appends ` /no_think`). Results, weak
+spots and commands: [`reports/small-interpreter-stage1.md`](../reports/small-interpreter-stage1.md).
+
 Model and data versions live in **private** Hugging Face repos: `Jwbpk/emtext-distill` (tag
 `v2` = this set) and, once evaluated, `Jwbpk/emtext-interpreter-qwen3-0.6b`. The token is
 the `HF_TOKEN` user environment variable. Keep both repos private until the provenance

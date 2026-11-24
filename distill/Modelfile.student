@@ -1,0 +1,33 @@
+# emtext student (docs/reports/small-interpreter-stage1.md):
+#   ollama create emtext-qwen3-0.6b:v2 -f distill/Modelfile.student
+# The template reproduces the TRAINING format exactly (HF chat template, enable_thinking=False):
+# no " /no_think" suffix on the user turn (the stock qwen3 template adds one whenever a request
+# sends think=false, as interpreter.py always does), and the answer opens with an empty think
+# block. FROM is relative to this file; the GGUF comes from llama.cpp convert_hf_to_gguf.py.
+FROM ../models/gguf/emtext-qwen3-0.6b-v2-q8_0.gguf
+TEMPLATE """
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+<think>
+
+</think>
+
+{{ .Content }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+<think>
+
+</think>
+
+{{ end }}
+{{- end }}"""
+PARAMETER stop <|im_start|>
+PARAMETER stop <|im_end|>
+PARAMETER repeat_penalty 1

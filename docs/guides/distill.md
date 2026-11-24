@@ -152,6 +152,67 @@ the rows a weak cell keeps are the ones the teacher got right, so they lean towa
 the easy end of that cell. If a student trained on the set is still weak there, the
 next step is a stronger teacher, not more generation.
 
+### Hosted teacher for the two weakest cells (2026-11-23)
+
+The full v2 run kept 4,255 of 8,458 rows. Two cells stayed low because both local
+teachers answer against the rules there. On warm-voice teasing they say negative/angry
+(65 of 585 kept). On sincere-positive lines in a sad voice they ignore the voice (62 of 413).
+These rows were relabelled by DeepSeek V4.1 Flash (`deepseek-flash`) through its API,
+and that teacher is the third fallback at build, after gemma:
+
+```bash
+# key from the environment only; nothing the pipeline writes contains it
+DEEPSEEK_API_KEY=... python -m distill.pipeline label --api deepseek --api-thinking \
+    --teacher deepseek-flash --cells teasing/congruent,sincere_positive/contrast --concurrency 8
+python -m distill.pipeline build --second gemma3:12b --also deepseek-flash
+```
+
+- **Same inputs.** The request carries `SYSTEM_PROMPT` and the row's stored prompt as
+  chat messages, in `json_object` mode, since DeepSeek has no enum schema. Its answer goes
+  through the interpreter's own synonym tables. An off-enum emotion counts as a failed
+  label. It does not fall back to the voice label: that fallback would pass the
+  sincere-positive gate, whose accepted emotion is the voice label.
+- **Thinking on.** On a 40-row trial of the same rows, thinking off passed the rules on
+  9/20 teasing and 5/20 sincere-positive rows, and thinking on on 12/20 and 12/20.
+  `qwen3:14b` scored 3/20 and 12/20, and `gemma3:12b` 0 and 0.
+- **Full cells:** across all 998 rows DeepSeek passed 396/585 teasing and 262/413
+  sincere-positive rows, with no failed calls. About 1.1M tokens went in (~70% cache
+  hits) and ~0.19M came out, under $0.50 at the posted Flash price.
+- **Rebuilt set:** 4,660 kept (4,401 train, 259 val), and 375 labels come from DeepSeek.
+  Warm-voice teasing went from 65 to **380**. Sincere-positive in a sad voice went from
+  62 to **115**; it is now held back by the read cap ("genuinely pleased", "masking
+  hurt"), not the teacher.
+- These rows left the machine. That is allowed because the set is synthetic only (see
+  below).
+
+**Then DeepSeek became the primary teacher.** It labelled all 8,458 rows (no failures,
+~8M tokens in at 83% cache hits, 1.2M out, about $1-2). It was scored first on the held-out
+`tone_cases.jsonl` with the same prompts and scoring as `model_eval` (3 runs, thinking on),
+against qwen3:14b's Stage 0 numbers:
+
+| | qwen3:14b | deepseek-flash |
+|---|---|---|
+| tone, all | 84% | **92%** |
+| emotion, all | 96% | 96% |
+| mismatch pairs | 2/6 | **5/6** |
+| sarcasm | 75% | **92%** |
+| literal / low-confidence | 100% / 100% | 100% / 100% |
+| passive aggression | **92%** | 67% |
+
+DeepSeek's one weak category is passive aggression, where it says `neutral`. The rules
+reject `neutral` there, so those rows fall back to the 14B:
+
+```bash
+python -m distill.pipeline build --teacher deepseek-flash --second qwen3:14b --also gemma3:12b
+```
+
+The result: **6,633 kept** (6,287 train, 346 val) against 4,660, with 5,252 distinct
+reads. Labels come from deepseek-flash 5,622, qwen3:14b 701 and gemma3:12b 310. Every cell
+now keeps 62-97%. The read cap dropped from 1,766 rejects to 247, because DeepSeek varies
+its reads where the local teachers repeated "genuinely pleased" and "masking hurt". Agreement
+with the 14B on kept rows is 52%. The two teachers differ within the accepted sets, for
+example `sarcastic` against `negative`.
+
 Generator faults found and fixed in the pilot, so they are not rediscovered:
 - category draws too noisy, now round-robin;
 - the briefs quoted eval phrases and the generator copied them;

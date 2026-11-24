@@ -53,6 +53,7 @@ import random
 import re
 import sys
 import time
+import os
 import zlib
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -62,7 +63,8 @@ import httpx
 
 from distill import spec, voice  # voice first: it switches SER off before server.config loads
 from server import config
-from server.interpreter import SYSTEM_PROMPT, Interpreter, _describe_voice, load_options
+from server.interpreter import (EMOTIONS, SYSTEM_PROMPT, TONES, _EMOTION_SYNONYMS,
+                                _TONE_SYNONYMS, Interpreter, _describe_voice, load_options)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "distill"
@@ -474,7 +476,141 @@ async def _label_async(args: argparse.Namespace, out: Path) -> None:
                 await asyncio.gather(*(one(r, fh) for r in todo[i:i + batch]))
 
 
+# A hosted teacher for the cells the local teachers get wrong (2026-11-23: the
+# v2 build kept 65/585 warm-voice teasing and 62/413 sad-voice sincere-positive
+# rows, because qwen3:14b and gemma3:12b both answer against the prompt's own
+# rules there). OpenAI-compatible chat completions. The key is read from the
+# environment only and never written to any file this pipeline produces.
+API_PROVIDERS = {
+    "deepseek": {"url": "https://api.deepseek.com/chat/completions", "key_env": "DEEPSEEK_API_KEY"},
+}
+API_MAX_TOKENS = 200            # the answer is ~30 tokens
+API_THINKING_MAX_TOKENS = 4000  # thinking tokens count against max_tokens
+API_RETRIES = 3
+
+
+def _parse_api_answer(text: str) -> dict | None:
+    """The teacher's JSON, normalised like Interpreter.interpret, or None if unusable.
+
+    Unlike interpret(), an off-enum or missing emotion is a FAILED label, not a
+    fallback to the voice label: there is no decode-time schema here (DeepSeek
+    offers json_object mode only), and a silent "keep the voice" would pass the
+    sincere-positive/contrast gate, whose accepted emotion IS the voice label.
+    """
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    tone = str(parsed.get("tone", "")).lower().strip()
+    tone = _TONE_SYNONYMS.get(tone, tone)
+    emotion = str(parsed.get("emotion", "")).lower().strip()
+    emotion = _EMOTION_SYNONYMS.get(emotion, emotion)
+    read = str(parsed.get("read", "")).strip()
+    if tone not in TONES or emotion not in EMOTIONS or not read:
+        return None
+    return {"emotion": emotion, "tone": tone, "read": read}
+
+
+async def _label_api_async(args: argparse.Namespace, out: Path) -> None:
+    prov = API_PROVIDERS[args.api]
+    key = os.environ.get(prov["key_env"], "").strip()
+    if not key:
+        raise SystemExit(f"label --api {args.api}: set {prov['key_env']}")
+    rows = _read_jsonl(out / "rows.jsonl")
+    if args.cells:
+        rows = [r for r in rows if f"{r['category']}/{r['variant']}" in args.cells]
+    if args.limit:
+        rows = rows[:args.limit]
+    path = out / f"labels_{_model_slug(args.teacher)}.jsonl"
+    done = {r["id"] for r in _read_jsonl(path)}
+    todo = [r for r in rows if r["id"] not in done]
+    print(f"label: teacher {args.teacher} via {args.api} "
+          f"(thinking {'on' if args.api_thinking else 'off'}), {len(done)} done, "
+          f"{len(todo)} to go", flush=True)
+    if not todo:
+        return
+
+    sem = asyncio.Semaphore(max(1, args.concurrency))
+    t0 = time.perf_counter()
+    tally = Counter()
+
+    async def ask(client: httpx.AsyncClient, row: dict) -> tuple[dict | None, dict, str]:
+        body = {
+            "model": args.teacher,
+            # The same two inputs production sends to Ollama, as chat messages.
+            # SYSTEM_PROMPT already says "JSON" and spells out the object, which
+            # is what json_object mode asks the prompt to contain.
+            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                         {"role": "user", "content": row["prompt"]}],
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "enabled" if args.api_thinking else "disabled"},
+            "max_tokens": API_THINKING_MAX_TOKENS if args.api_thinking else API_MAX_TOKENS,
+            "temperature": config.OLLAMA_TEMPERATURE,  # ignored in thinking mode
+        }
+        last = ""
+        for attempt in range(API_RETRIES):
+            try:
+                resp = await client.post(prov["url"], json=body, timeout=180,
+                                         headers={"Authorization": f"Bearer {key}"})
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    last = f"HTTP {resp.status_code}"
+                    await asyncio.sleep(2 ** attempt * 2)
+                    continue
+                if resp.status_code >= 400:
+                    # Bad request / auth: retrying cannot help. Body, not headers,
+                    # so the key never reaches the log.
+                    return None, {}, f"HTTP {resp.status_code}: {resp.text[:200]}"
+                data = resp.json()
+                text = data["choices"][0]["message"].get("content") or ""
+                # json_object mode blanks invalid JSON to spaces rather than erroring.
+                ans = _parse_api_answer(text)
+                if ans:
+                    return ans, data, ""
+                last = f"unusable answer: {text.strip()[:120]!r}"
+            except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+                last = f"{type(exc).__name__}: {str(exc)[:120]}"
+                await asyncio.sleep(2 ** attempt)
+        return None, {}, last
+
+    async def one(client: httpx.AsyncClient, row: dict, fh) -> None:
+        async with sem:
+            start = time.perf_counter()
+            ans, data, err = await ask(client, row)
+            usage = data.get("usage") or {}
+            for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens"):
+                tally[k] += int(usage.get(k) or 0)
+            tally["n"] += 1
+            tally["failed"] += int(ans is None)
+            _append(fh, {"id": row["id"], "model": args.teacher, "api": args.api,
+                         "served_model": data.get("model"), "thinking": args.api_thinking,
+                         "prompt_sha": _sha(row["prompt"]),
+                         **(ans or {"emotion": None, "tone": None, "read": "(teacher failed)"}),
+                         "tone_prob": None, "emotion_prob": None,  # no logprobs requested
+                         "offline": ans is None, "error": err or None,
+                         "elapsed_s": round(time.perf_counter() - start, 3)})
+            n = tally["n"]
+            if n % 25 == 0 or n == len(todo):
+                rate = (time.perf_counter() - t0) / n
+                tin = tally["prompt_cache_hit_tokens"] + tally["prompt_cache_miss_tokens"]
+                print(f"  [{n:>5}/{len(todo)}] {rate:.2f}s/row  failed {tally['failed']}  "
+                      f"tokens in {tin:,} (cached {tally['prompt_cache_hit_tokens']:,}) "
+                      f"out {tally['completion_tokens']:,}  eta {rate * (len(todo) - n) / 60:5.1f}m",
+                      flush=True)
+
+    async with httpx.AsyncClient() as client:
+        with path.open("a", encoding="utf-8") as fh:
+            await asyncio.gather(*(one(client, r, fh) for r in todo))
+
+
 def label(args: argparse.Namespace, out: Path) -> None:
+    if args.api:
+        try:
+            asyncio.run(_label_api_async(args, out))
+        except KeyboardInterrupt:
+            print("\n  stopped; re-run to continue", flush=True)
+        return
     try:
         asyncio.run(_label_async(args, out))
     except KeyboardInterrupt:
@@ -595,6 +731,10 @@ def build(args: argparse.Namespace, out: Path) -> None:
     t1 = {r["id"]: r for r in _read_jsonl(out / f"labels_{_model_slug(args.teacher)}.jsonl")}
     t2 = ({r["id"]: r for r in _read_jsonl(out / f"labels_{_model_slug(args.second)}.jsonl")}
           if args.second else {})
+    # Further fallbacks after --second, tried in order (e.g. a hosted teacher
+    # that labelled only the weak cells). Same rule gate; never used for agreement.
+    extra = [(m, {r["id"]: r for r in _read_jsonl(out / f"labels_{_model_slug(m)}.jsonl")})
+             for m in args.also]
     if not rows or not t1:
         raise SystemExit("need rows.jsonl and the teacher's labels: run expand and label first")
 
@@ -646,11 +786,14 @@ def build(args: argparse.Namespace, out: Path) -> None:
             # mm-01a/mm-03a failure), leaving 2 of 24 such rows. The rules, not
             # the second teacher, still decide what is acceptable, so gemma's
             # own known failure (the low-confidence guard) cannot leak in.
-            if why and second and not args.no_fallback and \
-                    why in ("tone_outside_rules", "emotion_outside_rules", "read_too_long",
-                            "read_restates_line", "no_read") and \
-                    label_problem(r, second) is None:
-                why, lab, source = None, second, args.second
+            fixable = ("tone_outside_rules", "emotion_outside_rules", "read_too_long",
+                       "read_restates_line", "no_read")
+            for model, labs in ([(args.second, t2)] if args.second else []) + extra:
+                if not why or args.no_fallback or why not in fixable:
+                    break
+                cand = labs.get(r["id"])
+                if cand and label_problem(r, cand) is None:
+                    why, lab, source = None, cand, model
         agree = bool(first and second and not first["offline"] and not second["offline"]
                      and second["tone"] == first["tone"]
                      and second["emotion"] == first["emotion"])
@@ -732,7 +875,7 @@ def build(args: argparse.Namespace, out: Path) -> None:
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
         "generator": sorted({s.get("generator") for s in _read_jsonl(out / "scenarios.jsonl")}),
-        "teacher": args.teacher, "second_teacher": args.second,
+        "teacher": args.teacher, "second_teacher": args.second, "fallback_teachers": args.also,
         "require_agree": args.require_agree,
         "rows_in": len(rows), "kept": len(final),
         "train": sum(v for (s, *_), v in counts.items() if s == "train"),
@@ -786,13 +929,25 @@ def main() -> None:
                     help="label: the model to label with; build: the primary teacher")
     ap.add_argument("--second", default=None, metavar="MODEL",
                     help="build: a second teacher whose labels exist, for agreement")
+    ap.add_argument("--also", action="append", default=[], metavar="MODEL",
+                    help="build: a further fallback teacher, tried after --second "
+                         "(repeatable; same rule gate)")
+    ap.add_argument("--api", choices=sorted(API_PROVIDERS), default=None,
+                    help="label: send --teacher to a hosted API instead of Ollama")
+    ap.add_argument("--api-thinking", action="store_true",
+                    help="label --api: let the model think before answering")
+    ap.add_argument("--cells", type=lambda v: set(v.split(",")), default=None,
+                    help="label: only rows in these category/variant cells (comma list)")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="label: only the first N matching rows (a trial)")
     ap.add_argument("--require-agree", action="store_true",
                     help="build: also drop rows where the second teacher disagrees")
     ap.add_argument("--no-fallback", action="store_true",
                     help="build: never use the second teacher's label when the primary's "
                          "breaks the rules (default: use it if it satisfies them)")
     ap.add_argument("--concurrency", type=int, default=1,
-                    help="label: parallel requests (helps only with OLLAMA_NUM_PARALLEL > 1)")
+                    help="label: parallel requests (Ollama: helps only with "
+                         "OLLAMA_NUM_PARALLEL > 1; --api: try 8)")
     ap.add_argument("--dup-threshold", type=float, default=0.7,
                     help="build: char-4-gram Jaccard at which two lines are one scenario")
     ap.add_argument("--leak-threshold", type=float, default=0.5,

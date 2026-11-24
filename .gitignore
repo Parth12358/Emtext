@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.venv-train/
 experiments/*.wav
 experiments/prosody/
 experiments/asr/

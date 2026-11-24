@@ -227,6 +227,9 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   Rows near an eval transcript are rejected at build, so the eval suites stay held out.
   `label --api deepseek` sends the weak cells to a hosted teacher; its key comes from the
   environment only and must never be written to a file, a log or a commit.
+  `distill/train.py` fine-tunes the student and runs ONLY in `.venv-train` (torch +xpu),
+  never the server's `.venv`. Stop the server and evict Ollama before training: the B580
+  is shared.
 - `server/static/index.html` — single-file browser client. **No build step, no external
   CDNs/fonts.** Uses AudioWorklet (not MediaRecorder) and downsamples to 16 kHz in JS.
   The same single-file, no-CDN rule covers `dashboard.html`, `remote.html` and

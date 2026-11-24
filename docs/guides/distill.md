@@ -240,6 +240,51 @@ Training notes:
 - **For Qwen3, train and serve with thinking off** (an empty `<think></think>` in the
   template), matching the `think: false` the teacher was labelled with.
 
+## Training locally on the B580 (`distill/train.py`)
+
+Training runs in its own venv, `.venv-train` (gitignored). It needs torch built for Intel
+GPUs, which the server's `.venv` must not get:
+
+```bash
+python -m venv .venv-train
+.venv-train/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/xpu
+.venv-train/Scripts/python -m pip install transformers trl datasets accelerate torch-optimi
+.venv-train/Scripts/python -m distill.train --check-mask     # what carries loss, one row
+.venv-train/Scripts/python -m distill.train --max-steps 10   # timing / memory trial
+.venv-train/Scripts/python -m distill.train                  # full run -> models/student/
+```
+
+Stop the emtext server and unload Ollama models first: training needs the GPU to itself.
+Plugging the monitor into the motherboard's iGPU gives back about 1 GB of the B580's VRAM.
+
+**First run (2026-11-24): Qwen3-0.6B, full fine-tune, data v2.** 2 epochs, 394 steps of 32
+rows (2 per step × 16 accumulated), learning rate 1e-5 with cosine decay, about 81 minutes at
+12.2 s per step. Peak memory 6.6 GB. Library versions: torch 2.15.0+xpu, transformers 5.24,
+trl 1.18.2, torch-optimi 0.3.3. Validation loss went 0.601 → 0.536 → 0.512 → 0.481 → 0.480 →
+0.475 → 0.472 → **0.471** (steps 50…394). It was still falling at the end, with no
+overfitting, and the final token accuracy was 89.3%. Things found on the way, so they are
+not rediscovered:
+
+- **bf16 works on Windows with torch 2.15.** A one-layer forward/backward check against
+  the CPU found no NaN or zeros, so torch-xpu-ops#5220 does not reproduce here. Raw bf16
+  matmul measured 97 TFLOPS.
+- **Pure bf16 with Kahan-summed AdamW** (`torch-optimi`). fp32 master weights would need
+  ~9.6 GB before activations.
+- **Triton is unusable without a C compiler** (Windows has none by default). Both
+  optimi's kernels (`triton=False`) and TRL's chunked LM-head loss (patched to use its
+  torch path) are kept off Triton.
+- **TRL 1.x label smoothing costs an extra forward pass** per step, so it is off by default.
+- **4 rows per step crashed** at step 18 with `UR_RESULT_ERROR_OUT_OF_RESOURCES` (peak
+  7.3 GB). 2 × 16 has the same effective batch and ran clean. Rows are 999-1,153 tokens,
+  so nothing is truncated at the 1,536 cap.
+- **`--save-steps` must be set when a run starts.** On `--resume`, transformers keeps the
+  checkpoint's interval and only warns.
+
+Model and data versions live in **private** Hugging Face repos: `Jwbpk/emtext-distill` (tag
+`v2` = this set) and, once evaluated, `Jwbpk/emtext-interpreter-qwen3-0.6b`. The token is
+the `HF_TOKEN` user environment variable. Keep both repos private until the provenance
+questions below (Gemma terms, DeepSeek terms) are answered.
+
 ## Decisions recorded in every manifest
 
 - **English only.** `parakeet:v3` transcribes 25 languages and the 14B reads them, so a

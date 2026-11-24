@@ -254,8 +254,34 @@ def _clean_scenario(raw: dict, want_context: int) -> dict | None:
     return None if echo_problem(sc) else sc
 
 
+def _adopt(src_name: str, path: Path) -> None:
+    """Start this spec's folder from another folder's scenarios, without regenerating.
+
+    For a spec change that touches only expand (variant weights, rules), not which
+    scenarios get written: v3 changed variant weights alone, so v2's scenarios stand
+    and no generator call (or GPU) is needed. Each scenario is restamped with this
+    spec and keeps `adopted_from`, so expand's spec check still holds and the
+    provenance stays visible. Refuses to touch a folder that already has scenarios.
+    """
+    src = ROOT / "data" / "distill" / src_name / "scenarios.jsonl"
+    scenarios = _read_jsonl(src)
+    if not scenarios:
+        raise SystemExit(f"generate --adopt: no scenarios at {src}")
+    if _read_jsonl(path):
+        raise SystemExit(f"generate --adopt: {path} already has scenarios; use a new --name")
+    with path.open("w", encoding="utf-8") as fh:
+        for sc in scenarios:
+            _append(fh, {**sc, "spec": spec.SPEC_VERSION,
+                         "adopted_from": sc.get("adopted_from") or f"{src_name}:{sc.get('spec')}"})
+    print(f"generate: adopted {len(scenarios)} scenarios from {src_name} as spec "
+          f"{spec.SPEC_VERSION} -> {path}", flush=True)
+
+
 def generate(args: argparse.Namespace, out: Path) -> None:
     path = out / "scenarios.jsonl"
+    if args.adopt:
+        _adopt(args.adopt, path)
+        return
     # Only calls that produced scenarios count as done. A failed call (logged to
     # gen_rejects.jsonl) is retried on the next run: in the 2026-10-25 pilot they
     # were truncated JSON, a transient, not a property of the call's plan.
@@ -428,6 +454,22 @@ async def _label_async(args: argparse.Namespace, out: Path) -> None:
     rows = _read_jsonl(out / "rows.jsonl")
     if not rows:
         raise SystemExit("no rows.jsonl yet: run generate, then expand")
+    if args.only_failed:
+        # A fallback teacher only matters where the primary broke the rules (build
+        # uses it nowhere else), so label just those rows. v3 (2026-11-24): the local
+        # 14B on DeepSeek's ~1k misses instead of all 8,458 rows, ~2 h of GPU saved.
+        # A comma list means rows that EVERY listed teacher got wrong: the last
+        # fallback (gemma) only matters where the primary and the 14B both failed.
+        for k, m in enumerate(args.only_failed.split(",")):
+            prior = {lab["id"]: lab for lab in
+                     _read_jsonl(out / f"labels_{_model_slug(m)}.jsonl")}
+            if not prior:
+                raise SystemExit(f"label --only-failed: no labels from {m} yet")
+            # The primary must have FAILED the row (never labelled = not a candidate
+            # yet); a later fallback that never labelled it has not rescued it.
+            failed = FIXABLE if k == 0 else FIXABLE + ("unlabelled", "offline")
+            rows = [r for r in rows if label_problem(r, prior.get(r["id"])) in failed]
+        print(f"label: {len(rows)} rows where {args.only_failed} all broke the rules", flush=True)
     path = out / f"labels_{_model_slug(args.teacher)}.jsonl"
     done = {r["id"] for r in _read_jsonl(path)}
     todo = [r for r in rows if r["id"] not in done]
@@ -726,6 +768,29 @@ def _read_problem(read: str, line: str) -> str | None:
     return None
 
 
+def label_problem(r: dict, lab: dict | None) -> str | None:
+    """Why one teacher's answer cannot be this row's target, or None."""
+    if lab is None:
+        return "unlabelled"
+    if lab.get("prompt_sha") and lab["prompt_sha"] != _sha(r["prompt"]):
+        # rows.jsonl was re-expanded with different input since labelling;
+        # this answer was given to a prompt the row no longer has.
+        return "stale_label"
+    if lab["offline"]:
+        return "offline"
+    if lab["tone"] not in r["expect_tone"]:
+        return "tone_outside_rules"
+    if lab["emotion"] not in r["expect_emotion"]:
+        return "emotion_outside_rules"
+    return _read_problem(lab["read"], r["line"])
+
+
+# Reasons a fallback teacher's label may replace the primary's at build: the answer
+# broke the rules. Not offline / stale / unlabelled, which say nothing about the row.
+FIXABLE = ("tone_outside_rules", "emotion_outside_rules", "read_too_long",
+           "read_restates_line", "no_read")
+
+
 def build(args: argparse.Namespace, out: Path) -> None:
     rows = _read_jsonl(out / "rows.jsonl")
     t1 = {r["id"]: r for r in _read_jsonl(out / f"labels_{_model_slug(args.teacher)}.jsonl")}
@@ -753,22 +818,6 @@ def build(args: argparse.Namespace, out: Path) -> None:
              or _content_trigrams(line) & eval_grams
              or any(a in _norm(line) for a in avoid)}
 
-    def label_problem(r: dict, lab: dict | None) -> str | None:
-        """Why one teacher's answer cannot be this row's target, or None."""
-        if lab is None:
-            return "unlabelled"
-        if lab.get("prompt_sha") and lab["prompt_sha"] != _sha(r["prompt"]):
-            # rows.jsonl was re-expanded with different input since labelling;
-            # this answer was given to a prompt the row no longer has.
-            return "stale_label"
-        if lab["offline"]:
-            return "offline"
-        if lab["tone"] not in r["expect_tone"]:
-            return "tone_outside_rules"
-        if lab["emotion"] not in r["expect_emotion"]:
-            return "emotion_outside_rules"
-        return _read_problem(lab["read"], r["line"])
-
     kept, rejects = [], []
     reasons = Counter()
     for r in rows:
@@ -786,10 +835,8 @@ def build(args: argparse.Namespace, out: Path) -> None:
             # mm-01a/mm-03a failure), leaving 2 of 24 such rows. The rules, not
             # the second teacher, still decide what is acceptable, so gemma's
             # own known failure (the low-confidence guard) cannot leak in.
-            fixable = ("tone_outside_rules", "emotion_outside_rules", "read_too_long",
-                       "read_restates_line", "no_read")
             for model, labs in ([(args.second, t2)] if args.second else []) + extra:
-                if not why or args.no_fallback or why not in fixable:
+                if not why or args.no_fallback or why not in FIXABLE:
                     break
                 cand = labs.get(r["id"])
                 if cand and label_problem(r, cand) is None:
@@ -936,6 +983,14 @@ def main() -> None:
                     help="label: send --teacher to a hosted API instead of Ollama")
     ap.add_argument("--api-thinking", action="store_true",
                     help="label --api: let the model think before answering")
+    ap.add_argument("--only-failed", default=None, metavar="MODEL",
+                    help="label (Ollama): only rows whose MODEL label breaks the rules, "
+                         "i.e. the rows a fallback teacher can rescue at build; a comma "
+                         "list means rows every listed teacher got wrong")
+    ap.add_argument("--adopt", default=None, metavar="NAME",
+                    help="generate: copy data/distill/NAME's scenarios under this spec "
+                         "instead of calling the generator (a spec change that only "
+                         "affects expand)")
     ap.add_argument("--cells", type=lambda v: set(v.split(",")), default=None,
                     help="label: only rows in these category/variant cells (comma list)")
     ap.add_argument("--limit", type=int, default=0,

@@ -213,6 +213,39 @@ its reads where the local teachers repeated "genuinely pleased" and "masking hur
 with the 14B on kept rows is 52%. The two teachers differ within the accepted sets, for
 example `sarcastic` against `negative`.
 
+### No-voice rebalance (spec v3, 2026-11-24)
+
+The v2 student beat the 14B wherever a voice hint was present but missed text-only sarcasm
+and passive aggression ([Stage 1](../reports/small-interpreter-stage1.md)). The v2 labels
+there were right (sarcasm/none: 124 of 131 sarcastic). There were just few of them. Spec v3
+changes only variant weights (`_CONTRAST_HEAVY`, new `_NONE_HEAVY` for passive aggression),
+so it reuses v2's scenarios and needs no generator:
+
+```bash
+python -m distill.pipeline generate --adopt v2        # v2's 4,229 scenarios, restamped v3
+python -m distill.pipeline expand
+python -m distill.pipeline label --api deepseek --api-thinking --teacher deepseek-flash --concurrency 8
+# local fallbacks only where they can matter: rows the teachers before them got wrong
+python -m distill.pipeline label --teacher qwen3:14b --only-failed deepseek-flash
+python -m distill.pipeline label --teacher gemma3:12b --only-failed deepseek-flash,qwen3:14b
+python -m distill.pipeline build --teacher deepseek-flash --second qwen3:14b --also gemma3:12b
+```
+
+DeepSeek labelled all 8,458 rows with no failures (9.1M tokens in at 83% cache hits, 1.33M
+out, under $2) and broke the rules on 2,515. The 14B then labelled those 2,515 and gemma the
+1,580 both got wrong, about 55 minutes of GPU against ~4 h for full local passes.
+
+**Result: 6,622 kept** (6,273 train, 349 val; deepseek-flash 5,546, qwen3:14b 724, gemma3:12b
+352). No-voice rows: sarcasm 134 → 269, sincere positive 138 → 227, passive aggression
+187 → 239. Contrast rows held (1,476 → 1,437). The easy congruent cells paid for it
+(sarcasm 325 → 213, sincere positive 279 → 207). The build's "second teacher agrees"
+figure (4%) means nothing here: the 14B labelled only the rows DeepSeek failed.
+
+**DeepSeek-only comparison** (`data/distill/v3-ds`): the same rows and labels built with
+no fallback teacher keep 5,531 (5,250 train, 281 val). The 1,091 missing rows are what the
+local teachers rescued, most in teasing/contrast (433 → 262), passive aggression/none
+(239 → 150) and sarcasm/contrast (294 → 222).
+
 Generator faults found and fixed in the pilot, so they are not rediscovered:
 - category draws too noisy, now round-robin;
 - the briefs quoted eval phrases and the generator copied them;

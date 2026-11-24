@@ -28,7 +28,9 @@ from dataclasses import dataclass, field
 # v2 (2026-10-25): category and per-category variant weights rebalanced toward
 # the cells the v1 pilot kept least of (see OVERSAMPLING below). The rules
 # (accepted sets) are unchanged from v1.
-SPEC_VERSION = "v2"
+# v3 (2026-11-24): more no-voice rows in sarcasm, sincere_positive and passive
+# aggression (see NO-VOICE below). Scenarios are v2's, adopted; rules unchanged.
+SPEC_VERSION = "v3"
 
 EMOTIONS = ("neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised")
 TONES = ("positive", "negative", "neutral", "sarcastic", "mixed")
@@ -117,7 +119,19 @@ _IRRITATED = ("angry", "disgusted", "sad", "neutral")
 # Variant mix for sincere_positive and sarcasm, whose contrast cell kept least.
 # With two of four variants per scenario, contrast lands in 77% of scenarios
 # (v1: 52%; simulated); low_conf and none still get several hundred rows at full size.
-_CONTRAST_HEAVY = {"congruent": 0.30, "contrast": 0.45, "low_conf": 0.10, "none": 0.15}
+_CONTRAST_HEAVY = {"congruent": 0.20, "contrast": 0.40, "low_conf": 0.10, "none": 0.30}
+# NO-VOICE (v3). The v2 student (docs/reports/small-interpreter-stage1.md) beat the
+# 14B wherever a voice hint was present but missed text-only sarcasm and passive
+# aggression, and read voiceless praise as neutral. The v2 labels there were right
+# (sarcasm/none: 124 of 131 sarcastic); there were just few of them, ~16% of each
+# cell's rows. Simulated share of scenarios per variant (two picks of four):
+#   v2 _CONTRAST_HEAVY  congruent 63%  contrast 77%  low_conf 24%  none 36%
+#   v3 _CONTRAST_HEAVY  congruent 44%  contrast 72%  low_conf 23%  none 61%
+#   passive_aggression  v2 (defaults) none 64%  ->  v3 _NONE_HEAVY none 83%
+# Contrast stays near 77% because it is what bought 5/6 mismatch pairs.
+# `contrast` is unused for passive_aggression (no contrast voice); it is listed
+# only because a variant_weights override must name every variant.
+_NONE_HEAVY = {"congruent": 0.40, "contrast": 0.0, "low_conf": 0.15, "none": 0.45}
 
 CATEGORIES: tuple[Category, ...] = (
     Category(
@@ -221,6 +235,7 @@ CATEGORIES: tuple[Category, ...] = (
         "else's luck, an over-polite reminder, a martyred offer, a cool 'noted', a "
         "loaded question. Do not start every line with thanks.",
         feelings=("angry", "disgusted"), delivery=("neutral", "angry", "disgusted"),
+        variant_weights=_NONE_HEAVY,
         expect={
             # Stage 0: every small model and qwen3:8b scored 0% here. The
             # category the student most needs examples of.

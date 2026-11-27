@@ -34,12 +34,13 @@ import time
 from pathlib import Path
 
 import httpx
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (blend, clips, config, confidence, dashboard, metrics, sentences, ser, speaker,
-               translog, transcriber, tuning)
+               streaming, translog, transcriber, tuning)
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -120,6 +121,9 @@ _http: httpx.AsyncClient | None = None
 async def _startup() -> None:
     global _http
     _http = httpx.AsyncClient()
+    # Streaming ASR (live words + sentence endpoints) is optional and loads in
+    # the background: a missing model must not delay or stop the server.
+    asyncio.get_running_loop().run_in_executor(None, streaming.load)
     # The dashboard reuses this pooled client rather than opening its own.
     app.state.http = _http
 
@@ -760,6 +764,97 @@ async def stream(ws: WebSocket) -> None:
     # never cause a closing utterance to be dropped. At most one check runs at a
     # time, so the extra CPU is bounded at one ASR pass per LIVE_SPLIT_EVERY_S.
     live_tasks: set[asyncio.Task] = set()
+
+    # Streaming ASR (server/streaming.py): every audio frame also goes to a
+    # per-connection streaming recognizer, for two things. (1) Live words: a
+    # `partial` frame with what is being said right now, opt-in per connection
+    # (`/stream?partial=1`) so the pendant, which predates it, is not sent
+    # several frames a second it would only discard. (2) Endpoints: when the
+    # recognizer hears a sentence end, the live split hands out everything said
+    # so far at once instead of waiting for its next look. Positions are counted
+    # in samples received on this connection (`abs_received`), which is the
+    # timeline both the recognizer and the segmenter see.
+    partials = ws.query_params.get("partial") in ("1", "true", "yes")
+    live_asr = streaming.Live() if streaming.available() else None
+    asr_q: asyncio.Queue[bytes] = asyncio.Queue()
+    abs_received = 0       # samples received on this connection
+    emitted_until = 0      # samples already handed out as utterances / pieces
+    last_tokens: list[tuple[str, int]] = []
+    last_partial = None
+    last_partial_t = 0.0
+    force_split = False    # an endpoint arrived while a live split was busy
+    force_until = 0        # absolute sample where that endpoint's sentence ended
+
+    async def send_partial(force_send: bool = False) -> None:
+        nonlocal last_partial, last_partial_t
+        if not partials or live_asr is None:
+            return
+        text = streaming.text_after(last_tokens, emitted_until)
+        now = time.monotonic()
+        if text == last_partial or (not force_send and now - last_partial_t < config.PARTIAL_MIN_INTERVAL_S):
+            return
+        last_partial, last_partial_t = text, now
+        await _send(ws, {"type": "partial", "text": text})
+
+    async def stream_worker() -> None:
+        """Feed queued audio to the streaming recognizer, one decode at a time."""
+        nonlocal last_tokens, force_split, force_until
+        loop = asyncio.get_running_loop()
+        carry = b""
+        while True:
+            parts = [await asr_q.get()]
+            while not asr_q.empty():          # catch up in one decode if we fell behind
+                parts.append(asr_q.get_nowait())
+            buf = carry + b"".join(parts)
+            carry = buf[len(buf) & ~1:]       # keep an odd trailing byte for next time
+            buf = buf[:len(buf) & ~1]
+            if not buf:
+                continue
+            samples = np.frombuffer(buf, dtype=np.int16).astype(np.float32) / 32768.0
+            upd = await loop.run_in_executor(None, live_asr.feed, samples)
+            if upd is None:
+                continue
+            last_tokens = upd.tokens
+            if upd.endpoint and upd.text:
+                metrics.record_event("stream_endpoint")
+                if config.STREAM_ENDPOINT_CUT and segmenter.buffered_ms and upd.tokens:
+                    # Cut where the recognizer heard the sentence end (its last
+                    # token, plus a little for that word's tail), NOT at the end
+                    # of whatever audio has arrived by now: the next sentence may
+                    # already have started, and cutting into its first word made
+                    # Parakeet drop the whole phrase that followed (measured).
+                    force_until = upd.tokens[-1][1] + int(0.35 * config.SAMPLE_RATE)
+                    force_split = True
+                    maybe_live_split()
+            await send_partial(force_send=upd.endpoint)
+            if upd.endpoint:
+                last_tokens = []              # the stream was reset; start fresh
+
+    def maybe_live_split() -> None:
+        """Start a live split if one is due (its cadence) or forced (an endpoint)."""
+        nonlocal live_busy, live_seq, live_mark_ms, force_split
+        if not (config.LIVE_SPLIT and config.SENTENCE_SPLIT) or live_busy:
+            return
+        if segmenter.utterance_seq != live_seq:
+            live_seq, live_mark_ms = segmenter.utterance_seq, 0
+        grown = segmenter.buffered_ms - live_mark_ms
+        due = segmenter.buffered_ms and grown >= config.LIVE_SPLIT_EVERY_S * 1000
+        if segmenter.buffered_ms and (due or force_split):
+            open_audio = segmenter.peek()
+            if open_audio is not None:
+                live_busy = True
+                forced, force_split = force_split, False
+                # After a consume the buffer is shorter, so the next look is
+                # measured from what is left.
+                live_mark_ms = segmenter.buffered_ms
+                _keep(asyncio.create_task(
+                    live_split(segmenter.utterance_seq, open_audio, segmenter.speech_rms,
+                               force=forced, end_abs=abs_received,
+                               force_until=force_until if forced else 0)))
+        elif grown < 0:
+            live_mark_ms = segmenter.buffered_ms
+        if not segmenter.buffered_ms:
+            force_split = False
     live_busy = False
     live_seq = -1          # segmenter.utterance_seq the mark below belongs to
     live_mark_ms = 0       # buffered_ms at the last check of that utterance
@@ -769,9 +864,18 @@ async def stream(ws: WebSocket) -> None:
         task.add_done_callback(live_tasks.discard)
         task.add_done_callback(_log_task_error)
 
-    async def live_split(seq: int, audio, speech_rms: float) -> None:
-        nonlocal live_busy
+    async def live_split(seq: int, audio, speech_rms: float, force: bool = False,
+                         end_abs: int = 0, force_until: int = 0) -> None:
+        nonlocal live_busy, emitted_until
+        start_abs = end_abs - int(audio.size)   # where the snapshot began
         try:
+            if force:
+                # Only the audio up to the endpoint is finished; anything after
+                # it belongs to the next sentence and stays in the buffer.
+                n = force_until - start_abs
+                if n <= 0:
+                    return
+                audio = audio[:min(int(audio.size), n)]
             loop = asyncio.get_running_loop()
             cpu_t0 = time.perf_counter()
             (_text, _conf, tokens), asr_s = await loop.run_in_executor(
@@ -792,7 +896,8 @@ async def stream(ws: WebSocket) -> None:
             #     which hears a pause the VAD misses when background noise keeps
             #     the RMS above threshold.
             last_tok = tokens[-1]
-            paused = (last_tok.text.strip().endswith((".", "?", "!"))
+            # `force`: the streaming recognizer saw the sentence end (endpoint).
+            paused = force or (last_tok.text.strip().endswith((".", "?", "!"))
                       and audio.size / sr - last_tok.t >= config.LIVE_SPLIT_PAUSE_S)
             if paused:
                 done = sentences.split(tokens, int(audio.size), sr, **kw)
@@ -811,7 +916,16 @@ async def stream(ws: WebSocket) -> None:
             # Hand them out and drop them from the open utterance --
             # synchronously, on the event loop, so no frame can arrive between
             # the staleness check above and the consume.
-            segmenter.consume(cut)
+            before_ms = segmenter.buffered_ms
+            dropped = segmenter.consume(cut)
+            # DEBUG only: it carries transcript text, which the INFO log never does.
+            log.debug("live split: force=%s paused=%s snapshot=%.2fs cut=%.2fs dropped=%.2fs "
+                      "buffer %dms -> %dms; pieces=%s", force, paused, audio.size / sr, cut / sr,
+                      dropped / sr, before_ms, segmenter.buffered_ms, [pc.text for pc in done])
+            # Everything up to the cut has now been handed out; the live
+            # transcript should show only what comes after it.
+            emitted_until = max(emitted_until, start_abs + int(cut))
+            await send_partial(force_send=True)
             ids = [new_id() for _ in done]
             for pid, pc in zip(ids, done):
                 recent.add(pid, audio[pc.start:pc.end])
@@ -830,6 +944,8 @@ async def stream(ws: WebSocket) -> None:
             _keep(asyncio.create_task(emit()))
         finally:
             live_busy = False
+            if force_split:
+                maybe_live_split()
 
     # Idle keepalive. Cloudflare closes a proxied websocket after ~100s with no
     # traffic in either direction, and a user who opens the page but does not
@@ -869,7 +985,8 @@ async def stream(ws: WebSocket) -> None:
 
     async def on_closed(audio) -> None:
         """One utterance the segmenter just closed: hand it to the pipeline."""
-        nonlocal uid
+        nonlocal uid, emitted_until
+        emitted_until = abs_received
         # Backpressure. Whisper and SER both serialise process-wide, so
         # the pipeline drains ~3 utterances/sec no matter how many
         # arrive; without a bound a client can queue work far faster
@@ -905,6 +1022,7 @@ async def stream(ws: WebSocket) -> None:
         pending.add(task)
         task.add_done_callback(pending.discard)
         task.add_done_callback(_log_task_error)
+        await send_partial(force_send=True)
 
     async def gap_watch() -> None:
         """Close an open utterance when the CLIENT stops sending (see Segmenter.idle).
@@ -934,6 +1052,7 @@ async def stream(ws: WebSocket) -> None:
                 await on_closed(audio)
 
     gap_task = asyncio.create_task(gap_watch())
+    asr_task = asyncio.create_task(stream_worker()) if live_asr is not None else None
 
     try:
         while True:
@@ -999,6 +1118,9 @@ async def stream(ws: WebSocket) -> None:
                 continue
 
             last_audio = time.monotonic()
+            abs_received += len(data) // 2
+            if live_asr is not None:
+                asr_q.put_nowait(data)
             # Lock-free by design -- see metrics.client_seen. One dict write per
             # frame, so the read loop is not made to wait on telemetry.
             metrics.client_seen(client_id, audio_bytes=len(data))
@@ -1038,22 +1160,7 @@ async def stream(ws: WebSocket) -> None:
 
             # Live sentence split: is the open utterance long enough since the
             # last look to be worth another ASR pass?
-            if config.LIVE_SPLIT and config.SENTENCE_SPLIT and not live_busy:
-                if segmenter.utterance_seq != live_seq:
-                    live_seq, live_mark_ms = segmenter.utterance_seq, 0
-                grown = segmenter.buffered_ms - live_mark_ms
-                if segmenter.buffered_ms and grown >= config.LIVE_SPLIT_EVERY_S * 1000:
-                    open_audio = segmenter.peek()
-                    if open_audio is not None:
-                        live_busy = True
-                        # After a consume the buffer is shorter, so the next
-                        # look is measured from what is left.
-                        live_mark_ms = segmenter.buffered_ms
-                        _keep(asyncio.create_task(
-                            live_split(segmenter.utterance_seq, open_audio,
-                                       segmenter.speech_rms)))
-                elif grown < 0:
-                    live_mark_ms = segmenter.buffered_ms
+            maybe_live_split()
 
             # After the loop, not inside it: a discard produces no utterance, so
             # it is counted here where it cannot be confused with one.
@@ -1072,6 +1179,8 @@ async def stream(ws: WebSocket) -> None:
         metrics.connection_closed(client_id)
         keepalive_task.cancel()
         gap_task.cancel()
+        if asr_task is not None:
+            asr_task.cancel()
         for task in pending | live_tasks:
             task.cancel()
 

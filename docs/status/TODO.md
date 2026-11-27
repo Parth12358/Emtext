@@ -116,8 +116,30 @@ Firmware follow-up (not done): `HANGOVER_MS` 500 < `END_SILENCE_MS` 650 is a mis
 fixing at the next firmware release (e.g. 900 ms), so the server's own VAD can close on real
 audio. With the server fix it is no longer what decides latency.
 
+### Streaming ASR, same day: live words and endpoint cuts
+
+`server/streaming.py` adds a streaming recognizer for `partial` frames (live words,
+`?partial=1`) and sentence endpoints. Chosen on three logged clips: Nemotron Speech
+Streaming 0.6B (160 ms) punctuates and is close to Parakeet at RTF 0.31; NeMo FastConformer
+80 ms is RTF 0.08 but lowercase, unpunctuated and much worse. Endpoints fire at the
+clips' pauses; `partial` updates every ~0.2 s.
+
+Bug found and fixed while testing: an endpoint first cut at the end of the audio received
+so far, which by then included the next sentence's first syllable; Parakeet then dropped
+"that's perfect enough to be here" entirely. The forced cut now stops at the endpoint's
+last token + 0.35 s.
+
+**Cost, measured as drift, not WER:** on the same three clips (hard audio, overlapping
+voices), each mode's joined transcripts against one Parakeet pass over the whole clip:
+whole utterances 34-39%, live split 45-54%, live split + endpoint cuts 51-57%. First read
+14.7-17.4 s whole vs 1.8-8.5 s live. So reads arrive ~10 s sooner and cutting live costs
+~10-20 points of drift on this audio. Real WER needs hand-corrected references (the
+`server.translog --export` path); until then treat the live text as somewhat noisier.
+
 ### Not done
 
+- `partial` on the pendant: firmware does not draw it yet (it would need a live line on
+  the glance and must not wake the screen every 150 ms).
 - Whether this room's noise also keeps the VAD from hearing pauses on a CONTINUOUS client
   is still open. Needs real audio (transcript log `audio` on for a minute).
 - Saved clips of a split utterance hold only the pieces' audio; long pauses between

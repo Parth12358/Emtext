@@ -267,7 +267,15 @@ The server replies with TEXT JSON frames:
 {"type":"pong","t":...}                   // reply to a client ping, `t` echoed untouched
 {"type":"saved","id":2,"ok":true,"clip":"20260918T230722_1_eb19"}   // reply to a save
 {"type":"saved","id":2,"ok":false,"error":"no audio"}
+{"type":"partial","text":"Or is that too much trouble for"}   // only on /stream?partial=1
 ```
+
+`partial` is the live line: what is being said right now, from the streaming
+recognizer (`server/streaming.py`), sent at most every `PARTIAL_MIN_INTERVAL_S`
+while someone talks and emptied (`"text":""`) as each sentence is handed out as an
+`utterance`. It is opt-in per connection with `?partial=1` (the browser client asks;
+the pendant does not yet), never carries an `id`, and is never followed by a `read`:
+the `utterance` that replaces it is. A client may ignore it entirely.
 
 Two **client → server** TEXT frames are accepted between the PCM frames. Any
 other JSON type is ignored, never fatal -- the protocol is additive:

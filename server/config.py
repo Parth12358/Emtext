@@ -132,6 +132,22 @@ LIVE_SPLIT_EVERY_S: float = _env_float("LIVE_SPLIT_EVERY_S", 1.5)
 # END_SILENCE_MS (650) misses such pauses when the room keeps the RMS up.
 LIVE_SPLIT_PAUSE_S: float = _env_float("LIVE_SPLIT_PAUSE_S", 0.8)
 
+# --- Streaming ASR (server/streaming.py) -------------------------------------
+# A second, streaming recognizer for live words (`partial` frames, opt-in with
+# /stream?partial=1) and sentence endpoints. Parakeet stays the text the
+# interpreter reads. Nemotron Speech Streaming 0.6B, 160 ms chunks, int8:
+# punctuated, RTF 0.31 on 2 threads, ~0.6 GB RAM. "" disables it.
+STREAMING_ASR_MODEL: str = _env_str(
+    "STREAMING_ASR_MODEL", "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25")
+STREAMING_ASR_THREADS: int = _env_int("STREAMING_ASR_THREADS", 2)
+# Quiet after decoded text that counts as a sentence end (the recognizer's rule 2).
+# Fixed at load; restart to change it.
+STREAMING_ENDPOINT_S: float = _env_float("STREAMING_ENDPOINT_S", 0.6)
+# On an endpoint, hand out the open utterance's sentences at once (the live split).
+STREAM_ENDPOINT_CUT: bool = _env_bool("STREAM_ENDPOINT_CUT", True)
+# Partial frames are sent at most this often (they are also sent on every endpoint).
+PARTIAL_MIN_INTERVAL_S: float = _env_float("PARTIAL_MIN_INTERVAL_S", 0.15)
+
 # --- Adaptive threshold ------------------------------------------------------
 # SPEECH_RMS alone was the wrong shape for this product. It is an ABSOLUTE
 # level, and RAVDESS measured a ~130x spread in peak RMS across emotions

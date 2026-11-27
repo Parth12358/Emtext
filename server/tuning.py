@@ -65,6 +65,9 @@ KNOBS: tuple[Knob, ...] = (
     Knob("LIVE_SPLIT_PAUSE_S", "split", "  pause that ends a sentence, s", "float", 0.3, 3, 0.1,
          "A finished sentence followed by this much quiet (as heard by the ASR) is sent "
          "without waiting for the next one. Lower = sooner, but risks cutting a mid-sentence pause."),
+    Knob("STREAM_ENDPOINT_CUT", "split", "send a sentence when streaming ASR hears it end", "bool",
+         help="The streaming recognizer's endpoint (a pause after words) hands the sentence out "
+              "at once instead of waiting for the next live-split look."),
     Knob("CLIENT_GAP_MS", "split", "client went quiet = pause after, ms", "int", 0, 2000, 50,
          "A client that stops sending (the pendant's own gate) counts as silent once no audio "
          "has arrived for this long. 0 = off (utterances then wait for more speech or the cap)."),
@@ -92,7 +95,8 @@ _DEFAULTS = {k.key: getattr(config, k.key) for k in KNOBS}
 _EMOTION_KEYS = ("EMOTION_BLEND", "SER_MIN_CONFIDENCE", "CONF_PEN_SHORT", "CONFIDENCE_MIN_VOICE_S",
                  "CONF_PEN_VOICE", "CONF_PEN_WORDS", "CONF_PEN_TWO_VOICES", "CONF_PEN_DISAGREE",
                  "CONFIDENCE_HIGH", "CONFIDENCE_LOW")
-_TIMING_KEYS = ("LIVE_SPLIT", "LIVE_SPLIT_EVERY_S", "LIVE_SPLIT_PAUSE_S", "CLIENT_GAP_MS")
+_TIMING_KEYS = ("LIVE_SPLIT", "LIVE_SPLIT_EVERY_S", "LIVE_SPLIT_PAUSE_S", "CLIENT_GAP_MS",
+                "STREAM_ENDPOINT_CUT")
 
 PRESETS: tuple[dict, ...] = (
     {"id": "measured", "group": "emotion", "label": "Measured default",
@@ -134,16 +138,16 @@ PRESETS: tuple[dict, ...] = (
     {"id": "snappy", "group": "timing", "label": "Snappy",
      "note": "Sooner reads, more CPU, more risk of cutting a sentence at a mid-sentence pause.",
      "values": {"LIVE_SPLIT": True, "LIVE_SPLIT_EVERY_S": 1.0, "LIVE_SPLIT_PAUSE_S": 0.6,
-                "CLIENT_GAP_MS": 300}},
+                "CLIENT_GAP_MS": 300, "STREAM_ENDPOINT_CUT": True}},
     {"id": "patient", "group": "timing", "label": "Patient",
      "note": "Waits longer before calling a sentence done: fewer fragments for slow or hesitant talkers.",
      "values": {"LIVE_SPLIT": True, "LIVE_SPLIT_EVERY_S": 2.0, "LIVE_SPLIT_PAUSE_S": 1.2,
-                "CLIENT_GAP_MS": 600}},
+                "CLIENT_GAP_MS": 600, "STREAM_ENDPOINT_CUT": False}},
     {"id": "no-live", "group": "timing", "label": "Whole utterances",
      "note": "Live split off: sentences of a long utterance arrive together when it closes.",
      "values": {"LIVE_SPLIT": False, "LIVE_SPLIT_EVERY_S": _DEFAULTS["LIVE_SPLIT_EVERY_S"],
                 "LIVE_SPLIT_PAUSE_S": _DEFAULTS["LIVE_SPLIT_PAUSE_S"],
-                "CLIENT_GAP_MS": _DEFAULTS["CLIENT_GAP_MS"]}},
+                "CLIENT_GAP_MS": _DEFAULTS["CLIENT_GAP_MS"], "STREAM_ENDPOINT_CUT": False}},
 )
 _PRESETS = {p["id"]: p for p in PRESETS}
 

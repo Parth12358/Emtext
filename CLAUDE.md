@@ -181,6 +181,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   dropped. Every task takes a `_Turns` ticket in audio order and waits for it before
   sending, so reads never overtake each other; live tasks are not counted against
   `MAX_INFLIGHT_UTTERANCES`.
+- `server/streaming.py` — a SECOND, streaming recognizer (Nemotron Speech Streaming 0.6B,
+  160 ms, int8, sherpa-onnx; CPU, RTF ~0.31 on 2 threads, ~0.6 GB) for live words and
+  sentence endpoints. **Never the text the interpreter reads**: that stays Parakeet, so the
+  evals hold. `main.py` feeds it every frame from a per-connection worker (`stream_worker`),
+  sends `partial` frames, and on an endpoint forces the live split -- cutting at the
+  endpoint's last token, never at the end of the audio received so far (cutting into the
+  next sentence's first word made Parakeet drop the phrase after it). Loads in the
+  background at startup, never raises; missing model = feature off, server unchanged.
 - `server/transcriber.py` — speech-to-text behind one `transcribe(audio) -> str`. A
   **catalogue** of backends (`whisper:<name>` via faster-whisper; `parakeet:v2/v3`,
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under
@@ -265,7 +273,8 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   frame is a TEXT auth token (any value accepted when `AUTH_TOKEN` env is unset); then
   BINARY frames of raw PCM 16 kHz mono int16 LE. Server replies with the JSON frame types
   `ready` / `status` / `utterance` / `read` / `ping` / `pong` / `saved`, plus `vad` and
-  `vad_close` only on a `?vad=1` connection. Changing this means changing the firmware.
+  `vad_close` only on a `?vad=1` connection and `partial` (live words, no id, never read)
+  only on a `?partial=1` connection. Changing this means changing the firmware.
 - **Never block the websocket read loop.** Transcription, SER and speaker id run in a
   thread executor, `asyncio.gather`ed so they overlap rather than queue; each utterance
   is a fire-and-forget `asyncio` task so audio keeps flowing while thinking.

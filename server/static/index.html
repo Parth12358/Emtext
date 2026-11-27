@@ -150,6 +150,10 @@
     padding: 16px 18px 14px; margin-bottom: 18px;
     animation: rise .18s ease-out;
   }
+  /* The live line (streaming ASR): what is being said right now, not yet read. */
+  .entry.partial { box-shadow: var(--press); background: transparent; animation: none; }
+  .entry.partial .transcript { color: var(--ink-2); font-style: italic; }
+  .entry.partial .transcript::after { content: " 6"; }
   @keyframes rise { from { opacity: 0; transform: translateY(-4px);} to { opacity:1; transform:none;} }
   .transcript { font-size: 17px; line-height: 1.45; }
   .read {
@@ -309,7 +313,8 @@ if (_params.get("token")) {
 // served over TLS — which is every path to the outside world (Cloudflare Tunnel,
 // any reverse proxy). The ESP32 firmware needs the same wss:// treatment.
 const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
-const WS_URL = `${WS_SCHEME}//${location.host}/stream`;
+// ?partial=1: also send live words while someone talks (server/streaming.py).
+const WS_URL = `${WS_SCHEME}//${location.host}/stream?partial=1`;
 
 let ws = null;
 let capturing = false;      // is the mic actively streaming?
@@ -362,6 +367,9 @@ function handleMessage(msg) {
     case "saved":
       markSaved(msg.id, msg.ok, msg.error);
       break;
+    case "partial":
+      showPartial(msg.text);
+      break;
     // Unknown types are ignored on purpose: the protocol is additive.
   }
 }
@@ -405,6 +413,24 @@ function whoChip(speaker) {
   return chip;
 }
 
+// The live line: what is being said right now, from the streaming recognizer.
+// One element, always at the top of the (newest-first) feed, replaced on every `partial` frame and
+// emptied when a sentence is handed out (its utterance then appears above it).
+function showPartial(text) {
+  let node = document.getElementById("partial");
+  if (!text) { if (node) node.remove(); return; }
+  if (!node) {
+    const emptyState = feed.querySelector(".empty");
+    if (emptyState) emptyState.remove();
+    node = document.createElement("div");
+    node.id = "partial";
+    node.className = "entry partial";
+    node.innerHTML = `<div class="transcript"></div>`;
+  }
+  node.querySelector(".transcript").textContent = text;
+  feed.prepend(node);              // newest-first, so the live line sits on top
+}
+
 function addTranscript(id, transcript, speaker) {
   const emptyState = feed.querySelector(".empty");
   if (emptyState) emptyState.remove();
@@ -424,6 +450,8 @@ function addTranscript(id, transcript, speaker) {
   // audio stages already ran before this frame was sent.
   node.dataset.t0 = String(performance.now());
   feed.prepend(node);          // newest-first
+  const live = document.getElementById("partial");
+  if (live) feed.prepend(live); // the live line stays above the newest entry
   entries.set(id, node);
 }
 
@@ -518,10 +546,13 @@ function addRead(id, tone, read, voice, speaker, confidence, emotion) {
   const line = document.createElement("div");
   line.className = "voice";
 
-  const label = document.createElement("span");
-  label.className = "label";
-  label.textContent = "voice";
-  line.appendChild(label);
+  // Not `label`: that name already holds the headline emotion above, and a
+  // second `const label` in this function was a SyntaxError that stopped the
+  // whole page from running (2026-09-22 to 2026-11-26).
+  const vlabel = document.createElement("span");
+  vlabel.className = "label";
+  vlabel.textContent = "voice";
+  line.appendChild(vlabel);
 
   if (voice.emotion) {
     const chip = document.createElement("span");

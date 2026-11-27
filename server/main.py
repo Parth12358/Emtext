@@ -26,6 +26,7 @@ is what keeps the conversation feeling live:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import secrets
@@ -316,6 +317,88 @@ def _speaker_field(who: dict | None) -> dict | None:
     return {"label": who.get("label"), "score": who.get("score")}
 
 
+class _Turns:
+    """Emission order for one connection: reads go out in the order the audio came in.
+
+    Utterance tasks are fire-and-forget and overlap, which was fine when one
+    utterance meant one read. With the live sentence split, the sentences of
+    one stretch of talk come from several tasks (live pieces first, the tail at
+    close), and a fast later task must not overtake a slower earlier one: the
+    pendant would show sentence 3 before sentence 2, and the interpreter's
+    context would be out of order. So every task takes a ticket when it is
+    created (on the event loop, in audio order), does its CPU work freely, then
+    waits for its turn before sending anything. `done()` runs in a `finally`,
+    so a task that emits nothing (empty transcript) or fails still frees its turn.
+    """
+
+    def __init__(self) -> None:
+        self._next = 0
+        self._head = 0
+        self._done: set[int] = set()
+        self._cond = asyncio.Condition()
+
+    def ticket(self) -> int:
+        t = self._next
+        self._next += 1
+        return t
+
+    async def wait(self, t: int) -> None:
+        async with self._cond:
+            await self._cond.wait_for(lambda: self._head >= t)
+
+    async def done(self, t: int) -> None:
+        async with self._cond:
+            self._done.add(t)
+            while self._head in self._done:
+                self._done.discard(self._head)
+                self._head += 1
+            self._cond.notify_all()
+
+
+def _timed(fn, *args):
+    """(result, seconds). Each stage times ITSELF rather than being timed around
+    .result(): timing the gather would fold queue wait into whichever finished
+    second, and make SER look free simply because Whisper was awaited first."""
+    start = time.perf_counter()
+    return fn(*args), time.perf_counter() - start
+
+
+async def _emit_pieces(ws, interpreter, recent, session, pieces, ids, audio, tokens,
+                       whole_who, spk_s, whisper_s, cpu_t0, speech_rms, parent,
+                       per_piece_speaker: bool, gate=None) -> None:
+    """Send sentence pieces (server/sentences.py) as ordinary utterances, in order.
+
+    Each piece gets its own SER, all submitted at once (they queue on SER's lock
+    in order), so piece 1's read is not held up by piece 4's audio. Speaker id
+    is run per piece when `per_piece_speaker` (the live split, where nothing was
+    identified yet, and a whole utterance that came back `mixed`); otherwise
+    every piece inherits `whole_who`, so the partner centroid is not fed the
+    same audio twice. `ids` are allocated by the caller, on the event loop, so
+    they stay in audio order. `gate` is awaited after the CPU jobs are queued
+    and before anything is sent (the connection's `_Turns`).
+    """
+    loop = asyncio.get_running_loop()
+    jobs = []
+    for pc in pieces:
+        seg = audio[pc.start:pc.end]
+        sj = loop.run_in_executor(None, _timed, ser.analyze, seg)
+        kj = (loop.run_in_executor(None, _timed, speaker.identify, seg, session)
+              if per_piece_speaker else None)
+        jobs.append((pc, seg, sj, kj))
+    if gate is not None:
+        await gate()
+    for i, (pc, seg, sj, kj) in enumerate(jobs):
+        p_voice, p_ser_s = await sj
+        p_who, p_spk_s = (await kj) if kj is not None else (whole_who, spk_s)
+        if p_who is None or p_who.get("label") in (None, "unknown"):
+            p_who = whole_who if whole_who is not None else p_who
+        await _emit(ws, interpreter, recent, ids[i], seg, pc.text, pc.asr_conf(tokens),
+                    p_voice, p_who, whisper_s, p_ser_s, p_spk_s or 0.0,
+                    time.perf_counter() - cpu_t0,
+                    part={"parent": parent, "part": i + 1, "of": len(pieces)},
+                    speech_rms=speech_rms)
+
+
 async def _process_utterance(
     ws: WebSocket,
     interpreter: Interpreter,
@@ -325,6 +408,8 @@ async def _process_utterance(
     audio,
     new_id=None,
     speech_rms: float | None = None,
+    turns: _Turns | None = None,
+    ticket: int | None = None,
 ) -> None:
     """Transcribe then interpret one utterance and stream the results out.
 
@@ -337,7 +422,20 @@ async def _process_utterance(
     its own id from `new_id()` (the first piece keeps `uid`), its own SER and
     its own read. No wire change: a client sees ordinary utterance/read pairs.
     """
+    try:
+        await _process_utterance_body(ws, interpreter, recent, session, uid, audio,
+                                      new_id, speech_rms, turns, ticket)
+    finally:
+        if turns is not None and ticket is not None:
+            await turns.done(ticket)
+
+
+async def _process_utterance_body(ws, interpreter, recent, session, uid, audio,
+                                  new_id, speech_rms, turns, ticket) -> None:
     loop = asyncio.get_running_loop()
+    # A callable, not a coroutine: a path that returns early must not leave an
+    # un-awaited coroutine behind.
+    gate = ((lambda: turns.wait(ticket)) if turns is not None and ticket is not None else None)
 
     # Whisper (what was said), SER (how it sounded) and speaker id (whose voice
     # it was) are all blocking CPU work over the same immutable audio buffer,
@@ -349,13 +447,7 @@ async def _process_utterance(
     # model is disabled, failed to load, or (for speaker id) nobody has
     # enrolled yet, and both swallow their own errors, so this gather cannot
     # fail because of them.
-    # Each stage times ITSELF rather than being timed around .result(): timing
-    # the gather would fold queue wait into whichever finished second, and make
-    # SER look free simply because Whisper was awaited first.
-    def _timed(fn, *args):
-        start = time.perf_counter()
-        return fn(*args), time.perf_counter() - start
-
+    # Each stage times itself (see `_timed`).
     cpu_t0 = time.perf_counter()
     ((transcript, asr_conf, tokens), whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
         loop.run_in_executor(None, _timed, transcriber.transcribe_timed, audio),
@@ -377,6 +469,8 @@ async def _process_utterance(
             max_pieces=config.SPLIT_MAX_PIECES, pad_s=config.SPLIT_PAD_S,
         )
     if len(pieces) < 2:
+        if gate is not None:
+            await gate()
         await _emit(ws, interpreter, recent, uid, audio, transcript, asr_conf,
                     voice, who, whisper_s, ser_s, spk_s, cpu_stage_s,
                     speech_rms=speech_rms)
@@ -384,33 +478,16 @@ async def _process_utterance(
 
     # Several sentences. The whole-utterance SER above is discarded: one label
     # averaged over a paragraph is exactly what this split exists to replace.
-    # Each piece gets its own SER, all submitted at once (they queue on SER's
-    # lock in order) so piece 1's read is not held up by piece 4's audio.
     # Speaker id is re-run per piece only when the whole utterance came back
-    # `mixed`, the glued-turns case where a per-sentence label is the point;
-    # otherwise every piece inherits the whole label, so the partner centroid
-    # is not fed the same audio twice.
+    # `mixed`, the glued-turns case where a per-sentence label is the point.
     metrics.record_event("utterance_split")
-    whole_label = who.get("label") if who else None
-    jobs = []
-    for pc in pieces:
-        seg = audio[pc.start:pc.end]
-        sj = loop.run_in_executor(None, _timed, ser.analyze, seg)
-        kj = (loop.run_in_executor(None, _timed, speaker.identify, seg, session)
-              if whole_label == "mixed" else None)
-        jobs.append((pc, seg, sj, kj))
-    for i, (pc, seg, sj, kj) in enumerate(jobs):
-        p_voice, p_ser_s = await sj
-        p_who, p_spk_s = (await kj) if kj is not None else (who, spk_s)
-        if p_who is None or p_who.get("label") in (None, "unknown"):
-            p_who = who
-        p_uid = uid if i == 0 else new_id()
-        recent.add(p_uid, seg)     # piece 1 replaces the whole utterance's audio
-        await _emit(ws, interpreter, recent, p_uid, seg, pc.text, pc.asr_conf(tokens),
-                    p_voice, p_who, whisper_s, p_ser_s, p_spk_s,
-                    time.perf_counter() - cpu_t0,
-                    part={"parent": uid, "part": i + 1, "of": len(pieces)},
-                    speech_rms=speech_rms)
+    ids = [uid] + [new_id() for _ in pieces[1:]]
+    for pid, pc in zip(ids, pieces):
+        recent.add(pid, audio[pc.start:pc.end])   # piece 1 replaces the whole utterance's audio
+    await _emit_pieces(ws, interpreter, recent, session, pieces, ids, audio, tokens,
+                       who, spk_s, whisper_s, cpu_t0, speech_rms, parent=uid,
+                       per_piece_speaker=bool(who) and who.get("label") == "mixed",
+                       gate=gate)
 
 
 async def _emit(
@@ -669,6 +746,91 @@ async def stream(ws: WebSocket) -> None:
     # references, so without this a task could be garbage-collected mid-flight.
     pending: set[asyncio.Task] = set()
 
+    # Reads leave in audio order (see _Turns), whichever task produced them.
+    turns = _Turns()
+
+    # Live sentence split. While an utterance is still open, re-transcribe it
+    # every LIVE_SPLIT_EVERY_S of new audio; every sentence that is finished
+    # (a later one has started) goes out at once as its own utterance and is
+    # consumed from the front of the segmenter's buffer. Without this a stretch
+    # of talk is read only when the segmenter closes it -- in a room whose
+    # background keeps the VAD from hearing a pause, at the 15 s cap -- and then
+    # all its sentences flash out together. Its tasks live in their own set, not
+    # `pending`, so they never count against MAX_INFLIGHT_UTTERANCES and can
+    # never cause a closing utterance to be dropped. At most one check runs at a
+    # time, so the extra CPU is bounded at one ASR pass per LIVE_SPLIT_EVERY_S.
+    live_tasks: set[asyncio.Task] = set()
+    live_busy = False
+    live_seq = -1          # segmenter.utterance_seq the mark below belongs to
+    live_mark_ms = 0       # buffered_ms at the last check of that utterance
+
+    def _keep(task: asyncio.Task) -> None:
+        live_tasks.add(task)
+        task.add_done_callback(live_tasks.discard)
+        task.add_done_callback(_log_task_error)
+
+    async def live_split(seq: int, audio, speech_rms: float) -> None:
+        nonlocal live_busy
+        try:
+            loop = asyncio.get_running_loop()
+            cpu_t0 = time.perf_counter()
+            (_text, _conf, tokens), asr_s = await loop.run_in_executor(
+                None, _timed, transcriber.transcribe_timed, audio)
+            # The utterance may have closed (and been handed to
+            # _process_utterance whole) while ASR ran: then this result is stale
+            # and must not be applied, or its sentences would go out twice.
+            if not tokens or segmenter.utterance_seq != seq or segmenter.peek() is None:
+                return
+            kw = dict(min_s=config.SPLIT_MIN_S, min_words=config.SPLIT_MIN_WORDS,
+                      max_pieces=config.SPLIT_MAX_PIECES, pad_s=config.SPLIT_PAD_S)
+            sr = config.SAMPLE_RATE
+            # Which sentences are finished? Two signals, both from the ASR:
+            #   * a later sentence has started -> every piece but the last is done;
+            #   * the last token ends a sentence and nothing has been said for
+            #     LIVE_SPLIT_PAUSE_S since -> the last one is done too. This is
+            #     the energy VAD's END_SILENCE rule judged by the ASR instead,
+            #     which hears a pause the VAD misses when background noise keeps
+            #     the RMS above threshold.
+            last_tok = tokens[-1]
+            paused = (last_tok.text.strip().endswith((".", "?", "!"))
+                      and audio.size / sr - last_tok.t >= config.LIVE_SPLIT_PAUSE_S)
+            if paused:
+                done = sentences.split(tokens, int(audio.size), sr, **kw)
+                if not done:
+                    return
+                # The last piece would otherwise run to the end of the buffer,
+                # handing SER the pause as well.
+                end = min(done[-1].end, int((last_tok.t + 0.2 + config.SPLIT_PAD_S) * sr))
+                done[-1] = dataclasses.replace(done[-1], end=max(end, done[-1].start + 1))
+                cut = done[-1].end
+            else:
+                pieces = sentences.split(tokens, int(audio.size), sr, hold_last=True, **kw)
+                if len(pieces) < 2:
+                    return
+                done, cut = pieces[:-1], pieces[-1].start
+            # Hand them out and drop them from the open utterance --
+            # synchronously, on the event loop, so no frame can arrive between
+            # the staleness check above and the consume.
+            segmenter.consume(cut)
+            ids = [new_id() for _ in done]
+            for pid, pc in zip(ids, done):
+                recent.add(pid, audio[pc.start:pc.end])
+            ticket = turns.ticket()
+            metrics.record_event("live_split", len(done))
+
+            async def emit() -> None:
+                try:
+                    await _emit_pieces(ws, interpreter, recent, session, done, ids, audio,
+                                       tokens, None, 0.0, asr_s, cpu_t0, speech_rms,
+                                       parent=ids[0], per_piece_speaker=True,
+                                       gate=lambda: turns.wait(ticket))
+                finally:
+                    await turns.done(ticket)
+
+            _keep(asyncio.create_task(emit()))
+        finally:
+            live_busy = False
+
     # Idle keepalive. Cloudflare closes a proxied websocket after ~100s with no
     # traffic in either direction, and a user who opens the page but does not
     # press Start sends nothing at all. uvicorn's own protocol pings (every 20s)
@@ -833,11 +995,30 @@ async def stream(ws: WebSocket) -> None:
                 segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
                     _process_utterance(ws, interpreter, recent, session, uid, audio, new_id,
-                                        segmenter.speech_rms)
+                                        segmenter.speech_rms, turns, turns.ticket())
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
                 task.add_done_callback(_log_task_error)
+
+            # Live sentence split: is the open utterance long enough since the
+            # last look to be worth another ASR pass?
+            if config.LIVE_SPLIT and config.SENTENCE_SPLIT and not live_busy:
+                if segmenter.utterance_seq != live_seq:
+                    live_seq, live_mark_ms = segmenter.utterance_seq, 0
+                grown = segmenter.buffered_ms - live_mark_ms
+                if segmenter.buffered_ms and grown >= config.LIVE_SPLIT_EVERY_S * 1000:
+                    open_audio = segmenter.peek()
+                    if open_audio is not None:
+                        live_busy = True
+                        # After a consume the buffer is shorter, so the next
+                        # look is measured from what is left.
+                        live_mark_ms = segmenter.buffered_ms
+                        _keep(asyncio.create_task(
+                            live_split(segmenter.utterance_seq, open_audio,
+                                       segmenter.speech_rms)))
+                elif grown < 0:
+                    live_mark_ms = segmenter.buffered_ms
 
             # After the loop, not inside it: a discard produces no utterance, so
             # it is counted here where it cannot be confused with one.
@@ -855,7 +1036,7 @@ async def stream(ws: WebSocket) -> None:
         # loop was a cheap way to accumulate zombie pipelines.
         metrics.connection_closed(client_id)
         keepalive_task.cancel()
-        for task in pending:
+        for task in pending | live_tasks:
             task.cancel()
 
         # Flush a trailing utterance if the client dropped mid-sentence. Worth
@@ -867,6 +1048,8 @@ async def stream(ws: WebSocket) -> None:
             uid = new_id()
             try:
                 recent.add(uid, tail)
+                # No turns here: every other task was just cancelled, and waiting
+                # on their tickets would only burn the timeout.
                 await asyncio.wait_for(
                     _process_utterance(ws, interpreter, recent, session, uid, tail, new_id,
                                        segmenter.speech_rms),

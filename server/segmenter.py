@@ -121,7 +121,12 @@ class Segmenter:
 
         self._in_speech = False
         self._utterance_frames: list[np.ndarray] = []  # int16 frames of current utterance
+        self._utterance_voiced: list[bool] = []         # per frame: was it above threshold
         self._voiced_ms = 0            # how much of the utterance was above threshold
+        # Bumped at every speech onset. main.py's live sentence split reads it
+        # before an ASR pass and checks it after, so a result computed on an
+        # utterance that has since closed (or been replaced) is never applied.
+        self.utterance_seq: int = 0
         self._trailing_silence_ms = 0  # consecutive quiet at the tail, drives the end timer
 
     # -- public API ----------------------------------------------------------
@@ -155,6 +160,43 @@ class Segmenter:
         if self._in_speech:
             return self._finalize()
         return None
+
+    # -- live sentence split (main.py) ---------------------------------------
+    # The segmenter decides when an utterance ENDS; these two let the server
+    # hand out a finished sentence from the front of one that is still going,
+    # so a long stretch of talk is read sentence by sentence instead of in one
+    # burst at the end. Both are pure and leave the state machine unchanged:
+    # consume() only shortens the buffer from the front.
+
+    @property
+    def buffered_ms(self) -> int:
+        """Length of the open utterance's buffer (0 when idle)."""
+        return len(self._utterance_frames) * self.frame_ms if self._in_speech else 0
+
+    def peek(self) -> np.ndarray | None:
+        """The open utterance so far, float32 in [-1, 1], or None when idle."""
+        if not self._in_speech or not self._utterance_frames:
+            return None
+        return np.concatenate(self._utterance_frames).astype(np.float32) / 32768.0
+
+    def consume(self, n_samples: int) -> int:
+        """Drop the first `n_samples` of the open utterance; return samples dropped.
+
+        Rounds DOWN to whole frames, so the remainder may keep up to one frame
+        (30 ms) of what was handed out -- a cut lands in a pause anyway, and
+        repeating a sliver beats losing the start of the next word. voiced_ms is
+        recounted from the frames that remain, so the MIN_UTTERANCE_MS check at
+        close judges only the audio that is still to be emitted.
+        """
+        if not self._in_speech or n_samples <= 0:
+            return 0
+        k = min(len(self._utterance_frames), int(n_samples) // self.frame_samples)
+        if k <= 0:
+            return 0
+        del self._utterance_frames[:k]
+        del self._utterance_voiced[:k]
+        self._voiced_ms = sum(self._utterance_voiced) * self.frame_ms
+        return k * self.frame_samples
 
     # -- internals -----------------------------------------------------------
 
@@ -214,6 +256,8 @@ class Segmenter:
                 # so they do NOT count toward voiced_ms.
                 self._utterance_frames = list(self._pre_roll)
                 self._utterance_frames.append(frame)
+                self._utterance_voiced = [False] * (len(self._utterance_frames) - 1) + [True]
+                self.utterance_seq += 1
                 self._voiced_ms = self.frame_ms
                 self._trailing_silence_ms = 0
                 self._in_speech = True
@@ -224,6 +268,7 @@ class Segmenter:
 
         # SPEECH: keep every frame (silence in the middle is part of the sentence).
         self._utterance_frames.append(frame)
+        self._utterance_voiced.append(bool(is_speech))
         if is_speech:
             self._voiced_ms += self.frame_ms
             self._trailing_silence_ms = 0  # reset: the talker is still going
@@ -280,6 +325,7 @@ class Segmenter:
         # Reset state before we return so the next frame starts clean.
         self._in_speech = False
         self._utterance_frames = []
+        self._utterance_voiced = []
         self._voiced_ms = 0
         self._trailing_silence_ms = 0
         self._pre_roll.clear()
@@ -389,5 +435,22 @@ if __name__ == "__main__":
     seg5.feed(_tone(300, amp=8000) + _silence(1000))
     assert abs(seg5.noise_floor - before) < 1.0, (before, seg5.noise_floor)
     print(f"case 5 OK: loud burst left the noise floor at {seg5.noise_floor:.1f}")
+
+    # Case 6: live split. peek() shows the open utterance; consume() drops a
+    # finished prefix without closing it, and the rest still closes normally.
+    seg6 = Segmenter(adaptive=False)
+    assert seg6.peek() is None and seg6.buffered_ms == 0
+    seg6.feed(_tone(1200) + _silence(300) + _tone(900))   # still open: 300 ms < END_SILENCE_MS
+    open_audio = seg6.peek()
+    assert open_audio is not None and seg6.buffered_ms >= 2300, seg6.buffered_ms
+    seq = seg6.utterance_seq
+    dropped = seg6.consume(int(1.35 * config.SAMPLE_RATE))
+    assert 0 < dropped <= int(1.35 * config.SAMPLE_RATE)
+    assert seg6.peek().size == open_audio.size - dropped
+    assert seg6.utterance_seq == seq, "consume must not start a new utterance"
+    done6 = seg6.feed(_silence(1000))
+    assert len(done6) == 1 and abs(done6[0].size - (open_audio.size - dropped)) <= 2 * seg6.frame_samples +         int(config.END_SILENCE_MS / 1000 * config.SAMPLE_RATE), done6[0].size
+    assert seg6.peek() is None
+    print(f"case 6 OK: consumed {dropped / config.SAMPLE_RATE:.2f}s of an open utterance, rest closed normally")
 
     print("segmenter self-test passed")

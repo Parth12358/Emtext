@@ -43,11 +43,33 @@ unaffected: `pipeline_eval --speech-rms 150` fixes the threshold, so its `voiced
 used the threshold the segmenter used. Live confidence on real rooms has not been re-scored;
 that needs labelled real speech.
 
+### Live split, same day: sentences go out while the talker is still talking
+
+In use the split arrived as a burst: nothing for up to 15 s, then 3-5 reads at once. So the
+open utterance is now re-transcribed every 1.5 s of new audio (`LIVE_SPLIT_EVERY_S`) and
+each finished sentence is sent at once and trimmed from the segmenter's buffer
+(`Segmenter.peek/consume`). Finished = a later sentence has started, or the ASR's last
+token is a full stop with `LIVE_SPLIT_PAUSE_S` (0.8 s) of nothing after it: the
+END_SILENCE rule judged by the ASR, which hears the pauses the energy VAD misses here. A
+per-connection `_Turns` ticket keeps reads in audio order.
+
+Streamed in real time on a scratch server (four logged clips, 15 s each at most):
+
+| clip | first read, live split OFF | live split ON |
+|---|---|---|
+| `..._6b4b` (argument, 5 sentences) | 16.5 s, then all 5 within 0.7 s | 2.0 s, then one every 1.5-4.5 s |
+| `..._bff5` ("Trouble. For real...") | ~16 s | 5.1 s (9.7 s before the pause rule) |
+| `..._1677` | ~13 s | 8.4 s |
+
+Costs: one extra Parakeet pass per 1.5 s of speech, and the live transcripts are made on a
+partial buffer, so they sometimes differ from what one pass over the whole would give
+("what you is the truck"). Not measured for WER; the logged audio is too little to.
+
 ### Not done
 
-- The first read still waits for the utterance to close (up to 15 s). Shortening that is a
-  VAD change (accept a shorter pause once an utterance runs long, or find why the room
-  clears the threshold) and was left for after the split is lived with.
+- The last sentence of a stretch still waits for the close if the ASR does not hear a
+  pause after it; the room-noise question (why the VAD never sees END_SILENCE_MS here)
+  is still open. Needs the pendant's own audio (transcript log `audio` on for a minute).
 - Saved clips of a split utterance hold only the pieces' audio; long pauses between
   sentences (non-speech by ASR) are not in the WAV.
 

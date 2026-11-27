@@ -57,6 +57,14 @@ KNOBS: tuple[Knob, ...] = (
     Knob("CONFIDENCE_LOW", "confidence", "hidden as 'not sure' below", "float", 0, 1, 0.05),
     # --- sentence split ---------------------------------------------------
     Knob("SENTENCE_SPLIT", "split", "split long utterances", "bool"),
+    Knob("LIVE_SPLIT", "split", "send sentences while still talking", "bool",
+         help="Off = a long utterance's sentences are sent together when it closes."),
+    Knob("LIVE_SPLIT_EVERY_S", "split", "  check every, seconds of speech", "float", 0.5, 5, 0.25,
+         "How often the open utterance is re-transcribed to look for a finished sentence. "
+         "Lower = sooner reads, more CPU."),
+    Knob("LIVE_SPLIT_PAUSE_S", "split", "  pause that ends a sentence, s", "float", 0.3, 3, 0.1,
+         "A finished sentence followed by this much quiet (as heard by the ASR) is sent "
+         "without waiting for the next one. Lower = sooner, but risks cutting a mid-sentence pause."),
     Knob("SPLIT_MIN_S", "split", "minimum piece, seconds", "float", 0, 6, 0.1,
          "Shorter sentences join a neighbour."),
     Knob("SPLIT_MIN_WORDS", "split", "minimum piece, words", "int", 1, 12, 1),

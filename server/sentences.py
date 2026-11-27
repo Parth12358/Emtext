@@ -78,8 +78,15 @@ def split(
     min_words: int = 3,
     max_pieces: int = 6,
     pad_s: float = 0.25,
+    hold_last: bool = False,
 ) -> list[Piece]:
-    """Pieces in time order; a single piece means the utterance stays whole."""
+    """Pieces in time order; a single piece means the utterance stays whole.
+
+    `hold_last` is for the live split (an utterance still being spoken): the
+    last sentence is the one in progress, so it is never merged backward into a
+    finished one, and the cap never folds it into its neighbour. A short
+    sentence just before it still merges forward, i.e. waits with it.
+    """
     if not tokens or n_samples <= 0:
         return []
     total_s = n_samples / sample_rate
@@ -109,6 +116,7 @@ def split(
     # 2. merge short sentences forward (the last one backward)
     merged: list[list[int]] = []
     carry: list[int] | None = None
+    held = spans.pop() if hold_last and len(spans) > 1 else None
     for s in spans:
         if carry is not None:
             s = [carry[0], s[1]]
@@ -117,15 +125,18 @@ def split(
             carry = s
         else:
             merged.append(s)
-    if carry is not None:
+    if held is not None:
+        merged.append([carry[0] if carry is not None else held[0], held[1]])
+    elif carry is not None:
         if merged:
             merged[-1] = [merged[-1][0], carry[1]]
         else:
             merged.append(carry)
 
     # 3. cap the count by merging the shortest adjacent pair
-    while len(merged) > max(1, max_pieces):
-        k = min(range(len(merged) - 1), key=lambda j: dur([merged[j][0], merged[j + 1][1]]))
+    while len(merged) > max(2 if held is not None else 1, max_pieces):
+        last_pair = len(merged) - (2 if held is not None else 1)
+        k = min(range(last_pair), key=lambda j: dur([merged[j][0], merged[j + 1][1]]))
         merged[k:k + 2] = [[merged[k][0], merged[k + 1][1]]]
 
     # 4. audio bounds: padded, clamped to the gap midpoints, never overlapping
@@ -223,4 +234,14 @@ if __name__ == "__main__":
     tk = [Token(" Hello", 0.2, -0.1), Token(" there", 0.5, -2.0), Token(".", 0.7, -0.1)]
     assert split(tk, SR, SR)[0].asr_conf(tk) == round(2.718281828 ** -2.0, 3)
 
-    print("sentences self-test: 9/9 passed")
+    # 10. hold_last: a short in-progress last sentence is NOT merged backward
+    tk = tokens_from_text("We spent the whole afternoon fixing the car together. Oh")
+    assert len(split(tk, int((tk[-1].t + 1) * SR), SR)) == 1
+    p = split(tk, int((tk[-1].t + 1) * SR), SR, hold_last=True)
+    assert [x.text for x in p] == ["We spent the whole afternoon fixing the car together.", "Oh"], p
+    # ... and a short finished one before it waits with it (merges forward)
+    tk = tokens_from_text("We spent the whole afternoon fixing the car. Wow. And then")
+    p = split(tk, int((tk[-1].t + 1) * SR), SR, hold_last=True)
+    assert [x.text for x in p] == ["We spent the whole afternoon fixing the car.", "Wow. And then"], p
+
+    print("sentences self-test: 10/10 passed")

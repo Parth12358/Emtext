@@ -114,6 +114,17 @@ SPLIT_MIN_S: float = _env_float("SPLIT_MIN_S", 1.5)
 SPLIT_MIN_WORDS: int = _env_int("SPLIT_MIN_WORDS", 3)
 SPLIT_MAX_PIECES: int = _env_int("SPLIT_MAX_PIECES", 6)
 SPLIT_PAD_S: float = _env_float("SPLIT_PAD_S", 0.25)  # audio kept around each piece's words
+# Live split: while an utterance is still OPEN, re-transcribe it every
+# LIVE_SPLIT_EVERY_S of new audio and send each finished sentence at once (one
+# whose next sentence has already started), instead of all of them in a burst
+# when the segmenter finally closes the utterance. Costs one extra ASR pass per
+# LIVE_SPLIT_EVERY_S of speech (Parakeet: ~0.1-0.6 s CPU on a <=15 s buffer).
+LIVE_SPLIT: bool = _env_bool("LIVE_SPLIT", True)
+LIVE_SPLIT_EVERY_S: float = _env_float("LIVE_SPLIT_EVERY_S", 1.5)
+# A sentence whose last word the ASR heard this long ago, with nothing since,
+# counts as finished even though no next sentence has started. The VAD's own
+# END_SILENCE_MS (650) misses such pauses when the room keeps the RMS up.
+LIVE_SPLIT_PAUSE_S: float = _env_float("LIVE_SPLIT_PAUSE_S", 0.8)
 
 # --- Adaptive threshold ------------------------------------------------------
 # SPEECH_RMS alone was the wrong shape for this product. It is an ABSOLUTE

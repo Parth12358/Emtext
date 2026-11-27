@@ -162,8 +162,9 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   `clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)`, with the floor learned
   only from non-speech frames (falls fast, rises slowly). `SPEECH_RMS` is the ceiling, not
   the threshold; `VAD_ADAPTIVE=0` restores the constant. Must stay importable and
-  testable without network, files, or async. Keep the `__main__` self-test (five cases)
-  passing.
+  testable without network, files, or async. Keep the `__main__` self-test (six cases)
+  passing. `peek()` / `consume()` exist for the live sentence split: they read and trim the
+  open utterance from the front and never change when it closes.
 - `server/sentences.py` — **pure logic, zero I/O**, self-test in `__main__`. After ASR, cuts
   a multi-sentence utterance at sentence ends using the transducer's per-token timestamps
   (`transcriber.transcribe_timed`); `main.py` then gives each piece its own SER, read and
@@ -171,7 +172,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   merge into a neighbour. It never cuts inside a sentence (half a sentence is a worse input
   than a long one; docs/status/TODO.md). Speaker id is re-run per piece only when the whole
   utterance was `mixed`. Whisper has no token timings, so it never splits.
-  `SENTENCE_SPLIT=0` restores one read per utterance.
+  `SENTENCE_SPLIT=0` restores one read per utterance. **Live split** (`LIVE_SPLIT`, `main.py`
+  `live_split`): while an utterance is still open it is re-transcribed every
+  `LIVE_SPLIT_EVERY_S`; each finished sentence (a later one has started, or the ASR heard
+  `LIVE_SPLIT_PAUSE_S` of nothing after its full stop) goes out at once and is consumed from
+  the segmenter. A stale result (the utterance closed during ASR, `utterance_seq` changed) is
+  dropped. Every task takes a `_Turns` ticket in audio order and waits for it before
+  sending, so reads never overtake each other; live tasks are not counted against
+  `MAX_INFLIGHT_UTTERANCES`.
 - `server/transcriber.py` — speech-to-text behind one `transcribe(audio) -> str`. A
   **catalogue** of backends (`whisper:<name>` via faster-whisper; `parakeet:v2/v3`,
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under

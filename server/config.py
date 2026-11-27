@@ -439,7 +439,7 @@ SPEAKER_PROFILE_PATH: str = _env_str("SPEAKER_PROFILE_PATH", "models/speaker_use
 # built-in" on the dashboard, to go back to the measured SYSTEM_PROMPT. Only the
 # server loads it; eval/ and distill/ always use the built-in prompt.
 PROMPT_OVERRIDE_PATH: str = _env_str("PROMPT_OVERRIDE_PATH", "models/interpreter_prompt.json")
-# The built-in prompt is ~2,600 chars. The cap keeps the prompt plus 12 context lines
+# The built-in prompt is ~4,250 chars (~1k tokens). The cap keeps the prompt plus 12 context lines
 # well inside the 4096-token context (an overflow silently cuts the system prompt).
 PROMPT_MAX_CHARS: int = _env_int("PROMPT_MAX_CHARS", 8000)
 # Cosine above which a 1 s window counts as the enrolled user. Same-speaker

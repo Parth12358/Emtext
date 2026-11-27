@@ -593,6 +593,7 @@ async def translog_set(body: TranslogRequest,
 
 class TuningRequest(BaseModel):
     values: dict[str, float | int | bool] | None = None
+    preset: str | None = None
     reset: bool = False
 
 
@@ -611,6 +612,11 @@ async def tuning_set(body: TuningRequest,
     _require_token(token, x_auth_token)
     if body.reset:
         out = tuning.reset()
+    elif body.preset is not None:
+        try:
+            out = tuning.apply_preset(body.preset)
+        except KeyError:
+            raise HTTPException(400, "unknown preset") from None
     else:
         try:
             out = tuning.set_values(body.values or {})

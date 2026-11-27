@@ -77,6 +77,89 @@ KNOBS: tuple[Knob, ...] = (
 _BY_KEY = {k.key: k for k in KNOBS}
 _DEFAULTS = {k.key: getattr(config, k.key) for k in KNOBS}
 
+# --- presets ------------------------------------------------------------------
+# Named bundles for the dashboard. An "emotion" preset sets EVERY emotion, voice
+# and confidence knob, so it means the same thing whatever was moved before; a
+# "timing" preset sets every live-split/gap knob. Sentence-split sizes are left
+# alone by both. Numbers come from replaying the eval CSVs on 2026-11-26
+# (docs/status/TODO.md, "Emotion presets"):
+#   * blend, on tone_cases x3 with emtext-qwen3-0.6b:v3 (interpreter ~0.97 sure):
+#     emotion 94.1% at w >= 0.25, 91.2% at 0.2, 88.2% at <= 0.15. Every move the
+#     student made was right, mostly weak-voice lines (conf 0.22-0.27) read as neutral.
+#   * confidence, on 280 RAVDESS clips (studio audio -- a ceiling): AUROC of each
+#     input is ser_confidence 0.78, voiced_s 0.62, asr_conf 0.52 (a coin flip),
+#     so the voice penalty is the one worth weight and the words penalty is not.
+_EMOTION_KEYS = ("EMOTION_BLEND", "SER_MIN_CONFIDENCE", "CONF_PEN_SHORT", "CONFIDENCE_MIN_VOICE_S",
+                 "CONF_PEN_VOICE", "CONF_PEN_WORDS", "CONF_PEN_TWO_VOICES", "CONF_PEN_DISAGREE",
+                 "CONFIDENCE_HIGH", "CONFIDENCE_LOW")
+_TIMING_KEYS = ("LIVE_SPLIT", "LIVE_SPLIT_EVERY_S", "LIVE_SPLIT_PAUSE_S", "CLIENT_GAP_MS")
+
+PRESETS: tuple[dict, ...] = (
+    {"id": "measured", "group": "emotion", "label": "Measured default",
+     "note": "As shipped: the interpreter decides, every penalty 0.7. RAVDESS: 18 bold (100%), "
+             "32 'not sure' (69% right). Test cases: emotion 94%.",
+     "values": {k: _DEFAULTS[k] for k in _EMOTION_KEYS}},
+    {"id": "voice-led", "group": "emotion", "label": "Voice-led",
+     "note": "emotion2vec leads; the interpreter overrides only a voice under ~42% sure. Words "
+             "penalty off (ASR confidence is a coin flip), voice penalty stronger. RAVDESS: 68 bold "
+             "(97%), 12 'not sure' (42% right, i.e. mostly the wrong ones). Test cases: 94%, no loss.",
+     "values": {"EMOTION_BLEND": 0.3, "SER_MIN_CONFIDENCE": 0.4, "CONF_PEN_SHORT": 0.85,
+                "CONFIDENCE_MIN_VOICE_S": 1.0, "CONF_PEN_VOICE": 0.6, "CONF_PEN_WORDS": 1.0,
+                "CONF_PEN_TWO_VOICES": 0.7, "CONF_PEN_DISAGREE": 0.8,
+                "CONFIDENCE_HIGH": 0.9, "CONFIDENCE_LOW": 0.55}},
+    {"id": "voice-first", "group": "emotion", "label": "Voice-first",
+     "note": "The interpreter overrides only a voice under ~24% sure; short lines no longer "
+             "penalised. RAVDESS: 251 bold (91%), 12 'not sure' (42%). Test cases: 91% (-3: "
+             "weak-voice lines the words show are neutral keep the voice's guess).",
+     "values": {"EMOTION_BLEND": 0.2, "SER_MIN_CONFIDENCE": 0.35, "CONF_PEN_SHORT": 1.0,
+                "CONFIDENCE_MIN_VOICE_S": 1.0, "CONF_PEN_VOICE": 0.5, "CONF_PEN_WORDS": 1.0,
+                "CONF_PEN_TWO_VOICES": 0.7, "CONF_PEN_DISAGREE": 0.85,
+                "CONFIDENCE_HIGH": 0.85, "CONFIDENCE_LOW": 0.65}},
+    {"id": "voice-only", "group": "emotion", "label": "Voice only (experiment)",
+     "note": "The headline is always emotion2vec's label; the interpreter only writes the read, "
+             "which can then disagree with the headline. Test cases: 88% (-6). For comparing, "
+             "not for daily use.",
+     "values": {"EMOTION_BLEND": 0.0, "SER_MIN_CONFIDENCE": 0.35, "CONF_PEN_SHORT": 1.0,
+                "CONFIDENCE_MIN_VOICE_S": 1.0, "CONF_PEN_VOICE": 0.5, "CONF_PEN_WORDS": 1.0,
+                "CONF_PEN_TWO_VOICES": 0.7, "CONF_PEN_DISAGREE": 1.0,
+                "CONFIDENCE_HIGH": 0.85, "CONFIDENCE_LOW": 0.65}},
+    {"id": "careful", "group": "emotion", "label": "Careful display",
+     "note": "Interpreter decides as shipped, but fewer reads are bold and more are marked 'not "
+             "sure'. RAVDESS: 65 bold (97%), 37 'not sure' (68% right).",
+     "values": {**{k: _DEFAULTS[k] for k in _EMOTION_KEYS},
+                "CONFIDENCE_MIN_VOICE_S": 1.0, "CONFIDENCE_HIGH": 0.95, "CONFIDENCE_LOW": 0.65}},
+    {"id": "timing-default", "group": "timing", "label": "Default timing",
+     "note": "Live split every 1.5 s, a 0.8 s pause ends a sentence, a client gap of 0.4 s counts as quiet.",
+     "values": {k: _DEFAULTS[k] for k in _TIMING_KEYS}},
+    {"id": "snappy", "group": "timing", "label": "Snappy",
+     "note": "Sooner reads, more CPU, more risk of cutting a sentence at a mid-sentence pause.",
+     "values": {"LIVE_SPLIT": True, "LIVE_SPLIT_EVERY_S": 1.0, "LIVE_SPLIT_PAUSE_S": 0.6,
+                "CLIENT_GAP_MS": 300}},
+    {"id": "patient", "group": "timing", "label": "Patient",
+     "note": "Waits longer before calling a sentence done: fewer fragments for slow or hesitant talkers.",
+     "values": {"LIVE_SPLIT": True, "LIVE_SPLIT_EVERY_S": 2.0, "LIVE_SPLIT_PAUSE_S": 1.2,
+                "CLIENT_GAP_MS": 600}},
+    {"id": "no-live", "group": "timing", "label": "Whole utterances",
+     "note": "Live split off: sentences of a long utterance arrive together when it closes.",
+     "values": {"LIVE_SPLIT": False, "LIVE_SPLIT_EVERY_S": _DEFAULTS["LIVE_SPLIT_EVERY_S"],
+                "LIVE_SPLIT_PAUSE_S": _DEFAULTS["LIVE_SPLIT_PAUSE_S"],
+                "CLIENT_GAP_MS": _DEFAULTS["CLIENT_GAP_MS"]}},
+)
+_PRESETS = {p["id"]: p for p in PRESETS}
+
+
+def _active(group: str) -> str | None:
+    """The preset in `group` that matches the current values exactly, if any."""
+    for p in PRESETS:
+        if p["group"] == group and all(getattr(config, k) == v for k, v in p["values"].items()):
+            return p["id"]
+    return None
+
+
+def apply_preset(pid: str) -> dict:
+    """Set every knob a preset names (validated as one batch). KeyError if unknown."""
+    return set_values(dict(_PRESETS[pid]["values"]))
+
 
 def _coerce(k: Knob, v):
     if k.kind == "bool":
@@ -94,6 +177,8 @@ def state() -> dict:
     return {
         "knobs": [{**asdict(k), "value": getattr(config, k.key), "default": _DEFAULTS[k.key]}
                   for k in KNOBS],
+        "presets": [{k: p[k] for k in ("id", "group", "label", "note", "values")} for p in PRESETS],
+        "active": {"emotion": _active("emotion"), "timing": _active("timing")},
         "persisted": False,
     }
 

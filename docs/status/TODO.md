@@ -5,6 +5,38 @@ next person doesn't have to rediscover it.
 
 ---
 
+## Emotion presets: what the eval data says about each knob (2026-11-26)
+
+The dashboard's Emotion weights card has presets (`server/tuning.py`, `PRESETS`). Their
+numbers come from replaying existing CSVs, not new runs:
+
+- **Blend** (voice <-> interpreter), on `model_student_v3.csv` (34 cases x 3). The student
+  moved the voice label 7 times, all correctly; 6 were weak-voice lines (conf 0.22-0.27)
+  whose words are plainly neutral. Assuming the interpreter's ~0.97 on its pick (two probes):
+  emotion 94.1% for w >= 0.25, 91.2% at 0.2, 88.2% at <= 0.15. **Voice-heavy down to 0.25
+  is free on this suite; below it the weak-voice cases are lost.** RAVDESS cannot test it
+  (the student moved 0 of 280).
+- **Confidence**, on `pipeline_student_v3.csv` (280 RAVDESS clips, studio, so a ceiling).
+  Input AUROCs: ser_confidence 0.78, voiced_s 0.62, asr_conf 0.52. The 1.5 s
+  `CONFIDENCE_MIN_VOICE_S` floor penalises nearly every clip (voiced median 0.63 s at RMS
+  150): at 1.0 s, 65 reads go bold at 96.9% instead of 18; with the short penalty off, 244
+  at 91.8% and 'not sure' holds 11 reads at 45.5% (mostly the wrong ones, which is its job).
+
+| preset | blend | bold (acc) | 'not sure' (acc) | test-case emotion |
+|---|---|---|---|---|
+| Measured default | 1.0 | 18 (100%) | 32 (69%) | 94.1% |
+| Voice-led | 0.3 | 68 (97%) | 12 (42%) | 94.1% |
+| Voice-first | 0.2 | 251 (91%) | 12 (42%) | 91.2% |
+| Voice only | 0.0 | (as voice-first) | | 88.2% |
+| Careful display | 1.0 | 65 (97%) | 37 (68%) | 94.1% |
+
+Not measured: real speech. RAVDESS SER is 89% on clips this short, live speech is not, so
+relaxing the short-voice penalty is likely kinder on RAVDESS than in a room. The
+weak-voice cutoff (`SER_MIN_CONFIDENCE`) also changes the prompt's "low confidence" flag,
+which the replay cannot see; re-run `eval.model_eval` before trusting a preset that moves it.
+
+---
+
 ## Long utterances: split into sentences after ASR (2026-11-26)
 
 ### The problem, from the real transcript log

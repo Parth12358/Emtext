@@ -226,6 +226,12 @@
   .tuning input[type="range"] { width: 100%; accent-color: var(--accent); }
   .tuning input[type="checkbox"] { accent-color: var(--accent); justify-self: start; }
   .tuning-bar { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+  .presets { display: grid; gap: 8px; margin-bottom: 14px; }
+  .presets .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .presets .row > b { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                      color: var(--ink-2); min-width: 64px; }
+  .presets button { font-size: 13px; padding: 5px 11px; }
+  .presets .pnote { font-size: 12.5px; color: var(--ink-2); min-height: 1.2em; }
   .tuning-bar .stat { font-size: 12.5px; color: var(--ink-2); }
 </style>
 </head>
@@ -358,6 +364,7 @@
 
   <div class="card wide">
     <h2>Emotion weights</h2>
+    <div class="presets" id="presets"></div>
     <div class="tuning" id="tuning"><div class="empty">loading…</div></div>
     <div class="tuning-bar">
       <button id="tuning-reset">Reset to defaults</button>
@@ -1036,6 +1043,40 @@ function renderTuning(s) {
     box.appendChild(col);
   }
   el("tuning-stat").textContent = changed ? `${changed} changed from default` : "all at defaults";
+  renderPresets(s);
+}
+
+// Preset buttons, one row per group. The active one (all its values match the
+// process right now) is drawn pressed; moving any of its sliders un-presses it.
+function renderPresets(s) {
+  const box = el("presets");
+  box.replaceChildren();
+  const groups = {emotion: "Emotion", timing: "Timing"};
+  for (const [g, name] of Object.entries(groups)) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const h = document.createElement("b");
+    h.textContent = name;
+    row.appendChild(h);
+    const note = document.createElement("div");
+    note.className = "pnote";
+    const active = (s.active || {})[g];
+    for (const p of (s.presets || []).filter((p) => p.group === g)) {
+      const b = document.createElement("button");
+      b.textContent = p.label;
+      b.title = p.note;
+      if (p.id === active) { b.classList.add("pressed"); note.textContent = p.note; }
+      b.onclick = () => postTuning({preset: p.id});
+      b.onmouseenter = () => { note.textContent = p.note; };
+      b.onmouseleave = () => {
+        const a = (s.presets || []).find((q) => q.id === active);
+        note.textContent = a ? a.note : "custom: no preset matches the sliders below";
+      };
+      row.appendChild(b);
+    }
+    if (!active) note.textContent = "custom: no preset matches the sliders below";
+    box.append(row, note);
+  }
 }
 
 async function postTuning(body) {

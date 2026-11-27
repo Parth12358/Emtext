@@ -65,11 +65,29 @@ Costs: one extra Parakeet pass per 1.5 s of speech, and the live transcripts are
 partial buffer, so they sometimes differ from what one pass over the whole would give
 ("what you is the truck"). Not measured for WER; the logged audio is too little to.
 
+### Root cause on the pendant: it stops sending before the server hears a pause (fixed)
+
+The browser was fast and the pendant slow. The pendant gates its own audio
+(`firmware/emtext/src/audio/audio.cpp`: energy floor 256 after DC removal, `HANGOVER_MS`
+500) and sends NOTHING once the gate closes. The segmenter advances only on frames and
+needs `END_SILENCE_MS` (650) of quiet, so it never closed: an utterance waited for the
+next speech (glued on) or the 15 s cap. The server saw 13.6 KB/s from the pendant against
+32 KB/s of live audio. This, not room noise, explains most of the capped utterances.
+
+Fix, server side, no reflash: `Segmenter.idle(gap_ms)` counts a gap in the CLIENT's
+stream as trailing silence, called by a wall-clock watcher in `main.py` once no frame has
+arrived for `CLIENT_GAP_MS` (400, above normal frame jitter). Close reason `client_gap`.
+A simulated pendant (same gate, 64 ms chunks, real time) on two one-sentence logged clips:
+before, **no read until the next speech**; after, the read 0.6-0.8 s after the speech ended.
+
+Firmware follow-up (not done): `HANGOVER_MS` 500 < `END_SILENCE_MS` 650 is a mismatch worth
+fixing at the next firmware release (e.g. 900 ms), so the server's own VAD can close on real
+audio. With the server fix it is no longer what decides latency.
+
 ### Not done
 
-- The last sentence of a stretch still waits for the close if the ASR does not hear a
-  pause after it; the room-noise question (why the VAD never sees END_SILENCE_MS here)
-  is still open. Needs the pendant's own audio (transcript log `audio` on for a minute).
+- Whether this room's noise also keeps the VAD from hearing pauses on a CONTINUOUS client
+  is still open. Needs real audio (transcript log `audio` on for a minute).
 - Saved clips of a split utterance hold only the pieces' audio; long pauses between
   sentences (non-speech by ASR) are not in the WAV.
 

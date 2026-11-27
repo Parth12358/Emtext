@@ -65,6 +65,9 @@ KNOBS: tuple[Knob, ...] = (
     Knob("LIVE_SPLIT_PAUSE_S", "split", "  pause that ends a sentence, s", "float", 0.3, 3, 0.1,
          "A finished sentence followed by this much quiet (as heard by the ASR) is sent "
          "without waiting for the next one. Lower = sooner, but risks cutting a mid-sentence pause."),
+    Knob("CLIENT_GAP_MS", "split", "client went quiet = pause after, ms", "int", 0, 2000, 50,
+         "A client that stops sending (the pendant's own gate) counts as silent once no audio "
+         "has arrived for this long. 0 = off (utterances then wait for more speech or the cap)."),
     Knob("SPLIT_MIN_S", "split", "minimum piece, seconds", "float", 0, 6, 0.1,
          "Shorter sentences join a neighbour."),
     Knob("SPLIT_MIN_WORDS", "split", "minimum piece, words", "int", 1, 12, 1),

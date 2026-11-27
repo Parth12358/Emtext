@@ -96,6 +96,12 @@ FRAME_MS: int = _env_int("FRAME_MS", 30)  # analysis frame size for the VAD
 # See segmenter.py for how each of these drives the state machine.
 SPEECH_RMS: int = _env_int("SPEECH_RMS", 500)          # int16 RMS to count as speech
 END_SILENCE_MS: int = _env_int("END_SILENCE_MS", 650)  # trailing quiet that ends an utterance
+# A client that stops SENDING (its own energy gate closed) is silent too. The
+# pendant sends 500 ms of hangover then nothing, short of END_SILENCE_MS, so its
+# utterances never closed until the next speech or the 15 s cap. Once no frame
+# has arrived for this long, the gap counts as trailing silence
+# (Segmenter.idle). Above normal frame jitter (frames are 20-100 ms); 0 = off.
+CLIENT_GAP_MS: int = _env_int("CLIENT_GAP_MS", 400)
 MIN_UTTERANCE_MS: int = _env_int("MIN_UTTERANCE_MS", 350)  # shorter -> discarded as a blip
 MAX_UTTERANCE_MS: int = _env_int("MAX_UTTERANCE_MS", 15_000)  # hard cap so we never buffer forever
 PRE_ROLL_MS: int = _env_int("PRE_ROLL_MS", 240)        # audio kept from just before speech began

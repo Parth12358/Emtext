@@ -162,8 +162,9 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   `clamp(noise_floor * NOISE_MARGIN, SPEECH_RMS_MIN, SPEECH_RMS)`, with the floor learned
   only from non-speech frames (falls fast, rises slowly). `SPEECH_RMS` is the ceiling, not
   the threshold; `VAD_ADAPTIVE=0` restores the constant. Must stay importable and
-  testable without network, files, or async. Keep the `__main__` self-test (six cases)
-  passing. `peek()` / `consume()` exist for the live sentence split: they read and trim the
+  testable without network, files, or async. Keep the `__main__` self-test (seven cases)
+  passing. `idle(gap_ms)` closes on a CLIENT-side gap (the pendant stops sending when its own
+  gate closes; `main.py` gap_watch, `CLIENT_GAP_MS`). `peek()` / `consume()` exist for the live sentence split: they read and trim the
   open utterance from the front and never change when it closes.
 - `server/sentences.py` — **pure logic, zero I/O**, self-test in `__main__`. After ASR, cuts
   a multi-sentence utterance at sentence ends using the transducer's per-token timestamps

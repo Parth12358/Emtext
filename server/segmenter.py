@@ -198,6 +198,27 @@ class Segmenter:
         self._voiced_ms = sum(self._utterance_voiced) * self.frame_ms
         return k * self.frame_samples
 
+    def idle(self, gap_ms: float) -> np.ndarray | None:
+        """Count `gap_ms` of NO audio as trailing silence; return the utterance if that closes it.
+
+        Why: a client that gates its own audio stops sending when it hears
+        quiet. The M5StickS3 pendant (fw <= 0.2.1) sends 500 ms of hangover
+        after the last voiced chunk and then nothing, while END_SILENCE_MS is
+        650 -- so the state machine, which only advances on frames, never saw
+        enough silence and the utterance stayed open until the next speech was
+        glued onto it or the MAX_UTTERANCE_MS cap fired. main.py calls this
+        from a wall-clock watcher when frames stop arriving. Nothing is added
+        to the buffer (no synthetic audio for SER or ASR), and the noise floor
+        is untouched: a gap says nothing about how loud the room is.
+        """
+        if not self._in_speech or gap_ms <= 0:
+            return None
+        self._trailing_silence_ms += int(gap_ms)
+        if self._trailing_silence_ms >= self.end_silence_ms:
+            self.last_close_reason = "client_gap"
+            return self._finalize()
+        return None
+
     # -- internals -----------------------------------------------------------
 
     @staticmethod
@@ -452,5 +473,21 @@ if __name__ == "__main__":
     assert len(done6) == 1 and abs(done6[0].size - (open_audio.size - dropped)) <= 2 * seg6.frame_samples +         int(config.END_SILENCE_MS / 1000 * config.SAMPLE_RATE), done6[0].size
     assert seg6.peek() is None
     print(f"case 6 OK: consumed {dropped / config.SAMPLE_RATE:.2f}s of an open utterance, rest closed normally")
+
+    # Case 7: a gated client stops sending after its hangover. Without idle()
+    # the utterance would never close; with it, the gap closes it, once.
+    seg7 = Segmenter(adaptive=False)
+    assert seg7.feed(_tone(1000) + _silence(300)) == []       # open, 300 ms of real quiet
+    assert seg7.idle(200) is None                              # 500 ms total < END_SILENCE_MS
+    out7 = seg7.idle(400)                                      # 900 ms total -> closes
+    assert out7 is not None and seg7.last_close_reason == "client_gap", seg7.last_close_reason
+    assert seg7.idle(1000) is None and seg7.peek() is None     # idle when IDLE does nothing
+    # speech resuming inside the gap resets the timer, as any voiced frame does
+    seg7b = Segmenter(adaptive=False)
+    seg7b.feed(_tone(800))
+    assert seg7b.idle(400) is None
+    seg7b.feed(_tone(300))
+    assert seg7b.idle(400) is None, "a voiced frame must reset the credited gap"
+    print("case 7 OK: a client-side gap closes an open utterance")
 
     print("segmenter self-test passed")

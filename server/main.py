@@ -867,6 +867,74 @@ async def stream(ws: WebSocket) -> None:
 
     keepalive_task = asyncio.create_task(keepalive())
 
+    async def on_closed(audio) -> None:
+        """One utterance the segmenter just closed: hand it to the pipeline."""
+        nonlocal uid
+        # Backpressure. Whisper and SER both serialise process-wide, so
+        # the pipeline drains ~3 utterances/sec no matter how many
+        # arrive; without a bound a client can queue work far faster
+        # than that and the backlog IS retained audio. Conversational
+        # speech produces about one utterance a second, so a real
+        # client never reaches this. Drop rather than queue: losing a
+        # word beats an unbounded queue that ends as an OOM.
+        if len(pending) >= config.MAX_INFLIGHT_UTTERANCES:
+            metrics.record_event("utterance_dropped")
+            return
+        uid = new_id()
+        metrics.client_seen(client_id, utterance=True)
+        recent.add(uid, audio)
+        await _send(ws, {"type": "status", "state": "heard"})
+        if vad_telemetry:
+            # Why this utterance closed, and how much of it was actually
+            # voiced. "end_silence" on a short voiced_ms is the signature
+            # of a sentence being split at a soft consonant; "client_gap"
+            # means the client stopped sending (its own gate closed).
+            await _send(ws, {
+                "type": "vad_close",
+                "id": uid,
+                "reason": segmenter.last_close_reason,
+                "voiced_ms": segmenter.last_voiced_ms,
+                "utterance_ms": segmenter.last_utterance_ms,
+                "peak_rms": round(segmenter.peak_rms, 1),
+            })
+        segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
+        task = asyncio.create_task(
+            _process_utterance(ws, interpreter, recent, session, uid, audio, new_id,
+                                segmenter.speech_rms, turns, turns.ticket())
+        )
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+        task.add_done_callback(_log_task_error)
+
+    async def gap_watch() -> None:
+        """Close an open utterance when the CLIENT stops sending (see Segmenter.idle).
+
+        The pendant gates its own audio and goes quiet 500 ms after the last
+        voiced chunk, which is less than END_SILENCE_MS, so without this its
+        utterances closed only when the next speech arrived or at the 15 s cap.
+        A gap counts only once it exceeds CLIENT_GAP_MS, so ordinary network
+        jitter between frames (bursts over Wi-Fi/TLS) is never mistaken for a
+        pause. Continuous clients (the browser) never produce such a gap.
+        """
+        seen = last_audio
+        credited = 0.0          # ms of the current gap already given to the segmenter
+        while True:
+            await asyncio.sleep(0.1)
+            if last_audio != seen:
+                seen, credited = last_audio, 0.0
+            if config.CLIENT_GAP_MS <= 0 or not segmenter.buffered_ms:
+                continue
+            gap_ms = (time.monotonic() - last_audio) * 1000.0
+            if gap_ms < config.CLIENT_GAP_MS:
+                continue
+            audio = segmenter.idle(gap_ms - credited)
+            credited = gap_ms
+            if audio is not None:
+                metrics.record_event("client_gap_close")
+                await on_closed(audio)
+
+    gap_task = asyncio.create_task(gap_watch())
+
     try:
         while True:
             message = await ws.receive()
@@ -966,40 +1034,7 @@ async def stream(ws: WebSocket) -> None:
             # Hot path: just segment. This returns instantly for the common
             # case (mid-utterance) and occasionally hands back finished audio.
             for audio in segmenter.feed(data):
-                # Backpressure. Whisper and SER both serialise process-wide, so
-                # the pipeline drains ~3 utterances/sec no matter how many
-                # arrive; without a bound a client can queue work far faster
-                # than that and the backlog IS retained audio. Conversational
-                # speech produces about one utterance a second, so a real
-                # client never reaches this. Drop rather than queue: losing a
-                # word beats an unbounded queue that ends as an OOM.
-                if len(pending) >= config.MAX_INFLIGHT_UTTERANCES:
-                    metrics.record_event("utterance_dropped")
-                    continue
-                uid = new_id()
-                metrics.client_seen(client_id, utterance=True)
-                recent.add(uid, audio)
-                await _send(ws, {"type": "status", "state": "heard"})
-                if vad_telemetry:
-                    # Why this utterance closed, and how much of it was actually
-                    # voiced. "end_silence" on a short voiced_ms is the signature
-                    # of a sentence being split at a soft consonant.
-                    await _send(ws, {
-                        "type": "vad_close",
-                        "id": uid,
-                        "reason": segmenter.last_close_reason,
-                        "voiced_ms": segmenter.last_voiced_ms,
-                        "utterance_ms": segmenter.last_utterance_ms,
-                        "peak_rms": round(segmenter.peak_rms, 1),
-                    })
-                segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
-                task = asyncio.create_task(
-                    _process_utterance(ws, interpreter, recent, session, uid, audio, new_id,
-                                        segmenter.speech_rms, turns, turns.ticket())
-                )
-                pending.add(task)
-                task.add_done_callback(pending.discard)
-                task.add_done_callback(_log_task_error)
+                await on_closed(audio)
 
             # Live sentence split: is the open utterance long enough since the
             # last look to be worth another ASR pass?
@@ -1036,6 +1071,7 @@ async def stream(ws: WebSocket) -> None:
         # loop was a cheap way to accumulate zombie pipelines.
         metrics.connection_closed(client_id)
         keepalive_task.cancel()
+        gap_task.cancel()
         for task in pending | live_tasks:
             task.cancel()
 

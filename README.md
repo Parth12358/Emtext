@@ -1028,6 +1028,7 @@ website/          the project site (Vite + three.js pendant render)
 | `/api/stats` | everything the dashboard polls | token |
 | `/api/models` · `POST /api/model` · `POST /api/evict` | model control; only already-pulled names, one change per `MODEL_SWITCH_COOLDOWN_S` (429 otherwise) | token |
 | `/api/asr` · `POST /api/asr` | transcription model: catalogue + state, and switch (catalogue keys only; returns at once, poll `GET` for download/load progress; 409 while one is running, 429 inside the cooldown) | token |
+| `GET/POST /api/tuning` | the "Emotion weights" card: voice/interpreter blend, weak-voice cutoff, per-signal confidence penalties and display cutoffs, sentence-split sizes. Runtime only, only listed knobs, each clamped; `{"reset":true}` restores defaults | token |
 | `/api/clips` · `/api/clips/{id}/audio` · `DELETE /api/clips/{id}` | list saved clips, fetch one's WAV, delete one | token |
 | `/api/speaker` · `POST /api/enroll` · `DELETE /api/speaker` | speaker-id state, enrol from an uploaded WAV/PCM (segmented with the real VAD, embeddings only stored), forget the profile | token |
 

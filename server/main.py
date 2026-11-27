@@ -37,7 +37,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clips, config, confidence, dashboard, metrics, sentences, ser, speaker, translog, transcriber
+from . import (blend, clips, config, confidence, dashboard, metrics, sentences, ser, speaker,
+               translog, transcriber, tuning)
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -296,6 +297,11 @@ def _log_transcript(loop, uid, audio, transcript, who, voice, result,
     if part:
         # Which sentence of which segmenter utterance this was (sentences.py).
         entry["split"] = part
+    tuned = tuning.snapshot()
+    if tuned:
+        # Live dashboard weights that differ from the defaults, so reads made
+        # under different settings can be told apart afterwards.
+        entry["tuning"] = tuned
     loop.run_in_executor(None, translog.record, entry, audio)
 
 
@@ -471,6 +477,19 @@ async def _emit(
     if result.get("context_near_full"):
         # interpreter.py already logged it; count it so the dashboard shows it.
         metrics.record_event("context_near_full")
+
+    # Voice <-> interpreter mix for the headline emotion (server/blend.py), set
+    # live from the dashboard. At the default 1.0 this returns the interpreter's
+    # label untouched and nothing below changes. Offline reads already carry the
+    # voice label, so they are left alone.
+    if not result.get("offline") and config.EMOTION_BLEND < 1.0:
+        v_label = result.get("emotion_voice")
+        label_m, prob_m = blend.mix(result.get("emotion"), result.get("emotion_dist"),
+                                    v_label, (voice or {}).get("dist"), config.EMOTION_BLEND)
+        if label_m and label_m != result.get("emotion"):
+            result = {**result, "emotion": label_m,
+                      "emotion_adjusted": bool(v_label) and label_m != v_label,
+                      "emotion_prob": prob_m}
 
     # How sure is this read? Pure combination of the signals above; never
     # changes what the LLM saw, only how the read is weighted on the way out.

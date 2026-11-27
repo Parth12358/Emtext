@@ -383,6 +383,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
 - `POST /api/model` switches the interpreter live and deliberately does NOT
   persist. It works because `Interpreter` reads `config.OLLAMA_MODEL` at call
   time; keep that property.
+- `POST /api/tuning` (`server/tuning.py`) is the same mechanism for the "Emotion weights"
+  card: it sets whitelisted, clamped `config` attributes that their users read at call time
+  (`EMOTION_BLEND` in `server/blend.py`, `SER_MIN_CONFIDENCE`, the per-signal `CONF_PEN_*`
+  and `CONFIDENCE_HIGH/LOW/MIN_VOICE_S` in `confidence.py`, the `SPLIT_*` knobs). Not
+  persisted; the defaults reproduce the measured behaviour exactly, so the evals and
+  baselines hold. Keep every tuned value read at call time, never cached at import. Changed
+  knobs are stamped on each transcript-log line (`tuning`). `blend.py` is pure, with a
+  self-test; at `EMOTION_BLEND` 1.0 it does nothing.
 - Utterance tasks are fire-and-forget, so `_log_task_error` is attached as a done
   callback. Without it a raising task is completely silent and presents as "no
   transcript ever appears" -- keep it.

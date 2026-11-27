@@ -526,6 +526,9 @@ def _analyze_emotion2vec(samples: np.ndarray) -> dict | None:
         "arousal": _expected(merged, _AROUSAL_ANCHOR),
         "dominance": _expected(merged, _DOMINANCE_ANCHOR),
         "dims_source": "derived",
+        # The full normalised distribution, for server/blend.py. Internal: the
+        # wire's `voice` object names its fields explicitly and does not carry it.
+        "dist": {k: round(v, 4) for k, v in merged.items()},
     }
 
 
@@ -587,6 +590,8 @@ def analyze(audio: np.ndarray) -> dict | None:
         emotion = _labels[idx] if idx < len(_labels) else "neutral"
 
         result: dict = {"emotion": emotion, "confidence": round(confidence, 3)}
+        if len(_labels) == int(probs.numel()):
+            result["dist"] = {lab: round(float(probs[i].item()), 4) for i, lab in enumerate(_labels)}
         for name, value in zip(_DIMS, values):
             # The head is documented as sigmoid-activated, so values should
             # already be in [0, 1]; clamp anyway so a checkpoint that emits raw

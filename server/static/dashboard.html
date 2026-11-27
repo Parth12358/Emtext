@@ -215,6 +215,18 @@
   .translog .chk:has(input:disabled) { opacity: .5; cursor: default; }
   .translog input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
   .translog .stat { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  /* Emotion weights: one row per knob, grouped by pipeline stage. */
+  .tuning { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .tuning h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+               color: var(--ink-2); margin: 0 0 6px; }
+  .tuning .knob { display: grid; grid-template-columns: 1fr 120px 46px; align-items: center;
+                  gap: 8px; font-size: 13px; padding: 3px 0; }
+  .tuning .knob.changed .lab { color: var(--accent); font-weight: 600; }
+  .tuning .knob .val { font-variant-numeric: tabular-nums; text-align: right; }
+  .tuning input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .tuning input[type="checkbox"] { accent-color: var(--accent); justify-self: start; }
+  .tuning-bar { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+  .tuning-bar .stat { font-size: 12.5px; color: var(--ink-2); }
 </style>
 </head>
 <body>
@@ -341,6 +353,24 @@
       to <code>TRANSCRIPT_LOG_ENABLED</code> / <code>TRANSCRIPT_LOG_FIELDS</code>. The
       WAV store is a rolling cap (<code>TRANSCRIPT_LOG_MAX_AUDIO</code>). Export for
       ASR scoring with <code>python -m server.translog --export DIR</code>.
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Emotion weights</h2>
+    <div class="tuning" id="tuning"><div class="empty">loading…</div></div>
+    <div class="tuning-bar">
+      <button id="tuning-reset">Reset to defaults</button>
+      <span class="stat" id="tuning-stat"></span>
+    </div>
+    <div class="note">
+      How each stage weighs in on the emotion a listener sees. Applies to the next
+      read; <b>not persisted</b>, so a restart returns to the measured defaults
+      (blend 1, every penalty 0.7). Penalties multiply the confidence score
+      (1 = ignore that signal); the score's level picks bold, normal, or faint/"not
+      sure". The blend is near a switch, not a smooth dial: the interpreter is
+      almost always ~97% sure, so it decides how confident the voice must be to keep
+      its label. Changed knobs are stamped on each transcript-log line.
     </div>
   </div>
 
@@ -951,6 +981,81 @@ async function loadTranslog() {
 }
 el("tl-enabled").addEventListener("change", (e) => postTranslog({enabled: e.target.checked}));
 
+// ----- emotion weights --------------------------------------------------------
+// Sliders post on release ("change"), not on every pixel ("input"); the server
+// answers with the full state, so the card shows what the process really has.
+const TUNING_GROUPS = {emotion: "Emotion choice", voice: "Voice trust",
+                       confidence: "Confidence / display", split: "Sentence split"};
+let tuningBusy = false;
+
+function fmtKnob(k, v) {
+  if (k.kind === "bool") return v ? "on" : "off";
+  return k.kind === "int" ? String(v) : Number(v).toFixed(2);
+}
+
+function renderTuning(s) {
+  const box = el("tuning");
+  box.replaceChildren();
+  const groups = {};
+  for (const k of s.knobs) (groups[k.group] = groups[k.group] || []).push(k);
+  let changed = 0;
+  for (const [g, knobs] of Object.entries(groups)) {
+    const col = document.createElement("div");
+    const h = document.createElement("h3");
+    h.textContent = TUNING_GROUPS[g] || g;
+    col.appendChild(h);
+    for (const k of knobs) {
+      const row = document.createElement("div");
+      const isChanged = k.value !== k.default;
+      if (isChanged) changed++;
+      row.className = "knob" + (isChanged ? " changed" : "");
+      const lab = document.createElement("span");
+      lab.className = "lab";
+      lab.textContent = k.label.trim();
+      lab.title = (k.help ? k.help + " — " : "") + `${k.key} · default ${fmtKnob(k, k.default)}`;
+      const val = document.createElement("span");
+      val.className = "val";
+      val.textContent = fmtKnob(k, k.value);
+      let input;
+      if (k.kind === "bool") {
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = !!k.value;
+        input.onchange = () => postTuning({values: {[k.key]: input.checked}});
+      } else {
+        input = document.createElement("input");
+        input.type = "range";
+        input.min = k.lo; input.max = k.hi; input.step = k.step; input.value = k.value;
+        input.oninput = () => { val.textContent = fmtKnob(k, input.value); };
+        input.onchange = () => postTuning({values: {[k.key]: Number(input.value)}});
+      }
+      input.setAttribute("aria-label", k.label.trim());
+      row.append(lab, input, val);
+      col.appendChild(row);
+    }
+    box.appendChild(col);
+  }
+  el("tuning-stat").textContent = changed ? `${changed} changed from default` : "all at defaults";
+}
+
+async function postTuning(body) {
+  if (tuningBusy) return;
+  tuningBusy = true;
+  try {
+    renderTuning(await api("/api/tuning", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }));
+  } catch (e) { alert(e.message); await loadTuning(); }
+  finally { tuningBusy = false; }
+}
+
+async function loadTuning() {
+  try { renderTuning(await api("/api/tuning")); }
+  catch (e) { el("tuning-stat").textContent = e.message; }
+}
+el("tuning-reset").addEventListener("click", () => postTuning({reset: true}));
+
 // ----- poll -----------------------------------------------------------------
 async function tick() {
   try {
@@ -969,6 +1074,7 @@ tick();
 loadModels();
 loadAsr();
 loadTranslog();
+loadTuning();
 loadClips();
 // 2s is responsive without hammering: /api/stats reads cached GPU data and
 // psutil counters, so it is cheap, but there is no reason to poll faster than

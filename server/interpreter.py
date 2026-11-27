@@ -380,6 +380,42 @@ def _tone_prob(body: dict | None, key: str = "tone") -> float | None:
         return None
 
 
+def _emotion_dist(body: dict | None) -> dict[str, float] | None:
+    """The interpreter's distribution over EMOTIONS at the emotion value's first token.
+
+    Same offset walk as `_tone_prob`, but reads `top_logprobs` (5 candidates):
+    each candidate token is matched to the one emotion it is a prefix of
+    ("sur" -> surprised); ambiguous or non-emotion tokens are dropped, and the
+    rest renormalised. For server/blend.py. None whenever the shape is off.
+    """
+    try:
+        if not body or not isinstance(body.get("logprobs"), list):
+            return None
+        text = body.get("response") or ""
+        m = re.search(r'"emotion"\s*:\s*"', text)
+        if not m:
+            return None
+        pos = 0
+        for tok in body["logprobs"]:
+            piece = tok.get("token") or ""
+            if pos + len(piece) > m.end():
+                if pos != m.end():
+                    return None
+                dist: dict[str, float] = {}
+                for cand in tok.get("top_logprobs") or []:
+                    t = str(cand.get("token") or "").strip().lower()
+                    lp = cand.get("logprob")
+                    hits = [e for e in EMOTIONS if t and e.startswith(t)]
+                    if len(hits) == 1 and isinstance(lp, (int, float)):
+                        dist[hits[0]] = dist.get(hits[0], 0.0) + math.exp(float(lp))
+                total = sum(dist.values())
+                return {k: round(v / total, 4) for k, v in dist.items()} if total > 0 else None
+            pos += len(piece)
+        return None
+    except Exception:  # noqa: BLE001 -- a missing distribution, never a failed read
+        return None
+
+
 # Belt-and-braces: the shipped prompt delimits with quotes, not tags, so this
 # matches nothing today. It is here so that if the tag variant is ever revisited
 # (see the docstring below), a spoken "</utterance>" cannot close the fence.
@@ -584,6 +620,7 @@ class Interpreter:
                     "emotion_voice": voice_label,
                     "emotion_adjusted": bool(voice_label) and emotion != voice_label,
                     "emotion_prob": _tone_prob(body, "emotion"),
+                    "emotion_dist": _emotion_dist(body),
                     "tone_prob": _tone_prob(body), "context_near_full": near_full,
                     **stats}
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):

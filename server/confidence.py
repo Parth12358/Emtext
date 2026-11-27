@@ -139,24 +139,24 @@ def score(
         s = 0.5
         reasons.append(R_NO_PROB)
 
-    pen = config.CONFIDENCE_PENALTY
-
-    def penalise(reason: str) -> None:
+    # One multiplier per input (config.CONF_PEN_*, all CONFIDENCE_PENALTY by
+    # default), read at call time so the dashboard can tune them live.
+    def penalise(reason: str, pen: float) -> None:
         nonlocal s
         s *= pen
         reasons.append(reason)
 
     # Order matters only for the reasons list: most actionable first.
     if isinstance(voiced_s, (int, float)) and voiced_s < config.CONFIDENCE_MIN_VOICE_S:
-        penalise(R_SHORT)
+        penalise(R_SHORT, config.CONF_PEN_SHORT)
     if isinstance(ser_conf, (int, float)) and ser_conf < config.SER_MIN_CONFIDENCE:
-        penalise(R_VOICE)
+        penalise(R_VOICE, config.CONF_PEN_VOICE)
     if isinstance(asr_conf, (int, float)) and asr_conf < config.CONFIDENCE_MIN_ASR:
-        penalise(R_WORDS)
+        penalise(R_WORDS, config.CONF_PEN_WORDS)
     if speaker_label == "mixed":
-        penalise(R_TWO_VOICES)
+        penalise(R_TWO_VOICES, config.CONF_PEN_TWO_VOICES)
     if tone == "mixed":
-        penalise(R_DISAGREE)
+        penalise(R_DISAGREE, config.CONF_PEN_DISAGREE)
 
     s = min(1.0, max(0.0, s))
     return {"score": round(s, 3), "level": level(s), "reasons": reasons}

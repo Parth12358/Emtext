@@ -37,7 +37,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import clips, config, metrics, ser, speaker, transcriber, translog
+from . import clips, config, metrics, ser, speaker, transcriber, translog, tuning
 from .interpreter import load_options
 from .segmenter import Segmenter
 
@@ -582,3 +582,41 @@ async def translog_set(body: TranslogRequest,
     translog.set_options(body.enabled, body.fields)
     log.info("dashboard: transcript log -> %s", translog.options())
     return {**translog.stats(), "available_fields": list(translog.FIELDS), "persisted": False}
+
+
+# ---------------------------------------------------------------------------
+# Emotion weights (server/tuning.py)
+# ---------------------------------------------------------------------------
+# Runtime only, not persisted, like the switches above. Only the keys in
+# tuning.KNOBS are accepted, each clamped to its range, so this cannot write an
+# arbitrary config attribute.
+
+class TuningRequest(BaseModel):
+    values: dict[str, float | int | bool] | None = None
+    reset: bool = False
+
+
+@router.get("/tuning")
+async def tuning_state(token: str | None = Query(None),
+                       x_auth_token: str | None = Header(None)) -> dict:
+    _require_token(token, x_auth_token)
+    return tuning.state()
+
+
+@router.post("/tuning")
+async def tuning_set(body: TuningRequest,
+                     token: str | None = Query(None),
+                     x_auth_token: str | None = Header(None)) -> dict:
+    """Set some knobs (validated as a batch), or reset all to their defaults."""
+    _require_token(token, x_auth_token)
+    if body.reset:
+        out = tuning.reset()
+    else:
+        try:
+            out = tuning.set_values(body.values or {})
+        except KeyError as exc:
+            raise HTTPException(400, f"unknown knob {exc.args[0]!r}") from None
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from None
+    log.info("dashboard: emotion weights -> %s", tuning.snapshot() or "defaults")
+    return out

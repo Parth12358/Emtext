@@ -540,6 +540,17 @@ CONFIDENCE_PLATT_B: float = _env_float("CONFIDENCE_PLATT_B", 0.0)
 CONFIDENCE_HIGH: float = _env_float("CONFIDENCE_HIGH", 0.9)   # >= this renders as before
 CONFIDENCE_LOW: float = _env_float("CONFIDENCE_LOW", 0.6)     # < this is suppressed ("not sure")
 CONFIDENCE_PENALTY: float = _env_float("CONFIDENCE_PENALTY", 0.7)  # per weak input
+# One multiplier per weak input, each defaulting to CONFIDENCE_PENALTY so the
+# measured behaviour is unchanged. 1.0 ignores that input. Live-tunable from the
+# dashboard's "Emotion weights" card (server/tuning.py), never persisted.
+CONF_PEN_SHORT: float = _env_float("CONF_PEN_SHORT", CONFIDENCE_PENALTY)        # too short
+CONF_PEN_VOICE: float = _env_float("CONF_PEN_VOICE", CONFIDENCE_PENALTY)        # voice unclear
+CONF_PEN_WORDS: float = _env_float("CONF_PEN_WORDS", CONFIDENCE_PENALTY)        # misheard
+CONF_PEN_TWO_VOICES: float = _env_float("CONF_PEN_TWO_VOICES", CONFIDENCE_PENALTY)
+CONF_PEN_DISAGREE: float = _env_float("CONF_PEN_DISAGREE", CONFIDENCE_PENALTY)  # tone mixed
+# Voice <-> interpreter mix for the headline emotion (server/blend.py). 1.0 = the
+# interpreter's label, exactly the measured behaviour; 0.0 = the voice model's.
+EMOTION_BLEND: float = _env_float("EMOTION_BLEND", 1.0)
 # Voice models sit in their worst regime under ~1.5 s of speech (RESEARCH.md
 # §4.10: a 5-6 point UAR penalty at 2 s), so a read on a very short line leans
 # on words alone and says so.

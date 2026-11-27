@@ -37,8 +37,8 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import clips, config, metrics, ser, speaker, transcriber, translog, tuning
-from .interpreter import load_options
+from . import clips, config, metrics, prompt_store, ser, speaker, transcriber, translog, tuning
+from .interpreter import SYSTEM_PROMPT, load_options
 from .segmenter import Segmenter
 
 log = logging.getLogger(__name__)
@@ -626,3 +626,41 @@ async def tuning_set(body: TuningRequest,
             raise HTTPException(400, str(exc)) from None
     log.info("dashboard: emotion weights -> %s", tuning.snapshot() or "defaults")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Interpreter system prompt (server/prompt_store.py)
+# ---------------------------------------------------------------------------
+# The ONE dashboard setting that is persisted, because the point is to keep an
+# edited prompt. Applies to the next read on every connection. The built-in
+# SYSTEM_PROMPT is never modified, only overridden.
+
+class PromptRequest(BaseModel):
+    text: str | None = None
+    reset: bool = False
+
+
+@router.get("/prompt")
+async def prompt_state(token: str | None = Query(None),
+                       x_auth_token: str | None = Header(None)) -> dict:
+    _require_token(token, x_auth_token)
+    return prompt_store.state(SYSTEM_PROMPT)
+
+
+@router.post("/prompt")
+async def prompt_set(body: PromptRequest,
+                     token: str | None = Query(None),
+                     x_auth_token: str | None = Header(None)) -> dict:
+    """Save a custom system prompt (to disk), or go back to the built-in one."""
+    _require_token(token, x_auth_token)
+    loop = asyncio.get_running_loop()
+    if body.reset or body.text is None:
+        await loop.run_in_executor(None, prompt_store.reset)
+    else:
+        try:
+            await loop.run_in_executor(None, prompt_store.save, body.text, SYSTEM_PROMPT)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except OSError as exc:
+            raise HTTPException(500, f"could not save: {exc}") from None
+    return prompt_store.state(SYSTEM_PROMPT)

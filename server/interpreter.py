@@ -23,7 +23,7 @@ from collections import deque
 
 import httpx
 
-from . import config
+from . import config, prompt_store
 
 log = logging.getLogger(__name__)
 
@@ -562,7 +562,9 @@ class Interpreter:
 
         payload = {
             "model": config.OLLAMA_MODEL,
-            "system": SYSTEM_PROMPT,
+            # A prompt saved from the dashboard wins when the server loaded one
+            # (prompt_store.py); evals never load it, so they stay on the built-in.
+            "system": prompt_store.override() or SYSTEM_PROMPT,
             "prompt": prompt,
             "stream": False,
             "format": RESPONSE_SCHEMA,  # constrain output at decode time

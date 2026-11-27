@@ -39,8 +39,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (blend, clips, config, confidence, dashboard, metrics, sentences, ser, speaker,
-               streaming, translog, transcriber, tuning)
+from . import (blend, clips, config, confidence, dashboard, metrics, prompt_store, sentences,
+               ser, speaker, streaming, translog, transcriber, tuning)
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -124,6 +124,8 @@ async def _startup() -> None:
     # Streaming ASR (live words + sentence endpoints) is optional and loads in
     # the background: a missing model must not delay or stop the server.
     asyncio.get_running_loop().run_in_executor(None, streaming.load)
+    # A system prompt saved from the dashboard, if any (tiny file, read once).
+    prompt_store.load()
     # The dashboard reuses this pooled client rather than opening its own.
     app.state.http = _http
 
@@ -302,6 +304,11 @@ def _log_transcript(loop, uid, audio, transcript, who, voice, result,
     if part:
         # Which sentence of which segmenter utterance this was (sentences.py).
         entry["split"] = part
+    custom = prompt_store.override()
+    if custom:
+        # Read under a dashboard-edited system prompt: its short hash, so it can be
+        # matched to the saved version (GET /api/prompt history).
+        entry["prompt"] = prompt_store.sha(custom)
     tuned = tuning.snapshot()
     if tuned:
         # Live dashboard weights that differ from the defaults, so reads made

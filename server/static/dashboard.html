@@ -233,6 +233,19 @@
   .presets button { font-size: 13px; padding: 5px 11px; }
   .presets .pnote { font-size: 12.5px; color: var(--ink-2); min-height: 1.2em; }
   .tuning-bar .stat { font-size: 12.5px; color: var(--ink-2); }
+  .prompt textarea {
+    font: 12.5px/1.5 ui-monospace, Consolas, monospace; color: var(--ink);
+    background: var(--surface); border: 0; border-radius: var(--r); box-shadow: var(--press);
+    width: 100%; min-height: 320px; padding: 12px 14px; resize: vertical; box-sizing: border-box;
+  }
+  .prompt textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .prompt .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .prompt .bar button { font-size: 13px; min-height: 36px; padding: 0 14px; }
+  .prompt select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+                   border: 0; border-radius: var(--r); box-shadow: var(--raise-sm);
+                   min-height: 36px; padding: 0 10px; }
+  .prompt .stat { font-size: 12.5px; color: var(--ink-2); }
+  .prompt .stat.custom { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -378,6 +391,28 @@
       sure". The blend is near a switch, not a smooth dial: the interpreter is
       almost always ~97% sure, so it decides how confident the voice must be to keep
       its label. Changed knobs are stamped on each transcript-log line.
+    </div>
+  </div>
+
+  <div class="card wide prompt">
+    <h2>Interpreter prompt <span class="badge" id="prompt-badge"></span></h2>
+    <textarea id="prompt-text" spellcheck="false" aria-label="Interpreter system prompt"></textarea>
+    <div class="bar">
+      <button class="primary" id="prompt-save">Save</button>
+      <button id="prompt-revert">Discard edits</button>
+      <button id="prompt-builtin">Use built-in</button>
+      <select id="prompt-history" aria-label="Load a saved version"></select>
+      <span class="stat" id="prompt-stat"></span>
+    </div>
+    <div class="note">
+      The system prompt sent with every read. <b>Save</b> applies to the next read on
+      every connection and <b>is persisted</b> (unlike the cards above) to
+      <code id="prompt-path">models/interpreter_prompt.json</code>, so it survives a
+      restart. <b>Use built-in</b> goes back to the measured prompt; saved versions stay
+      in the list. The evals always use the built-in prompt, and the v2/v3 students were
+      trained on it, so a small model may follow edits loosely. Keep the JSON reply
+      shape (emotion, tone, read): the output schema still enforces it. Reads made under
+      a custom prompt carry its hash in the transcript log.
     </div>
   </div>
 
@@ -1097,6 +1132,69 @@ async function loadTuning() {
 }
 el("tuning-reset").addEventListener("click", () => postTuning({reset: true}));
 
+// ----- interpreter prompt ------------------------------------------------------
+let promptState = null;
+function promptDirty() {
+  return promptState && el("prompt-text").value !== promptState.text;
+}
+function promptStat() {
+  const s = promptState;
+  if (!s) return;
+  const n = el("prompt-text").value.length;
+  const st = el("prompt-stat");
+  st.className = "stat" + (s.custom ? " custom" : "");
+  st.textContent = (promptDirty() ? "unsaved edits · " : "") +
+    `${n} / ${s.max_chars} chars` + (n > s.max_chars ? " (too long)" : "");
+  el("prompt-save").disabled = !promptDirty() || n > s.max_chars;
+  el("prompt-revert").disabled = !promptDirty();
+  el("prompt-builtin").disabled = !s.custom;
+}
+function renderPrompt(s) {
+  promptState = s;
+  el("prompt-text").value = s.text;
+  el("prompt-path").textContent = s.path;
+  el("prompt-badge").textContent = s.custom
+    ? `custom ${s.sha}` + (s.saved_at ? ` · saved ${new Date(s.saved_at * 1000).toLocaleString()}` : "")
+    : `built-in ${s.sha}`;
+  const sel = el("prompt-history");
+  sel.replaceChildren();
+  const add = (value, label) => {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label; sel.appendChild(o);
+  };
+  add("", "Load a version…");
+  add("builtin", `built-in ${s.builtin_sha}`);
+  s.history.forEach((h, i) => add(String(i),
+    `${h.sha} · ${h.chars} chars · ${new Date(h.saved_at * 1000).toLocaleString()}`));
+  promptStat();
+}
+async function postPrompt(body) {
+  try {
+    renderPrompt(await api("/api/prompt", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }));
+  } catch (e) { alert(e.message); }
+}
+async function loadPrompt() {
+  try { renderPrompt(await api("/api/prompt")); }
+  catch (e) { el("prompt-stat").textContent = e.message; }
+}
+el("prompt-text").addEventListener("input", promptStat);
+el("prompt-save").addEventListener("click", () => postPrompt({text: el("prompt-text").value}));
+el("prompt-revert").addEventListener("click", () => { el("prompt-text").value = promptState.text; promptStat(); });
+el("prompt-builtin").addEventListener("click", () => {
+  if (confirm("Go back to the built-in prompt? Your saved versions stay in the list.")) postPrompt({reset: true});
+});
+// Loading a version only fills the editor; Save makes it live.
+el("prompt-history").addEventListener("change", (ev) => {
+  const v = ev.target.value, s = promptState;
+  if (!v || !s) return;
+  el("prompt-text").value = v === "builtin" ? s.builtin : s.history[+v].text;
+  ev.target.value = "";
+  promptStat();
+});
+
 // ----- poll -----------------------------------------------------------------
 async function tick() {
   try {
@@ -1116,6 +1214,7 @@ loadModels();
 loadAsr();
 loadTranslog();
 loadTuning();
+loadPrompt();
 loadClips();
 // 2s is responsive without hammering: /api/stats reads cached GPU data and
 // psutil counters, so it is cheap, but there is no reason to poll faster than

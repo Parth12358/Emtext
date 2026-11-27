@@ -433,6 +433,15 @@ SPEAKER_DEVICE: str = _env_str("SPEAKER_DEVICE", "cpu")
 # Where the user's enrolled voiceprint lives: EMBEDDINGS only, never audio.
 # models/ is gitignored. Delete the file (or DELETE /api/speaker) to forget it.
 SPEAKER_PROFILE_PATH: str = _env_str("SPEAKER_PROFILE_PATH", "models/speaker_user.json")
+
+# A custom interpreter system prompt saved from the dashboard (server/prompt_store.py),
+# with its last few versions. models/ is gitignored. Delete the file, or press "Use
+# built-in" on the dashboard, to go back to the measured SYSTEM_PROMPT. Only the
+# server loads it; eval/ and distill/ always use the built-in prompt.
+PROMPT_OVERRIDE_PATH: str = _env_str("PROMPT_OVERRIDE_PATH", "models/interpreter_prompt.json")
+# The built-in prompt is ~2,600 chars. The cap keeps the prompt plus 12 context lines
+# well inside the 4096-token context (an overflow silently cuts the system prompt).
+PROMPT_MAX_CHARS: int = _env_int("PROMPT_MAX_CHARS", 8000)
 # Cosine above which a 1 s window counts as the enrolled user. Same-speaker
 # cosine against a calm-only profile ranges 0.76 (calm) down to 0.52 (fearful);
 # cross-speaker is well below 0.45 on average.

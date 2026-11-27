@@ -409,6 +409,13 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   baselines hold. Keep every tuned value read at call time, never cached at import. Changed
   knobs are stamped on each transcript-log line (`tuning`). `blend.py` is pure, with a
   self-test; at `EMOTION_BLEND` 1.0 it does nothing.
+- `POST /api/prompt` (`server/prompt_store.py`) overrides the interpreter's system prompt from
+  the dashboard's "Interpreter prompt" card. Unlike every other switch it **is persisted**
+  (`PROMPT_OVERRIDE_PATH`, under gitignored `models/`, last 10 versions), because keeping an
+  edited prompt is the point. `SYSTEM_PROMPT` itself is never modified and stays the measured
+  baseline: only `main.py` calls `prompt_store.load()`, so `eval/` and `distill/` always run the
+  built-in prompt. The interpreter reads `prompt_store.override()` at call time; reads under an
+  override carry its short hash as `prompt` on the transcript-log line.
 - Utterance tasks are fire-and-forget, so `_log_task_error` is attached as a done
   callback. Without it a raising task is completely silent and presents as "no
   transcript ever appears" -- keep it.

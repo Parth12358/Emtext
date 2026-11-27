@@ -318,6 +318,7 @@ async def _process_utterance(
     uid: int,
     audio,
     new_id=None,
+    speech_rms: float | None = None,
 ) -> None:
     """Transcribe then interpret one utterance and stream the results out.
 
@@ -371,7 +372,8 @@ async def _process_utterance(
         )
     if len(pieces) < 2:
         await _emit(ws, interpreter, recent, uid, audio, transcript, asr_conf,
-                    voice, who, whisper_s, ser_s, spk_s, cpu_stage_s)
+                    voice, who, whisper_s, ser_s, spk_s, cpu_stage_s,
+                    speech_rms=speech_rms)
         return
 
     # Several sentences. The whole-utterance SER above is discarded: one label
@@ -401,7 +403,8 @@ async def _process_utterance(
         await _emit(ws, interpreter, recent, p_uid, seg, pc.text, pc.asr_conf(tokens),
                     p_voice, p_who, whisper_s, p_ser_s, p_spk_s,
                     time.perf_counter() - cpu_t0,
-                    part={"parent": uid, "part": i + 1, "of": len(pieces)})
+                    part={"parent": uid, "part": i + 1, "of": len(pieces)},
+                    speech_rms=speech_rms)
 
 
 async def _emit(
@@ -419,16 +422,21 @@ async def _emit(
     spk_s: float,
     cpu_stage_s: float,
     part: dict | None = None,
+    speech_rms: float | None = None,
 ) -> None:
     """Send one utterance (and, unless it is the user's, its read).
 
     Shared by a whole utterance and by each sentence piece of a split one.
     """
     loop = asyncio.get_running_loop()
-    # Seconds of actual speech in the buffer (pure numpy, same VAD threshold the
-    # segmenter used): the voice model is unreliable under ~1.5 s of it, and
-    # the confidence score says so rather than pretending otherwise.
-    voiced_s = speaker.voiced_fraction(audio) * (float(audio.size) / config.SAMPLE_RATE)
+    # Seconds of actual speech in the buffer: the voice model is unreliable under
+    # ~1.5 s of it, and the confidence score says so rather than pretending
+    # otherwise. Counted against the threshold the segmenter was actually using
+    # when it closed this utterance (`speech_rms`), not the fixed SPEECH_RMS
+    # ceiling: in a quiet room speech sits at RMS ~200-900, and against 500 a
+    # 15 s conversational clip counted as 2.2 s voiced (docs/status/TODO.md).
+    voiced_s = (speaker.voiced_fraction(audio, speech_rms)
+                * (float(audio.size) / config.SAMPLE_RATE))
 
     label = who.get("label") if who else None
     spk_field = _speaker_field(who)
@@ -805,7 +813,8 @@ async def stream(ws: WebSocket) -> None:
                     })
                 segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
-                    _process_utterance(ws, interpreter, recent, session, uid, audio, new_id)
+                    _process_utterance(ws, interpreter, recent, session, uid, audio, new_id,
+                                        segmenter.speech_rms)
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
@@ -840,7 +849,8 @@ async def stream(ws: WebSocket) -> None:
             try:
                 recent.add(uid, tail)
                 await asyncio.wait_for(
-                    _process_utterance(ws, interpreter, recent, session, uid, tail, new_id),
+                    _process_utterance(ws, interpreter, recent, session, uid, tail, new_id,
+                                       segmenter.speech_rms),
                     timeout=config.WS_FLUSH_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):

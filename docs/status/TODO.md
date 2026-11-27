@@ -29,16 +29,19 @@ scratch server: the 15 s clips became 2-5 pieces at the right sentence ends ("Oh
 God." stays one piece), short clips stayed whole, and the 5-piece argument got 5 distinct
 reads instead of one. 12 clips is a smoke test, not an eval.
 
-### Open: `voiced_s` undercounts quiet rooms, and the split makes it visible
+### Fixed same day: `voiced_s` undercounted quiet rooms, and the split made it visible
 
 `confidence.py`'s "too short to read the voice" uses `speaker.voiced_fraction`, which
 counts frames above the FIXED `SPEECH_RMS` (500), not the segmenter's adaptive threshold.
 These logged clips sit at RMS ~200-900, so a 15 s conversational clip counts as **2.2 s
 voiced**, and 3-4 s sentence pieces as 0.2-1.6 s, under the 1.5 s floor. Most piece reads
 therefore carry the R_SHORT penalty. The bug predates the split (it hit whole utterances
-too) but now bites on nearly every piece. Fix candidate: pass the segmenter's threshold at
-close into `voiced_fraction`, then re-run `eval.confidence_eval` (RAVDESS runs use
-`--speech-rms 150`, so its `voiced_s` AUROC was measured on a different threshold).
+too) but now bites on nearly every piece. **Fixed:** `main.py` now passes the segmenter's
+threshold at close (`segmenter.speech_rms`) into `voiced_fraction`; on the two capped clips
+above voiced seconds went 4.8 -> 9.5 and 2.2 -> 9.0. The RAVDESS confidence numbers are
+unaffected: `pipeline_eval --speech-rms 150` fixes the threshold, so its `voiced_s` already
+used the threshold the segmenter used. Live confidence on real rooms has not been re-scored;
+that needs labelled real speech.
 
 ### Not done
 

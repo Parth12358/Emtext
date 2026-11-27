@@ -164,6 +164,14 @@ three-line README stub pointing into `docs/`. New docs go under `docs/`, not nex
   the threshold; `VAD_ADAPTIVE=0` restores the constant. Must stay importable and
   testable without network, files, or async. Keep the `__main__` self-test (five cases)
   passing.
+- `server/sentences.py` — **pure logic, zero I/O**, self-test in `__main__`. After ASR, cuts
+  a multi-sentence utterance at sentence ends using the transducer's per-token timestamps
+  (`transcriber.transcribe_timed`); `main.py` then gives each piece its own SER, read and
+  wire id (`new_id()`; no protocol change). Pieces under `SPLIT_MIN_S` / `SPLIT_MIN_WORDS`
+  merge into a neighbour. It never cuts inside a sentence (half a sentence is a worse input
+  than a long one; docs/status/TODO.md). Speaker id is re-run per piece only when the whole
+  utterance was `mixed`. Whisper has no token timings, so it never splits.
+  `SENTENCE_SPLIT=0` restores one read per utterance.
 - `server/transcriber.py` — speech-to-text behind one `transcribe(audio) -> str`. A
   **catalogue** of backends (`whisper:<name>` via faster-whisper; `parakeet:v2/v3`,
   `moonshine:tiny/base`, `sensevoice:small` via sherpa-onnx, int8 files under

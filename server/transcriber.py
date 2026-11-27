@@ -240,7 +240,15 @@ class _Sherpa:
         return self.transcribe_scored(audio)[0]
 
     def transcribe_scored(self, audio: np.ndarray) -> tuple[str, float | None]:
-        """(text, confidence). Confidence is exp(min per-token log-prob).
+        text, conf, _tokens = self.transcribe_timed(audio)
+        return text, conf
+
+    def transcribe_timed(self, audio: np.ndarray):
+        """(text, confidence, tokens). Confidence is exp(min per-token log-prob).
+
+        `tokens` is a list of `sentences.Token` (text, start time, log-prob) when
+        the decoder reports per-token timestamps, which is what
+        `server/sentences.py` cuts on; None when it does not.
 
         sherpa-onnx's NeMo transducer decoder (Parakeet) fills
         `result.ys_log_probs` with the log-softmax value of each chosen token.
@@ -269,7 +277,16 @@ class _Sherpa:
             extra = {k: getattr(result, k, "") for k in ("lang", "emotion", "event")}
             if any(extra.values()):
                 log.debug("sensevoice tags: %s", extra)
-        return text, conf
+        tokens = None
+        toks = list(getattr(result, "tokens", None) or [])
+        times = list(getattr(result, "timestamps", None) or [])
+        if toks and len(toks) == len(times):
+            from .sentences import Token
+
+            lp = lps if len(lps) == len(toks) else [None] * len(toks)
+            tokens = [Token(str(a), float(b), None if c is None else float(c))
+                      for a, b, c in zip(toks, times, lp)]
+        return text, conf, tokens
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +481,22 @@ def transcribe_scored(audio: np.ndarray) -> tuple[str, float | None]:
     if backend is None:
         return "", None
     return backend.transcribe_scored(audio)
+
+
+def transcribe_timed(audio: np.ndarray):
+    """Like transcribe_scored(), plus per-token timings or None.
+
+    Whisper returns None for the tokens (word timestamps would cost a second
+    decode pass), so with a Whisper backend utterances are never split.
+    """
+    backend = _current
+    if backend is None:
+        return "", None, None
+    fn = getattr(backend, "transcribe_timed", None)
+    if fn is None:
+        text, conf = backend.transcribe_scored(audio)
+        return text, conf, None
+    return fn(audio)
 
 
 def _load_default() -> None:

@@ -37,7 +37,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clips, config, confidence, dashboard, metrics, ser, speaker, translog, transcriber
+from . import clips, config, confidence, dashboard, metrics, sentences, ser, speaker, translog, transcriber
 from .interpreter import Interpreter
 from .segmenter import Segmenter
 from .transcriber import transcribe
@@ -269,7 +269,8 @@ def _log_task_error(task: asyncio.Task) -> None:
 
 
 def _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s, conf=None, emotion=None) -> None:
+                    whisper_s, ser_s, llm_s, conf=None, emotion=None,
+                    part: dict | None = None) -> None:
     """Hand one finished utterance to the transcript log, off the event loop.
 
     Fire-and-forget on purpose: the log is for improving the ASR later, so it
@@ -292,6 +293,9 @@ def _log_transcript(loop, uid, audio, transcript, who, voice, result,
         "ser_s": round(ser_s, 3),
         "llm_s": round(llm_s, 3) if llm_s is not None else None,
     }
+    if part:
+        # Which sentence of which segmenter utterance this was (sentences.py).
+        entry["split"] = part
     loop.run_in_executor(None, translog.record, entry, audio)
 
 
@@ -313,12 +317,18 @@ async def _process_utterance(
     session: speaker.Session,
     uid: int,
     audio,
+    new_id=None,
 ) -> None:
     """Transcribe then interpret one utterance and stream the results out.
 
     Runs as its own asyncio task, so multiple utterances can be in flight at
     once. Order between them is best-effort, not guaranteed -- each frame we
     send carries its own `id` so the client can correlate transcript and read.
+
+    A multi-sentence utterance is cut into sentence-sized pieces after ASR
+    (`server/sentences.py`), and each piece goes out as its own utterance with
+    its own id from `new_id()` (the first piece keeps `uid`), its own SER and
+    its own read. No wire change: a client sees ordinary utterance/read pairs.
     """
     loop = asyncio.get_running_loop()
 
@@ -340,22 +350,85 @@ async def _process_utterance(
         return fn(*args), time.perf_counter() - start
 
     cpu_t0 = time.perf_counter()
-    ((transcript, asr_conf), whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
-        loop.run_in_executor(None, _timed, transcriber.transcribe_scored, audio),
+    ((transcript, asr_conf, tokens), whisper_s), (voice, ser_s), (who, spk_s) = await asyncio.gather(
+        loop.run_in_executor(None, _timed, transcriber.transcribe_timed, audio),
         loop.run_in_executor(None, _timed, ser.analyze, audio),
         loop.run_in_executor(None, _timed, speaker.identify, audio, session),
     )
     cpu_stage_s = time.perf_counter() - cpu_t0
-    # Seconds of actual speech in the buffer (pure numpy, same VAD threshold the
-    # segmenter used): the voice model is unreliable under ~1.5 s of it, and
-    # the confidence score says so rather than pretending otherwise.
-    voiced_s = speaker.voiced_fraction(audio) * (float(audio.size) / config.SAMPLE_RATE)
-
     if not transcript:
         # Whisper heard nothing usable. Invisible everywhere else, and a useful
         # number: a rising count means the VAD is passing through non-speech.
         metrics.record_event("empty_transcript")
         return
+
+    pieces = []
+    if config.SENTENCE_SPLIT and tokens and new_id is not None:
+        pieces = sentences.split(
+            tokens, int(audio.size), config.SAMPLE_RATE,
+            min_s=config.SPLIT_MIN_S, min_words=config.SPLIT_MIN_WORDS,
+            max_pieces=config.SPLIT_MAX_PIECES, pad_s=config.SPLIT_PAD_S,
+        )
+    if len(pieces) < 2:
+        await _emit(ws, interpreter, recent, uid, audio, transcript, asr_conf,
+                    voice, who, whisper_s, ser_s, spk_s, cpu_stage_s)
+        return
+
+    # Several sentences. The whole-utterance SER above is discarded: one label
+    # averaged over a paragraph is exactly what this split exists to replace.
+    # Each piece gets its own SER, all submitted at once (they queue on SER's
+    # lock in order) so piece 1's read is not held up by piece 4's audio.
+    # Speaker id is re-run per piece only when the whole utterance came back
+    # `mixed`, the glued-turns case where a per-sentence label is the point;
+    # otherwise every piece inherits the whole label, so the partner centroid
+    # is not fed the same audio twice.
+    metrics.record_event("utterance_split")
+    whole_label = who.get("label") if who else None
+    jobs = []
+    for pc in pieces:
+        seg = audio[pc.start:pc.end]
+        sj = loop.run_in_executor(None, _timed, ser.analyze, seg)
+        kj = (loop.run_in_executor(None, _timed, speaker.identify, seg, session)
+              if whole_label == "mixed" else None)
+        jobs.append((pc, seg, sj, kj))
+    for i, (pc, seg, sj, kj) in enumerate(jobs):
+        p_voice, p_ser_s = await sj
+        p_who, p_spk_s = (await kj) if kj is not None else (who, spk_s)
+        if p_who is None or p_who.get("label") in (None, "unknown"):
+            p_who = who
+        p_uid = uid if i == 0 else new_id()
+        recent.add(p_uid, seg)     # piece 1 replaces the whole utterance's audio
+        await _emit(ws, interpreter, recent, p_uid, seg, pc.text, pc.asr_conf(tokens),
+                    p_voice, p_who, whisper_s, p_ser_s, p_spk_s,
+                    time.perf_counter() - cpu_t0,
+                    part={"parent": uid, "part": i + 1, "of": len(pieces)})
+
+
+async def _emit(
+    ws: WebSocket,
+    interpreter: Interpreter,
+    recent: clips.Recent,
+    uid: int,
+    audio,
+    transcript: str,
+    asr_conf,
+    voice,
+    who,
+    whisper_s: float,
+    ser_s: float,
+    spk_s: float,
+    cpu_stage_s: float,
+    part: dict | None = None,
+) -> None:
+    """Send one utterance (and, unless it is the user's, its read).
+
+    Shared by a whole utterance and by each sentence piece of a split one.
+    """
+    loop = asyncio.get_running_loop()
+    # Seconds of actual speech in the buffer (pure numpy, same VAD threshold the
+    # segmenter used): the voice model is unreliable under ~1.5 s of it, and
+    # the confidence score says so rather than pretending otherwise.
+    voiced_s = speaker.voiced_fraction(audio) * (float(audio.size) / config.SAMPLE_RATE)
 
     label = who.get("label") if who else None
     spk_field = _speaker_field(who)
@@ -378,7 +451,7 @@ async def _process_utterance(
         metrics.record_speaker(label, spk_s)
         metrics.record_event("user_line")
         _log_transcript(loop, uid, audio, transcript, who, None, None,
-                        whisper_s, ser_s, None)
+                        whisper_s, ser_s, None, part=part)
         return
 
     metrics.record_speaker(label, spk_s)
@@ -435,7 +508,7 @@ async def _process_utterance(
     recent.update(uid, tone=result.get("tone"), emotion=emotion, read=result.get("read"),
                   voice=voice, confidence=conf)
     _log_transcript(loop, uid, audio, transcript, who, voice, result,
-                    whisper_s, ser_s, llm_s, conf, emotion)
+                    whisper_s, ser_s, llm_s, conf, emotion, part=part)
 
     message = {
         "type": "read",
@@ -556,6 +629,14 @@ async def stream(ws: WebSocket) -> None:
     # refers to an id this ring has never seen, and correctly fails.
     recent = clips.Recent()
     uid = 0
+
+    def new_id() -> int:
+        """Next id on this connection. Utterance tasks call it too: a split
+        utterance takes one id per sentence piece (sentences.py), so ids stay
+        unique and increasing even though some are handed out after ASR."""
+        nonlocal uid
+        uid += 1
+        return uid
 
     # Hold strong references to fire-and-forget tasks. asyncio only keeps weak
     # references, so without this a task could be garbage-collected mid-flight.
@@ -706,7 +787,7 @@ async def stream(ws: WebSocket) -> None:
                 if len(pending) >= config.MAX_INFLIGHT_UTTERANCES:
                     metrics.record_event("utterance_dropped")
                     continue
-                uid += 1
+                uid = new_id()
                 metrics.client_seen(client_id, utterance=True)
                 recent.add(uid, audio)
                 await _send(ws, {"type": "status", "state": "heard"})
@@ -724,7 +805,7 @@ async def stream(ws: WebSocket) -> None:
                     })
                 segmenter.peak_rms = 0.0   # peak is per-utterance, so reset it
                 task = asyncio.create_task(
-                    _process_utterance(ws, interpreter, recent, session, uid, audio)
+                    _process_utterance(ws, interpreter, recent, session, uid, audio, new_id)
                 )
                 pending.add(task)
                 task.add_done_callback(pending.discard)
@@ -755,11 +836,11 @@ async def stream(ws: WebSocket) -> None:
         # socket is already gone.
         tail = segmenter.flush()
         if tail is not None:
-            uid += 1
+            uid = new_id()
             try:
                 recent.add(uid, tail)
                 await asyncio.wait_for(
-                    _process_utterance(ws, interpreter, recent, session, uid, tail),
+                    _process_utterance(ws, interpreter, recent, session, uid, tail, new_id),
                     timeout=config.WS_FLUSH_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):

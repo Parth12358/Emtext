@@ -279,8 +279,10 @@ other JSON type is ignored, never fatal -- the protocol is additive:
 ```
 
 `id` is the per-connection utterance counter (it restarts at 1 on every
-connection), so a `save` only makes sense for ids from the current socket. The
-server keeps the last `CLIP_RETENTION_N` (8) utterances or `CLIP_RETENTION_S`
+connection; a multi-sentence utterance is split after ASR and each sentence piece
+takes its own id, so one segmenter utterance can produce several utterance/read
+pairs), so a `save` only makes sense for ids from the current socket. The
+server keeps the last `CLIP_RETENTION_N` (24) utterances or `CLIP_RETENTION_S`
 (45 s) in memory per connection; a `save` naming something still retained
 concatenates that audio into one WAV under `clips/` with a JSON sidecar holding
 the transcripts, tones, reads, voice and speaker labels, and replies `saved`
@@ -407,7 +409,7 @@ name.
 | interpreter | `OLLAMA_URL`, `OLLAMA_MODEL` (`qwen3:14b`), `CONTEXT_LINES` (12), `OLLAMA_TEMPERATURE` (0.2), `OLLAMA_NUM_PREDICT` (80), `OLLAMA_TIMEOUT_S` (30), `OLLAMA_USE_MMAP` (off), `OLLAMA_NUM_CTX` (0 = Ollama's default), `CONTEXT_WARN_FRACTION` (0.85) | `OLLAMA_USE_MMAP` and `OLLAMA_NUM_CTX` are load-time options sent by every caller through `interpreter.load_options()`; mmap off saves ~8 GB of host RAM on Windows and loads 4x faster. A prompt within `CONTEXT_WARN_FRACTION` of the context logs a warning and counts `context_near_full`. See `docs/reports/server-resources.md`. |
 | SER | `SER_ENABLED`, `SER_MODEL`, `SER_BACKEND`, `SER_DEVICE`, `SER_MODEL_DIR`, `SER_REVISION`, `SER_MIN_CONFIDENCE`, `SER_TORCH_THREADS`, `VALENCE_LOW/HIGH` (0.4/0.6), `AROUSAL_LOW/HIGH` (0.4/0.6) | see [Speech emotion recognition](#speech-emotion-recognition). The gloss thresholds only matter on the MERaLiON backend; emotion2vec has no dimensions. |
 | speaker id | `SPEAKER_ENABLED` (true), `SPEAKER_MODEL` (`cam++`), `SPEAKER_DEVICE` (`cpu`), `SPEAKER_PROFILE_PATH` (`models/speaker_user.json`), `SPEAKER_MATCH_THRESHOLD` (0.45), `SPEAKER_USER_FRAC_LO/HI` (0.15/0.75), `SPEAKER_WINDOW_S` (1.0), `SPEAKER_HOP_S` (0.5), `SPEAKER_MIN_ENROLL` (3), `ENROLL_MAX_BYTES` (4 MiB) | the profile is embeddings only, never audio; `DELETE /api/speaker` forgets it |
-| clips | `CLIPS_ENABLED` (true), `CLIPS_DIR` (`clips`), `CLIP_RETENTION_N` (8), `CLIP_RETENTION_S` (45), `CLIPS_MAX_FILES` (200) | the retention ring is memory-only and dies with the connection; `CLIPS_MAX_FILES` stops a hostile client filling the disk one save at a time |
+| clips | `CLIPS_ENABLED` (true), `CLIPS_DIR` (`clips`), `CLIP_RETENTION_N` (24), `CLIP_RETENTION_S` (45), `CLIPS_MAX_FILES` (200) | the retention ring is memory-only and dies with the connection; `CLIPS_MAX_FILES` stops a hostile client filling the disk one save at a time |
 | keepalive | `WS_IDLE_PING_S` (30), `WS_KEEPALIVE_CHECK_S` (5), `VAD_TELEMETRY_INTERVAL_S` (0.1) | Cloudflare culls a proxied websocket after ~100 s idle |
 | exposure limits | `WS_AUTH_TIMEOUT_S` (5), `WS_MAX_MESSAGE_BYTES` (65536), `MAX_CONNECTIONS` (32), `MAX_INFLIGHT_UTTERANCES` (3), `WS_IDLE_CLOSE_S` (900), `WS_FLUSH_TIMEOUT_S` (8), `MODEL_SWITCH_COOLDOWN_S` (10) | each closes a measured amplification; a conforming client never approaches any of them |
 

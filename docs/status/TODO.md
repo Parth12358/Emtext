@@ -5,6 +5,51 @@ next person doesn't have to rediscover it.
 
 ---
 
+## Long utterances: split into sentences after ASR (2026-11-26)
+
+### The problem, from the real transcript log
+
+Of the 256 utterances logged on real speech (2026-09-22 to 09-25), **140 (55%) ran into
+the 15 s `MAX_UTTERANCE_MS` cap**. The median was 15 s and 25 words, and 48% held three or
+more sentences. A read of a paragraph is too vague to help, and its SER label is an average
+over every sentence in it. The cause is the VAD, not the talker: Parakeet's token timings
+on one capped clip show 1.8 s and 3.5 s pauses that the energy VAD counted as speech,
+because the room's background cleared the threshold.
+
+### What was built
+
+`server/sentences.py`: after ASR, cut at `.`/`?`/`!` using the per-token timestamps,
+merge pieces under 1.5 s or 3 words into a neighbour, cap at 6, and slice the audio at the
+gap midpoints. Each piece goes out as an ordinary utterance/read pair with its own id, SER
+and read, the earlier pieces as context (`main.py`). Default on (`SENTENCE_SPLIT`).
+`CLIP_RETENTION_N` went from 8 to 24 so a hold still covers ~45 s.
+
+Checked on the 12 logged WAVs that kept audio, streamed through the wire protocol on a
+scratch server: the 15 s clips became 2-5 pieces at the right sentence ends ("Oh. Oh my
+God." stays one piece), short clips stayed whole, and the 5-piece argument got 5 distinct
+reads instead of one. 12 clips is a smoke test, not an eval.
+
+### Open: `voiced_s` undercounts quiet rooms, and the split makes it visible
+
+`confidence.py`'s "too short to read the voice" uses `speaker.voiced_fraction`, which
+counts frames above the FIXED `SPEECH_RMS` (500), not the segmenter's adaptive threshold.
+These logged clips sit at RMS ~200-900, so a 15 s conversational clip counts as **2.2 s
+voiced**, and 3-4 s sentence pieces as 0.2-1.6 s, under the 1.5 s floor. Most piece reads
+therefore carry the R_SHORT penalty. The bug predates the split (it hit whole utterances
+too) but now bites on nearly every piece. Fix candidate: pass the segmenter's threshold at
+close into `voiced_fraction`, then re-run `eval.confidence_eval` (RAVDESS runs use
+`--speech-rms 150`, so its `voiced_s` AUROC was measured on a different threshold).
+
+### Not done
+
+- The first read still waits for the utterance to close (up to 15 s). Shortening that is a
+  VAD change (accept a shorter pause once an utterance runs long, or find why the room
+  clears the threshold) and was left for after the split is lived with.
+- Saved clips of a split utterance hold only the pieces' audio; long pauses between
+  sentences (non-speech by ASR) are not in the WAV.
+
+---
+
 ## The VAD cannot hear quiet speech (`SPEECH_RMS`)
 
 **Status:** IMPLEMENTED 2026-09-20 (noise-floor-relative threshold); needs a

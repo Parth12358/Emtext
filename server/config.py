@@ -100,6 +100,21 @@ MIN_UTTERANCE_MS: int = _env_int("MIN_UTTERANCE_MS", 350)  # shorter -> discarde
 MAX_UTTERANCE_MS: int = _env_int("MAX_UTTERANCE_MS", 15_000)  # hard cap so we never buffer forever
 PRE_ROLL_MS: int = _env_int("PRE_ROLL_MS", 240)        # audio kept from just before speech began
 
+# --- Sentence split (server/sentences.py) ------------------------------------
+# After ASR, an utterance holding several sentences is cut at sentence ends
+# (from the ASR's per-token timestamps) and each piece gets its own SER, read and
+# wire id. Why: 140 of the first 256 logged real utterances ran into the 15 s
+# MAX_UTTERANCE_MS cap, median 25 words, because the room's background kept the
+# energy VAD from ever seeing END_SILENCE_MS of quiet; a read of a paragraph is
+# too vague to help. Pieces shorter than SPLIT_MIN_S seconds of speech or
+# SPLIT_MIN_WORDS words join their neighbour (SER is unreliable on short audio).
+# Only backends with token timestamps split (Parakeet; Whisper never does).
+SENTENCE_SPLIT: bool = _env_bool("SENTENCE_SPLIT", True)
+SPLIT_MIN_S: float = _env_float("SPLIT_MIN_S", 1.5)
+SPLIT_MIN_WORDS: int = _env_int("SPLIT_MIN_WORDS", 3)
+SPLIT_MAX_PIECES: int = _env_int("SPLIT_MAX_PIECES", 6)
+SPLIT_PAD_S: float = _env_float("SPLIT_PAD_S", 0.25)  # audio kept around each piece's words
+
 # --- Adaptive threshold ------------------------------------------------------
 # SPEECH_RMS alone was the wrong shape for this product. It is an ABSOLUTE
 # level, and RAVDESS measured a ~130x spread in peak RMS across emotions
@@ -487,9 +502,13 @@ CLIPS_DIR: str = _env_str("CLIPS_DIR", "clips")
 # ~1-5s after the utterance and the user reacts a moment later, so a handful
 # is plenty. Both bounds apply: N utterances AND S seconds, whichever is
 # tighter. Audio is held as int16, so the worst case per connection is
-# N x MAX_UTTERANCE_MS x 32 KB/s ~= 3.8 MB at the defaults, and the ring is
+# min(N x MAX_UTTERANCE_MS, S) x 32 KB/s ~= 1.4 MB at the defaults, and the ring is
 # dropped with the connection.
-CLIP_RETENTION_N: int = _env_int("CLIP_RETENTION_N", 8)
+# Raised from 8 to 24 with the sentence split: one 15 s utterance can now
+# become up to SPLIT_MAX_PIECES ids, so 8 entries could hold under 20 s of
+# speech. The age bound (CLIP_RETENTION_S) is the real limit, and the pieces of
+# one utterance together hold no more audio than the utterance did.
+CLIP_RETENTION_N: int = _env_int("CLIP_RETENTION_N", 24)
 CLIP_RETENTION_S: float = _env_float("CLIP_RETENTION_S", 45.0)
 # Ceiling on stored clips. Load-bearing, not decoration: without it a `save`
 # per utterance from a hostile client through the tunnel writes audio to disk

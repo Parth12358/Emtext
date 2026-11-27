@@ -78,6 +78,10 @@ SER_MODELS = [
     ("emotion2vec/emotion2vec_plus_base", "e2v-base"),
     ("MERaLiON/MERaLiON-SER-v1", "meralion"),
 ]
+# SER_QUANT changes SER output, so it gets its own slug: its own ASR+SER cache and
+# its own ser_backend in the CSV, instead of silently replaying the fp32 cache.
+if os.environ.get("SER_QUANT", "").strip().lower() == "int8":
+    SER_MODELS = [(m, s + "-int8") for m, s in SER_MODELS if s == "e2v-base"]
 LLM_MODELS = ["qwen3:8b", "gemma3:12b", "qwen3:14b"]
 
 # Derived from the acted emotion. This is a HEURISTIC, not ground truth: the

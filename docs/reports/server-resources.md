@@ -287,6 +287,37 @@ allocator and activation overhead. Two ways to shrink it were looked at:
   leave the working set, given the allocator behaviour TODO.md recorded. The safe
   version follows the slim-checkpoint pattern: save a pre-quantised artifact once and
   load it directly.
+
+  **Full evals, 2026-11-26: not adopted.** Built as the opt-in `SER_QUANT=int8`
+  (quantised after load; default off) and run through all three evals with
+  `emtext-qwen3-0.6b:v3` as the interpreter:
+
+  | | fp32 (default) | `SER_QUANT=int8` |
+  |---|---|---|
+  | `ser_eval`, 1,248 clips (calm excluded): macro recall | 93.9% | 92.3% |
+  | `ser_eval`: time per clip | 0.20 s | 0.07 s |
+  | `ser_eval`: same label as fp32 | | 97.1% |
+  | `pipeline_eval`, 280 clips: shown emotion | 88.9% | **84.3%** |
+  | `pipeline_eval`: tone / voice sensitivity | 90% / +79% | 89% / +80% |
+  | `pipeline_eval`: CPU stage / end to end, median | 0.173 / 0.338 s | 0.138 / 0.327 s |
+  | `confidence_eval`: composite AUROC | 0.78 | **0.71** |
+  | `confidence_eval`: reads marked `high` (their accuracy) | 18 (100%) | 79 (95%) |
+
+  Three reasons it stays off:
+  - **It buys 11 ms.** SER runs in parallel with Parakeet (0.11 s), so a 3x faster SER
+    only lowers the CPU stage to Parakeet's time.
+  - **It loses more on the pipeline's own cuts than on whole clips.** On the
+    segmenter's trimmed utterances it got 15 clips wrong that fp32 had right, and
+    fixed 2. Most were disgusted read as angry (6) and sad read as neutral (3).
+  - **It degrades the confidence signal.** `ser_confidence` is the composite's best
+    input (AUROC 0.78 fp32, 0.71 int8). More reads reach `high` while being right less
+    often, which is the one direction the listener-facing marker must not move.
+  Resident memory was not measured: quantising after load may leave the fp32 pages in
+  the working set. A pre-quantised checkpoint would settle the memory question but not
+  the accuracy or confidence loss. Do not re-open this without a different
+  quantisation scheme (static or QAT) or an ONNX export scored the same way.
+  Per-clip rows: `eval/results/ser_fp32.csv`, `ser_int8.csv`,
+  `pipeline_student_v3.csv`, `pipeline_student_v3_int8.csv`.
 - **Dropping torch and funasr from the process.** CAM++ is published as ONNX for
   sherpa-onnx's speaker-embedding extractor (the 3D-Speaker
   `campplus_sv_zh-cn_16k-common` export), and `sherpa-onnx` is already a dependency.

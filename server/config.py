@@ -300,6 +300,15 @@ SER_MIN_CONFIDENCE: float = _env_float("SER_MIN_CONFIDENCE", 0.4)
 # overall. Tune it
 # against your machine rather than assuming more is better.
 SER_TORCH_THREADS: int = _env_int("SER_TORCH_THREADS", 0)
+# "int8" = dynamic int8 quantisation of every nn.Linear in the emotion2vec model
+# after load (torch.ao.quantization.quantize_dynamic). Opt-in, emotion2vec only.
+# Measured on 144 RAVDESS clips (docs/reports/server-resources.md, F5): half the
+# SER time, labels 97% unchanged, but confidence moved by up to 0.42 on one clip,
+# and confidence feeds the prompt, SER_MIN_CONFIDENCE and confidence.py. So this
+# is a model change. Full evals on 2026-11-26 rejected it: end to end 11 ms
+# faster (SER runs beside Parakeet), shown emotion 88.9% -> 84.3%, confidence
+# AUROC 0.78 -> 0.71. Kept only so the next quantisation is scored the same way.
+SER_QUANT: str = _env_str("SER_QUANT", "").strip().lower()
 
 # Which SER implementation to use. "auto" picks from SER_MODEL: anything whose
 # name contains "emotion2vec" uses the FunASR backend, everything else uses the

@@ -396,6 +396,19 @@ def _load_emotion2vec() -> None:
     # default (see config.SER_REVISION).
     kw = {"model_revision": config.SER_REVISION} if config.SER_REVISION else {}
     _model = AutoModel(model=name, device=config.SER_DEVICE, disable_update=True, **kw)
+    if config.SER_QUANT == "int8":
+        # Dynamic int8: weights stored int8, activations quantised per call. Only
+        # nn.Linear is touched (the transformer blocks, where the time goes); the
+        # conv feature extractor stays fp32. CPU-only by construction, which the
+        # hardware split wants anyway. See config.SER_QUANT for what it costs.
+        import torch
+
+        _model.model = torch.ao.quantization.quantize_dynamic(
+            _model.model, {torch.nn.Linear}, dtype=torch.qint8
+        )
+        log.info("SER: emotion2vec quantised to dynamic int8 (SER_QUANT=int8)")
+    elif config.SER_QUANT:
+        log.warning("SER: unknown SER_QUANT=%r ignored (only 'int8')", config.SER_QUANT)
     # FunASR reports labels per result rather than exposing a fixed ordered
     # vocabulary, so record what we normalise TO rather than inventing an order.
     _labels = tuple(sorted(set(_EMOTION2VEC_MAP.values())))
